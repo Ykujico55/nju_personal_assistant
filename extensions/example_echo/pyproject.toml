@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-assistant-example-echo"
+version = "0.1.0"
+description = "Reference extension for the personal assistant framework"
+requires-python = ">=3.12,<3.14"
+dependencies = ["personal-assistant-extension-sdk==1.0.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["example_echo*"]
+

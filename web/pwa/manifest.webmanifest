@@ -1,0 +1,11 @@
+{
+  "name": "Personal Assistant",
+  "short_name": "Assistant",
+  "description": "Local-first personal assistant control plane",
+  "start_url": "/ui/",
+  "scope": "/ui/",
+  "display": "standalone",
+  "background_color": "#eef1f5",
+  "theme_color": "#17233b"
+}
+

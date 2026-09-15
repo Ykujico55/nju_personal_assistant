@@ -1,0 +1,3 @@
+# This reference extension has no third-party runtime dependencies.
+# The host SDK is installed by the extension supervisor from its trusted SDK wheel.
+

@@ -1,0 +1,23 @@
+version: 1
+retention:
+  transient_dom_screenshot_debug_days: 7
+  model_and_tool_process_days: 30
+  structured_audit_days: 365
+  formal_artifacts: user_policy
+  source_files: user_policy
+
+backup:
+  recovery_point_hours: 6
+  recovery_time_hours: 2
+  off_device_encrypted: true
+  keep_daily: 7
+  keep_weekly: 4
+  keep_monthly: 6
+  include:
+    - database
+    - managed_artifacts
+    - manifest_and_config
+  exclude:
+    - debug_data
+  note: Original user files require their own backup policy.
+

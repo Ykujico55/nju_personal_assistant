@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-assistant-extension-sdk"
+version = "1.0.0"
+description = "Dependency-free public contracts for personal assistant extensions"
+requires-python = ">=3.12,<3.14"
+license = { text = "UNLICENSED" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["personal_assistant_sdk*"]
+

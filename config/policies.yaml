@@ -1,0 +1,40 @@
+version: 1
+risk_levels:
+  R0:
+    alias: READ
+    approval: never
+  R1:
+    alias: INTERNAL_WRITE
+    approval: policy
+  R2:
+    alias: EXTERNAL_WRITE
+    approval: exact_single_use
+  R3:
+    alias: PROHIBITED
+    approval: impossible
+
+prohibited_actions:
+  - course.withdraw
+  - application.cancel
+  - application.withdraw
+  - payment.execute
+  - enrollment.change
+  - legal.declaration
+
+approval:
+  ttl_seconds: 300
+  bind:
+    - action_id
+    - target
+    - canonical_payload_sha256
+    - attachment_sha256
+    - extension_id
+    - extension_version
+    - nonce
+
+emergency_fuses:
+  same_no_progress_tool_calls: 3
+  consecutive_errors: 5
+  no_progress_rounds: 8
+  active_run_hours: 24
+

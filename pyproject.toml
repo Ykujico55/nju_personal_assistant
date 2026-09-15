@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-assistant-framework"
+version = "0.1.0"
+description = "Local-first, extension-driven personal assistant control plane"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = { text = "UNLICENSED" }
+authors = [{ name = "Personal Assistant Project" }]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+  "pydantic>=2.8,<3",
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "asyncpg>=0.29,<1",
+  "alembic>=1.13,<2",
+  "pgvector>=0.3,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27,<1",
+  "pytest>=8,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.8,<1",
+  "mypy>=1.13,<2",
+]
+
+[project.scripts]
+assistantctl = "personal_assistant.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src", "extension_sdk/src"]
+include = ["personal_assistant*"]
+namespaces = true
+
+[tool.setuptools.data-files]
+"share/personal-assistant/pwa" = [
+  "web/pwa/index.html",
+  "web/pwa/styles.css",
+  "web/pwa/app.js",
+  "web/pwa/manifest.webmanifest",
+  "web/pwa/service-worker.js",
+]
+"share/personal-assistant/config" = ["config/policies.yaml", "config/retention.yaml"]
+"share/personal-assistant/migrations" = ["migrations/0001_core.sql"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers"
+testpaths = ["tests"]
+pythonpath = ["src", "extension_sdk/src", "extensions/example_echo/src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008"] # FastAPI dependency injection intentionally uses Depends defaults.
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["personal_assistant"]
+mypy_path = ["src", "extension_sdk/src"]

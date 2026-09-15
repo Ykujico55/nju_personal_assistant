@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#17233b">
+    <meta name="robots" content="noindex,nofollow">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./styles.css">
+    <title>Personal Assistant</title>
+  </head>
+  <body>
+    <header>
+      <p class="eyebrow">LOCAL-FIRST CONTROL PLANE</p>
+      <h1>Personal Assistant</h1>
+      <p>发起任务、查看扩展，并对精确的外部动作做最终确认。</p>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>新任务</h2>
+        <form id="task-form">
+          <label for="objective">你希望助理完成什么？</label>
+          <textarea id="objective" required maxlength="10000" rows="5"></textarea>
+          <button type="submit">加入后台队列</button>
+        </form>
+        <pre id="task-result" aria-live="polite"></pre>
+      </section>
+
+      <section class="card">
+        <h2>待确认动作</h2>
+        <form id="approval-form">
+          <label for="approval-id">Approval ID</label>
+          <div class="inline">
+            <input id="approval-id" autocomplete="off">
+            <button type="submit" class="secondary">载入预览</button>
+          </div>
+        </form>
+        <div id="approval-preview" hidden>
+          <p class="warning">确认只对下方精确内容生效；任何编辑都会使它失效。</p>
+          <pre id="approval-action"></pre>
+          <div class="inline">
+            <button id="approve-button" type="button">确认此动作</button>
+            <button id="reject-button" type="button" class="danger">拒绝</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-title">
+          <h2>扩展状态</h2>
+          <button id="refresh-extensions" class="secondary" type="button">刷新</button>
+        </div>
+        <ul id="extensions"></ul>
+      </section>
+
+      <section class="card compact">
+        <h2>实时事件</h2>
+        <ol id="events"></ol>
+      </section>
+    </main>
+
+    <footer>扩展安装、升级与卸载只能在本机 Admin API / CLI 完成。</footer>
+    <script src="./app.js" defer></script>
+  </body>
+</html>
+

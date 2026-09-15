@@ -1,0 +1,26 @@
+manifest_version = "1"
+id = "example.echo"
+name = "Example Echo"
+version = "0.1.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.14"
+entrypoint = "example_echo.worker:create_extension"
+dependency_lock = "requirements.lock"
+config_schema = "schemas/config.json"
+state_schema_version = 1
+healthcheck = "system.health"
+
+context_providers = ["example.echo_context"]
+schedules = ["example.echo_hourly"]
+forms = ["example.echo_settings"]
+
+[[tools]]
+id = "example.echo"
+risk = "READ"
+input_schema = "schemas/echo-input.json"
+output_schema = "schemas/echo-output.json"
+
+[capabilities]
+required = []
+optional = []
+
