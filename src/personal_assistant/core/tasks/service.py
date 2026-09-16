@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -7,6 +9,7 @@ from uuid import uuid4
 
 from personal_assistant.core.audit import AuditEvent, AuditWriterPort
 from personal_assistant.core.jobs import JobQueuePort
+from personal_assistant.core.unit_of_work import UnitOfWorkPort
 from personal_assistant.domain import Task, TaskState, ValidationError, utc_now
 
 
@@ -70,11 +73,28 @@ class TaskService:
         queue: JobQueuePort,
         audit: AuditWriterPort,
         events: EventStreamPort,
+        unit_of_work: UnitOfWorkPort | None = None,
     ) -> None:
         self._repository = repository
         self._queue = queue
         self._audit = audit
         self.events = events
+        self._unit_of_work = unit_of_work
+
+    @asynccontextmanager
+    async def _scope(self) -> AsyncIterator[None]:
+        """Run a command as one durable unit of work when a coordinator exists.
+
+        For the production adapter this makes "create task + initial job +
+        QUEUED state + event + audit" a single commit with no recoverable
+        half-commit window. The in-memory adapters need no coordinator.
+        """
+
+        if self._unit_of_work is None:
+            yield
+            return
+        async with self._unit_of_work.transaction():
+            yield
 
     async def create(
         self, *, objective: str, idempotency_key: str, actor: str = "owner"
@@ -84,25 +104,32 @@ class TaskService:
         if not idempotency_key.strip():
             raise ValidationError("Idempotency-Key is required")
         candidate = Task(id=f"task_{uuid4().hex}", objective=objective.strip())
-        task = await self._repository.create(candidate, idempotency_key=idempotency_key)
-        if task.state is TaskState.CREATED:
-            await self._queue.enqueue(
-                kind="agent.start",
-                payload={"task_id": task.id},
-                idempotency_key=f"task-start:{task.id}",
+        async with self._scope():
+            task = await self._repository.create(
+                candidate, idempotency_key=idempotency_key
             )
-            queued = Task(
-                id=task.id,
-                objective=task.objective,
-                state=TaskState.QUEUED,
-                version=task.version + 1,
-                created_at=task.created_at,
-            )
-            task = await self._repository.save(queued, expected_version=task.version)
-            await self.events.publish("task.queued", task.id, {"state": task.state.value})
-            await self._audit.append(
-                AuditEvent("task.created", actor, "task", task.id, {"state": task.state.value})
-            )
+            if task.state is TaskState.CREATED:
+                await self._queue.enqueue(
+                    kind="agent.start",
+                    payload={"task_id": task.id},
+                    idempotency_key=f"task-start:{task.id}",
+                )
+                queued = Task(
+                    id=task.id,
+                    objective=task.objective,
+                    state=TaskState.QUEUED,
+                    version=task.version + 1,
+                    created_at=task.created_at,
+                )
+                task = await self._repository.save(queued, expected_version=task.version)
+                await self.events.publish(
+                    "task.queued", task.id, {"state": task.state.value}
+                )
+                await self._audit.append(
+                    AuditEvent(
+                        "task.created", actor, "task", task.id, {"state": task.state.value}
+                    )
+                )
         return task
 
     async def get(self, task_id: str) -> Task:
@@ -129,12 +156,15 @@ class TaskService:
             content=content.strip(),
             created_at=utc_now(),
         )
-        task, message = await self._repository.add_message(
-            message,
-            expected_version=expected_version,
-            idempotency_key=idempotency_key,
-        )
-        await self.events.publish("task.message_added", task.id, {"message_id": message.id})
+        async with self._scope():
+            task, message = await self._repository.add_message(
+                message,
+                expected_version=expected_version,
+                idempotency_key=idempotency_key,
+            )
+            await self.events.publish(
+                "task.message_added", task.id, {"message_id": message.id}
+            )
         return task, message
 
     async def cancel(
@@ -145,11 +175,16 @@ class TaskService:
         actor: str,
         idempotency_key: str,
     ) -> Task:
-        saved = await self._repository.cancel(
-            task_id,
-            expected_version=expected_version,
-            idempotency_key=idempotency_key,
-        )
-        await self.events.publish("task.cancelled", saved.id, {"state": saved.state.value})
-        await self._audit.append(AuditEvent("task.cancelled", actor, "task", saved.id))
+        async with self._scope():
+            saved = await self._repository.cancel(
+                task_id,
+                expected_version=expected_version,
+                idempotency_key=idempotency_key,
+            )
+            await self.events.publish(
+                "task.cancelled", saved.id, {"state": saved.state.value}
+            )
+            await self._audit.append(
+                AuditEvent("task.cancelled", actor, "task", saved.id)
+            )
         return saved

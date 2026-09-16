@@ -1,7 +1,7 @@
 """Durable job contracts."""
 
 from .lease import LeaseKeepalive, LeaseLost
-from .outbox import SideEffectIntent, SideEffectState
+from .outbox import SideEffectIntent, SideEffectOutboxPort, SideEffectState
 from .queue import Job, JobQueuePort, JobState, LeaseConflict
 
 __all__ = [
@@ -12,5 +12,6 @@ __all__ = [
     "LeaseKeepalive",
     "LeaseLost",
     "SideEffectIntent",
+    "SideEffectOutboxPort",
     "SideEffectState",
 ]

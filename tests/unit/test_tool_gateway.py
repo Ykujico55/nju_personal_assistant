@@ -40,7 +40,12 @@ def descriptor(risk: RiskLevel) -> ToolDescriptor:
     )
 
 
-def call(*, approval_id: str | None = None, payload: dict[str, object] | None = None) -> ToolCall:
+def call(
+    *,
+    approval_id: str | None = None,
+    payload: dict[str, object] | None = None,
+    idempotency_key: str | None = None,
+) -> ToolCall:
     return ToolCall(
         tool_id="test.action",
         tool_version="1",
@@ -49,11 +54,12 @@ def call(*, approval_id: str | None = None, payload: dict[str, object] | None = 
         target={"recipient": "target-1"},
         workflow_allowed_tools=frozenset({"test.action"}),
         approval_id=approval_id,
+        idempotency_key=idempotency_key,
     )
 
 
 class ToolGatewayTests(unittest.IsolatedAsyncioTestCase):
-    def make_gateway(self, risk: RiskLevel, executor: FakeExecutor):
+    def make_gateway(self, risk: RiskLevel, executor: FakeExecutor, *, outbox=None):
         registry = ToolRegistry()
         registry.publish((descriptor(risk),))
         repository = InMemoryApprovalRepository()
@@ -63,6 +69,7 @@ class ToolGatewayTests(unittest.IsolatedAsyncioTestCase):
             policy=ToolPolicy(),
             approvals=approvals,
             executor=executor,
+            outbox=outbox,
         )
         return gateway, approvals
 
@@ -87,6 +94,69 @@ class ToolGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, executor.calls)
         final = await approvals.get(prepared.id)
         self.assertEqual(ApprovalState.SUCCEEDED, final.state)
+
+    async def test_memory_outbox_enforces_single_use_approval(self) -> None:
+        from personal_assistant.infrastructure.memory import InMemorySideEffectOutbox
+
+        executor = FakeExecutor({"sent": True})
+        registry = ToolRegistry()
+        registry.publish((descriptor(RiskLevel.EXTERNAL_WRITE),))
+        approvals = ApprovalService(InMemoryApprovalRepository())
+        outbox = InMemorySideEffectOutbox(approvals)
+        gateway = ToolGateway(
+            registry=registry,
+            policy=ToolPolicy(),
+            approvals=approvals,
+            executor=executor,
+            outbox=outbox,
+        )
+        needed = await gateway.invoke(call())
+        prepared = await approvals.get(needed.approval_id or "")
+        await approvals.approve(prepared.id, nonce=prepared.nonce, actor_id="owner")
+
+        first = await gateway.invoke(
+            call(approval_id=prepared.id, idempotency_key="send-1")
+        )
+        self.assertEqual(ToolOutcomeKind.SUCCESS, first.kind)
+        self.assertEqual(1, executor.calls)
+        self.assertEqual(ApprovalState.SUCCEEDED, (await approvals.get(prepared.id)).state)
+
+        # The consumed approval must not execute again under a new idempotency key.
+        second = await gateway.invoke(
+            call(approval_id=prepared.id, idempotency_key="send-2")
+        )
+        self.assertNotEqual(ToolOutcomeKind.SUCCESS, second.kind)
+        self.assertEqual(1, executor.calls)
+
+    async def test_memory_outbox_burns_drifted_approval(self) -> None:
+        from personal_assistant.infrastructure.memory import InMemorySideEffectOutbox
+
+        executor = FakeExecutor({"sent": True})
+        registry = ToolRegistry()
+        registry.publish((descriptor(RiskLevel.EXTERNAL_WRITE),))
+        approvals = ApprovalService(InMemoryApprovalRepository())
+        outbox = InMemorySideEffectOutbox(approvals)
+        gateway = ToolGateway(
+            registry=registry,
+            policy=ToolPolicy(),
+            approvals=approvals,
+            executor=executor,
+            outbox=outbox,
+        )
+        needed = await gateway.invoke(call())
+        prepared = await approvals.get(needed.approval_id or "")
+        await approvals.approve(prepared.id, nonce=prepared.nonce, actor_id="owner")
+
+        drifted = await gateway.invoke(
+            call(
+                approval_id=prepared.id,
+                payload={"value": 999},
+                idempotency_key="send-drift",
+            )
+        )
+        self.assertNotEqual(ToolOutcomeKind.SUCCESS, drifted.kind)
+        self.assertEqual(0, executor.calls)
+        self.assertEqual(ApprovalState.CANCELLED, (await approvals.get(prepared.id)).state)
 
     async def test_unknown_external_result_is_not_retryable(self) -> None:
         executor = FakeExecutor(error=OutcomeUnknownError("smtp:unknown"))

@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F00 baseline / contract v1  
+版本：F01 completed baseline / contract v1.1
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -181,8 +181,10 @@ async def mark_unknown(intent_id: str, diagnostic_code: str) -> None
 ```
 
 - `(tool_id, idempotency_key)` 必须唯一，并绑定 `canonical_payload_sha256`、task 和 approval。
-- `create_with_approval_consumption` 是真实原子事务，不是方法名承诺：锁定并验证 APPROVED 审批、核对绑定摘要、写入 intent、消费审批，然后一次提交。
-- ToolGateway 的生产 R2 路径必须实际调用这一事务边界。允许 F01 为此做最小依赖注入调整，但不得改变风险判定、审批 canonicalization 或 UNKNOWN 语义。
+- `create_with_approval_consumption` 是真实原子事务，不是方法名承诺：锁定并验证 APPROVED 且未过期的审批、强制核对完整 `action_fingerprint` 绑定摘要、写入 intent、消费审批，然后一次提交。
+- `action_fingerprint` 是必填字段；缺失即拒绝。绑定漂移（target/payload/附件/扩展版本任一变化）时必须在同一事务内把审批原子置为 `CANCELLED` 并抛出 `ApprovalBindingMismatchError`，不得插入 intent。过期审批必须原子置为 `EXPIRED` 并抛出 `ApprovalExpiredError`。
+- `finalize(intent_id, approval_id, *, state, ...)` 是 R2 执行后的唯一完成边界：审批的终态与 intent 的终态必须在同一事务提交，禁止先提交一方再提交另一方。
+- ToolGateway 的生产 R2 路径必须实际调用消费与完成事务边界。允许 F01 为此做最小依赖注入调整，但不得改变风险判定、审批 canonicalization 或 UNKNOWN 语义。
 - 外部请求开始后发生超时、取消或非确定异常，intent 与 approval 都进入 UNKNOWN；不得自动重试。
 - receipt 只能保存必要的可对账字段，不能保存凭据或完整敏感正文。
 
@@ -227,6 +229,23 @@ audit_writer, side_effect_outbox, lifecycle_store
 - 关闭生命周期必须释放 LISTEN 连接与连接池。
 - public/admin 进程可各自创建池；迁移锁和 checksum 必须使并发启动安全。
 - `PA_STORAGE_BACKEND=memory` 只允许 development/test；production 继续拒绝任何内存回退。
+
+### 5.10 F01 实施后的兼容补充（contract v1.1）
+
+下列变更在 F01 落地，均为向后兼容或纯新增：
+
+- `build_postgres_adapters(PostgresAdapterConfig)` 返回 `PostgresAdapters` 数据类，暴露 5.9 要求的全部适配器，并额外提供 `database`、`async startup()`、`async close()`。`PostgresAdapterNotImplemented` 仅为导入兼容保留，不再抛出。
+- `Container` 新增 `storage`、`run_repository`、`checkpoint_store`、`observation_store`、`audit_writer`、`side_effect_outbox`、`lifecycle_store`。public/admin 的 FastAPI lifespan 调用 `container.storage.startup()`/`close()`；启动失败即服务启动失败，不回退内存。
+- `TaskService` 新增可选 `unit_of_work: UnitOfWorkPort | None`；生产适配器传入数据库事务协调器，使“创建任务 + 初始 `agent.start` Job + QUEUED + event + audit”单事务提交。内存模式不传该参数，行为不变。
+- `core.unit_of_work.UnitOfWorkPort` 新增为事务协调接口。
+- `SideEffectIntent` 新增必填字段 `action_fingerprint: str`；`create_with_approval_consumption` 必须在同一事务内强制比对审批已存指纹（缺失即拒绝），过期审批原子置 `EXPIRED`，漂移审批原子置 `CANCELLED` 且不插入 intent。
+- `SideEffectOutboxPort` 新增 `finalize(...)`：审批终态与 intent 终态在同一事务提交。
+- `ToolGateway` 新增可选 `outbox: SideEffectOutboxPort | None`。提供时，R2 的消费与完成分别调用 `create_with_approval_consumption` 与 `finalize`；否则沿用 `ApprovalService.consume_for_execution` 与 `mark_*`。风险判定、canonicalization 和 UNKNOWN 语义未变。
+- `AgentEngine` 新增可选 `unit_of_work: UnitOfWorkPort | None`：Run CAS、Checkpoint（及同一轮的 Observation）在同一事务提交。
+- 迁移 `0002` 会回填既有 0001 数据：`agent_runs.objective` 取自 `tasks`、`active_started_at` 取自 `started_at` 并加 `NOT NULL`；extensions 从 `extension_versions` 恢复 manifest、manifest 格式版本、`install_path` 与 artifact hash；`run_checkpoint_sequence` 用 `setval` 推进到既有 `max(sequence)`，升级后仍可为旧 Run 追加 checkpoint。
+- `InMemorySideEffectOutbox` 构造时必须绑定 `ApprovalService`，并保持一次性审批、过期与完整指纹校验语义，开发/测试环境不得掩盖审批缺陷；它仍不是崩溃安全的生产实现。
+- `PostgresDatabase.transaction()` 是进程内 Unit of Work：事务期间所有嵌套适配器调用通过 contextvar 复用同一连接；未在事务中时各自独立提交。
+- 迁移 `0002_f01_persistence.sql` 为新的编号迁移，`0001_core.sql` 未改动；运行器将其 checksum 登记在 `schema_migrations`。
 
 ## 6. F01 数据库迁移契约
 
@@ -326,4 +345,3 @@ F01 不得实现或改写 Supervisor/RPC；它只负责 lifecycle state 的持�
 风险：...
 下一建议：F02（只建议，不开始）
 ```
-

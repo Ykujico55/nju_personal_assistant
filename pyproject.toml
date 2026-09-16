@@ -46,7 +46,10 @@ namespaces = true
   "web/pwa/service-worker.js",
 ]
 "share/personal-assistant/config" = ["config/policies.yaml", "config/retention.yaml"]
-"share/personal-assistant/migrations" = ["migrations/0001_core.sql"]
+"share/personal-assistant/migrations" = [
+  "migrations/0001_core.sql",
+  "migrations/0002_f01_persistence.sql",
+]
 
 [tool.pytest.ini_options]
 addopts = "-q --strict-markers"
@@ -67,3 +70,7 @@ python_version = "3.12"
 strict = true
 packages = ["personal_assistant"]
 mypy_path = ["src", "extension_sdk/src"]
+
+[[tool.mypy.overrides]]
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sysconfig
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -37,12 +39,24 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     container = container or build_container(settings)
+
+    @asynccontextmanager
+    async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        # Fail closed: a database that is unreachable or fails migration stops
+        # startup instead of silently falling back to in-memory state.
+        await container.storage.startup()
+        try:
+            yield
+        finally:
+            await container.storage.close()
+
     application = FastAPI(
         title="Personal Assistant API",
         version=__version__,
         description="User control plane; extension code management is not exposed here.",
         docs_url="/docs" if settings.environment != "production" else None,
         redoc_url=None,
+        lifespan=lifespan,
     )
     application.state.container = container
     application.add_middleware(IdempotencyKeyMiddleware)

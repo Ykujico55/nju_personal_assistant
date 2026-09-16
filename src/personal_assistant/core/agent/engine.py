@@ -5,12 +5,15 @@ The model proposes; deterministic components validate, transition and execute.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
 from personal_assistant.core.context import ComposedContext, ContextManager, ContextRequest
 from personal_assistant.core.tools import ToolGateway, ToolRegistry
+from personal_assistant.core.unit_of_work import UnitOfWorkPort
 from personal_assistant.domain import TaskRun, TaskState, ToolCall, ToolOutcomeKind
 
 from .checkpoint import (
@@ -72,6 +75,7 @@ class AgentEngine:
         registry: ToolRegistry,
         fuse: EmergencyFuse | None = None,
         progress: ProgressDetector | None = None,
+        unit_of_work: UnitOfWorkPort | None = None,
     ) -> None:
         self._runs = runs
         self._checkpoints = checkpoints
@@ -83,6 +87,17 @@ class AgentEngine:
         self._registry = registry
         self._fuse = fuse or EmergencyFuse()
         self._progress = progress or ProgressDetector()
+        self._unit_of_work = unit_of_work
+
+    @asynccontextmanager
+    async def _scope(self) -> AsyncIterator[None]:
+        """Commit a run round (run CAS + checkpoint + observation) atomically."""
+
+        if self._unit_of_work is None:
+            yield
+            return
+        async with self._unit_of_work.transaction():
+            yield
 
     async def run(self, run_id: str) -> TaskRun:
         run = await self._runs.get(run_id)
@@ -115,8 +130,11 @@ class AgentEngine:
                 )
                 break
             if decision.kind is DecisionKind.COMPLETE:
-                await self._observations.append(Observation(run.id, decision.result))
-                run = await self._transition(run, TaskState.SUCCEEDED)
+                async with self._scope():
+                    await self._observations.append(
+                        Observation(run.id, decision.result)
+                    )
+                    run = await self._transition(run, TaskState.SUCCEEDED)
                 break
 
             assert decision.tool_call is not None
@@ -138,14 +156,18 @@ class AgentEngine:
                 )
                 break
 
-            await self._observations.append(Observation(run.id, outcome.result))
-            previous_version = run.version
-            run = self._progress.record(run, decision.tool_call, outcome)
-            await self._runs.save(run, expected_version=previous_version)
-            await self._checkpoints.save(
-                run,
-                {"last_outcome": outcome.kind.value, "last_reference": outcome.reference_id},
-            )
+            async with self._scope():
+                await self._observations.append(Observation(run.id, outcome.result))
+                previous_version = run.version
+                run = self._progress.record(run, decision.tool_call, outcome)
+                await self._runs.save(run, expected_version=previous_version)
+                await self._checkpoints.save(
+                    run,
+                    {
+                        "last_outcome": outcome.kind.value,
+                        "last_reference": outcome.reference_id,
+                    },
+                )
         return run
 
     async def _transition(
@@ -158,10 +180,11 @@ class AgentEngine:
     ) -> TaskRun:
         previous_version = run.version
         updated = transition_run(run, state, reference=reference, reason=reason)
-        await self._runs.save(updated, expected_version=previous_version)
-        await self._checkpoints.save(
-            updated,
-            {"state": updated.state.value, "reference": reference, "reason": reason},
-        )
+        async with self._scope():
+            await self._runs.save(updated, expected_version=previous_version)
+            await self._checkpoints.save(
+                updated,
+                {"state": updated.state.value, "reference": reference, "reason": reason},
+            )
         return updated
 

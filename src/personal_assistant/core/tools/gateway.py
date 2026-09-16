@@ -11,10 +11,15 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
+from personal_assistant.core.approvals.canonicalize import canonical_sha256
 from personal_assistant.core.approvals.service import (
     ApprovalBinding,
-    ApprovalError,
     ApprovalService,
+)
+from personal_assistant.core.jobs.outbox import (
+    SideEffectIntent,
+    SideEffectOutboxPort,
+    SideEffectState,
 )
 from personal_assistant.domain.enums import RiskLevel, ToolOutcomeKind
 from personal_assistant.domain.errors import DomainError, ValidationError
@@ -111,6 +116,10 @@ class ToolGateway:
     There is intentionally no retry loop in this class.  In particular, an R2
     timeout or ambiguous exception becomes OUTCOME_UNKNOWN and can only be
     reconciled by a separate read-only workflow or explicit human decision.
+
+    When a production ``outbox`` is supplied, the R2 approval is consumed and
+    the durable side-effect intent is written in the outbox's single database
+    transaction. Otherwise the in-memory approval repository is used directly.
     """
 
     def __init__(
@@ -121,12 +130,14 @@ class ToolGateway:
         approvals: ApprovalService,
         executor: ToolExecutor,
         audit: InvocationAudit | None = None,
+        outbox: SideEffectOutboxPort | None = None,
     ) -> None:
         self._registry = registry
         self._policy = policy
         self._approvals = approvals
         self._executor = executor
         self._audit = audit or InMemoryInvocationAudit()
+        self._outbox = outbox
 
     async def invoke(self, call: ToolCall) -> ToolOutcome:
         try:
@@ -150,13 +161,16 @@ class ToolGateway:
                 message="exact approval is required before this action",
             )
 
+        intent: SideEffectIntent | None = None
         if is_external:
             assert binding is not None and call.approval_id is not None
             try:
-                await self._approvals.consume_for_execution(
-                    call.approval_id, binding
-                )
-            except ApprovalError as exc:
+                if self._outbox is not None:
+                    intent = self._side_effect_intent(descriptor, call, binding)
+                    await self._outbox.create_with_approval_consumption(intent)
+                else:
+                    await self._approvals.consume_for_execution(call.approval_id, binding)
+            except DomainError as exc:
                 return ToolOutcome.failed(f"{exc.code}: {exc}")
 
         attempt_id = str(uuid.uuid4())
@@ -190,7 +204,7 @@ class ToolGateway:
             validate_json_schema(result, descriptor.output_schema)
         except OutcomeUnknownError as exc:
             return await self._unknown(
-                descriptor, call, execution_context, exc.reference_id, str(exc)
+                descriptor, call, execution_context, exc.reference_id, str(exc), intent
             )
         except TimeoutError:
             if is_external:
@@ -201,6 +215,7 @@ class ToolGateway:
                     execution_context,
                     reference_id,
                     "external action timed out after execution began",
+                    intent,
                 )
             return await self._failed(
                 descriptor,
@@ -208,9 +223,10 @@ class ToolGateway:
                 execution_context,
                 f"tool timed out after {descriptor.timeout_seconds:g} seconds",
                 retryable=True,
+                intent=intent,
             )
         except UserActionRequiredError as exc:
-            await self._mark_definitive_external_failure(call, str(exc))
+            await self._mark_definitive_external_failure(call, str(exc), intent)
             await self._audit_outcome(
                 descriptor, call, execution_context, "USER_ACTION_REQUIRED", str(exc)
             )
@@ -220,7 +236,7 @@ class ToolGateway:
                 reference_id=attempt_id,
             )
         except ExtensionUnavailableError as exc:
-            await self._mark_definitive_external_failure(call, str(exc))
+            await self._mark_definitive_external_failure(call, str(exc), intent)
             await self._audit_outcome(
                 descriptor, call, execution_context, "EXTENSION_UNAVAILABLE", str(exc)
             )
@@ -231,13 +247,14 @@ class ToolGateway:
                 reference_id=attempt_id,
             )
         except DefinitiveToolFailure as exc:
-            await self._mark_definitive_external_failure(call, str(exc))
+            await self._mark_definitive_external_failure(call, str(exc), intent)
             return await self._failed(
                 descriptor,
                 call,
                 execution_context,
                 str(exc),
                 retryable=exc.retryable and not is_external,
+                intent=intent,
             )
         except asyncio.CancelledError:
             if is_external:
@@ -245,7 +262,7 @@ class ToolGateway:
                 # cancelled; shield the state write from that cancellation.
                 reference_id = f"unknown:{attempt_id}"
                 await asyncio.shield(
-                    self._mark_unknown_external(call, reference_id)
+                    self._mark_unknown_external(call, reference_id, intent)
                 )
             raise
         except Exception as exc:  # noqa: BLE001 - boundary converts untyped worker failures
@@ -257,6 +274,7 @@ class ToolGateway:
                     execution_context,
                     reference_id,
                     "executor failed after external execution began; outcome is unknown",
+                    intent,
                 )
             return await self._failed(
                 descriptor,
@@ -264,6 +282,7 @@ class ToolGateway:
                 execution_context,
                 f"executor error: {type(exc).__name__}",
                 retryable=True,
+                intent=intent,
             )
 
         result_reference = "result:" + hashlib.sha256(
@@ -272,8 +291,12 @@ class ToolGateway:
             ).encode("utf-8")
         ).hexdigest()
         if is_external and call.approval_id is not None:
-            await self._approvals.mark_succeeded(
-                call.approval_id, result_reference=result_reference
+            await self._finalize_external(
+                call.approval_id,
+                intent,
+                SideEffectState.SUCCEEDED,
+                result_reference=result_reference,
+                receipt={"reference": result_reference},
             )
         await self._audit_outcome(
             descriptor, call, execution_context, "SUCCEEDED", result_reference
@@ -305,6 +328,22 @@ class ToolGateway:
             form_version=call.form_version,
         )
 
+    @staticmethod
+    def _side_effect_intent(
+        descriptor: ToolDescriptor, call: ToolCall, binding: ApprovalBinding
+    ) -> SideEffectIntent:
+        return SideEffectIntent(
+            id=str(uuid.uuid4()),
+            task_id=call.task_id,
+            tool_id=descriptor.id,
+            idempotency_key=call.idempotency_key or call.approval_id or str(uuid.uuid4()),
+            approval_id=call.approval_id or "",
+            canonical_payload_sha256=canonical_sha256(call.arguments),
+            state=SideEffectState.PREPARED,
+            created_at=utc_now(),
+            action_fingerprint=canonical_sha256(binding.envelope()),
+        )
+
     async def _unknown(
         self,
         descriptor: ToolDescriptor,
@@ -312,9 +351,10 @@ class ToolGateway:
         context: ToolExecutionContext,
         reference_id: str,
         message: str,
+        intent: SideEffectIntent | None = None,
     ) -> ToolOutcome:
         if descriptor.risk is RiskLevel.EXTERNAL_WRITE and call.approval_id is not None:
-            await self._mark_unknown_external(call, reference_id)
+            await self._mark_unknown_external(call, reference_id, intent)
         await self._audit_outcome(
             descriptor, call, context, "OUTCOME_UNKNOWN", message
         )
@@ -328,23 +368,83 @@ class ToolGateway:
         message: str,
         *,
         retryable: bool,
+        intent: SideEffectIntent | None = None,
     ) -> ToolOutcome:
         await self._audit_outcome(descriptor, call, context, "FAILED", message)
         return ToolOutcome.failed(message, retryable=retryable)
 
-    async def _mark_unknown_external(
-        self, call: ToolCall, reference_id: str
+    async def _finalize_external(
+        self,
+        approval_id: str,
+        intent: SideEffectIntent | None,
+        state: SideEffectState,
+        *,
+        result_reference: str | None = None,
+        failure_reason: str | None = None,
+        diagnostic_code: str | None = None,
+        receipt: dict[str, Any] | None = None,
     ) -> None:
-        if call.approval_id is not None:
+        """Record the terminal result on approval and intent atomically.
+
+        With a production outbox this is a single transaction; without one the
+        in-memory approval repository is updated directly.
+        """
+
+        if intent is not None and self._outbox is not None:
+            await self._outbox.finalize(
+                intent.id,
+                approval_id,
+                state=state,
+                result_reference=result_reference,
+                failure_reason=failure_reason,
+                diagnostic_code=diagnostic_code,
+                receipt=receipt,
+            )
+            return
+        if state is SideEffectState.SUCCEEDED:
+            await self._approvals.mark_succeeded(
+                approval_id, result_reference=result_reference or ""
+            )
+        elif state is SideEffectState.FAILED:
+            await self._approvals.mark_failed(
+                approval_id, reason=failure_reason or "failed"
+            )
+        else:
             await self._approvals.mark_unknown(
-                call.approval_id, reference_id=reference_id
+                approval_id, reference_id=result_reference or "unknown"
             )
 
-    async def _mark_definitive_external_failure(
-        self, call: ToolCall, reason: str
+    async def _mark_unknown_external(
+        self,
+        call: ToolCall,
+        reference_id: str,
+        intent: SideEffectIntent | None = None,
     ) -> None:
-        if call.approval_id is not None:
-            await self._approvals.mark_failed(call.approval_id, reason=reason)
+        if call.approval_id is None:
+            return
+        await self._finalize_external(
+            call.approval_id,
+            intent,
+            SideEffectState.UNKNOWN,
+            result_reference=reference_id,
+            diagnostic_code=reference_id,
+        )
+
+    async def _mark_definitive_external_failure(
+        self,
+        call: ToolCall,
+        reason: str,
+        intent: SideEffectIntent | None = None,
+    ) -> None:
+        if call.approval_id is None:
+            return
+        await self._finalize_external(
+            call.approval_id,
+            intent,
+            SideEffectState.FAILED,
+            failure_reason=reason,
+            diagnostic_code=reason[:200],
+        )
 
     async def _audit_outcome(
         self,

@@ -11,7 +11,7 @@
 | Health-only | `127.0.0.1:8010/healthz` | 只返回 `{"status":"ok"}` | 无 docs、任务、审批、扩展或管理路由 |
 | CLI | `assistantctl` | `doctor`、扩展 list/status/inspect/scaffold | 变更命令调用 Admin API，绝不直接改数据库 |
 
-开发模式使用内存仓储。`PA_ENVIRONMENT=production` 会拒绝内存；选择 PostgreSQL 时会明确抛出 `POSTGRES_ADAPTER_NOT_IMPLEMENTED`，不能在实现 F01 前误上线。
+开发模式使用内存仓储。`PA_ENVIRONMENT=production` 会拒绝内存；`PA_STORAGE_BACKEND=postgres` 时使用 F01 的真实 PostgreSQL 适配器，启动生命周期执行连接检查与迁移，数据库不可达或迁移失败会 fail closed，不回退内存（F01 DONE；证据见 `docs/NEXT_STEPS.md`）。
 
 ## 稳定核心边界
 

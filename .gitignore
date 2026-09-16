@@ -1,0 +1,26 @@
+.env
+.venv/
+.venv-win/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.idea/
+.vscode/
+
+# Runtime state and secrets never belong in Git.
+var/
+*.sqlite3
+*.log
+
+# Extension-local environments and build output.
+extensions/*/.venv/
+extensions/*/dist/
+extensions/*/build/
+

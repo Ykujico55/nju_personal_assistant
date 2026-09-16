@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -52,10 +54,20 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     container = container or build_container(settings)
+
+    @asynccontextmanager
+    async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
+        await container.storage.startup()
+        try:
+            yield
+        finally:
+            await container.storage.close()
+
     application = FastAPI(
         title="Personal Assistant Local Admin API",
         version="0.1.0",
         description="Must listen on loopback; never publish through Tunnel or Tailscale.",
+        lifespan=lifespan,
     )
     application.state.container = container
     application.add_middleware(IdempotencyKeyMiddleware)
