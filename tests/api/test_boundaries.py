@@ -19,7 +19,7 @@ def development_settings() -> Settings:
 
 
 class NetworkBoundaryTests(unittest.TestCase):
-    def test_cloudflare_mode_fails_closed_until_jwt_verifier_exists(self) -> None:
+    def test_cloudflare_mode_fails_closed_without_a_token(self) -> None:
         with patch.dict(
             os.environ,
             {
@@ -35,9 +35,9 @@ class NetworkBoundaryTests(unittest.TestCase):
             create_public_app(settings=settings, container=build_container(settings))
         )
         response = client.get("/healthz")
-        self.assertEqual(503, response.status_code)
+        self.assertEqual(401, response.status_code)
         self.assertEqual(
-            "CLOUDFLARE_ACCESS_VERIFIER_NOT_IMPLEMENTED",
+            "CLOUDFLARE_ACCESS_TOKEN_MISSING",
             response.json()["error"]["code"],
         )
 

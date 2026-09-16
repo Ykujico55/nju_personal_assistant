@@ -27,12 +27,17 @@
 
 ## 接下来几步
 
-- [ ] **F03 — Cloudflare Access 验证（NEXT）**
-  - 校验 JWT 签名、issuer、audience、expiry 与代理边界；当前远程模式继续 fail closed。
-- [ ] **F04 — 模型适配器与敏感披露许可（WAITING）**
-  - 接入真实本地/远程模型，持久化精确披露许可；SECRET 在所有模型路径继续硬阻断。
+- [x] **F03 — Cloudflare Access 验证（DONE — 三轮独立验收通过）**
+  - 已交付：`core/auth/ports.py` 的传输无关身份端口；`infrastructure/auth` 的 Cloudflare Access JWT verifier（含总 deadline、禁重定向、取消安全刷新；未知 `kid` 成功刷新确认不存在为 401、节流窗口内未检查为可重试 503）与有界 JWKS 缓存/轮换；public middleware 的载体提取（含跨原始 Cookie 头重复检测）与稳定 401/503；`PA_CF_ACCESS_TEAM_DOMAIN`/`PA_CF_ACCESS_AUD`/`PA_PUBLIC_ORIGIN` 在所有 Settings 构造路径写回规范化值并校验；可注入 verifier；运行时依赖 `PyJWT`/`cryptography`/`httpx`。
+  - 第一轮独立验收的 6 项缺陷（手工 Settings 绕过、无总 deadline/未禁重定向、取消污染节流、重复 Cookie 头、API→infrastructure 反向依赖、关闭顺序）已全部修复并补反例测试。
+  - 第二轮独立验收的 2 项缺陷（节流窗口把合法密钥轮换误报为不可重试 401；接口归属/规范化文档过期）已修复：未检查的未知 `kid` 现在返回可重试 503，成功刷新确认不存在才 401；`Settings` 所有构造路径写回 canonical 值再校验。
+  - 证据：F03 目标集合 `124 passed`；`./scripts/test.ps1` `269 passed、28 skipped`；`./scripts/test-postgres.ps1` `28 passed`（F01+F02 无回归）；Ruff、Mypy（138 files）、`pip check`、`git diff --check` 通过；wheel 含 `core/auth`、`infrastructure/auth` 与四份迁移。详见 `docs/NEXT_STEPS.md`。
+  - 最终独立复验：F03 目标集合 `124 passed`；全量 `269 passed、28 skipped`；PostgreSQL `28 passed`；手工轮换复现、wheel 内容与四份迁移 checksum 均通过复核。
+  - 未交付（有意）：自定义 Access 域名、应用内登录/MFA、Tunnel/Tailscale 编排、F04 披露许可。
+- [ ] **F04 — 模型适配器与敏感披露许可（NEXT / TODO）**
+  - 接入真实本地/远程模型，持久化精确披露许可；SECRET 在所有模型路径继续硬阻断。当前唯一允许推进的任务。
 
-F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02 已完成并通过六轮独立审计；当前只允许推进 F03。
+F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02 已完成并通过六轮独立审计；F03 已完成并通过三轮独立审计；当前只允许推进 F04。
 
 ## 每次交接必须留下
 

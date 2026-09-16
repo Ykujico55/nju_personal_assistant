@@ -6,7 +6,7 @@
 
 | 入口 | 默认地址 | 已实现 | 有意锁定 |
 |---|---|---|---|
-| 用户 API/PWA | `127.0.0.1:8000`、`/ui/` | 创建/查看/补充/取消任务，审批查看/确认/拒绝，扩展只读状态，SSE，PWA 壳 | Cloudflare Access JWT 未实现时远程模式统一 503；任务 Worker 尚不消费队列；无任何扩展管理路由 |
+| 用户 API/PWA | `127.0.0.1:8000`、`/ui/` | 创建/查看/补充/取消任务，审批查看/确认/拒绝，扩展只读状态，SSE，PWA 壳；Cloudflare 模式下验证 Access JWT 后才建立身份（F03 DONE，三轮独立验收通过） | 任务 Worker 尚不消费队列；无任何扩展管理路由；无应用内登录 |
 | Local Admin API | `127.0.0.1:8001` | 扩展发现/状态、纯数据 inspect、install/upgrade（精确预览确认）、enable/disable/rollback/uninstall、operation 轮询、启动恢复 Worker | `purge-data` 明确 501；必须单进程运行 |
 | Health-only | `127.0.0.1:8010/healthz` | 只返回 `{"status":"ok"}` | 无 docs、任务、审批、扩展或管理路由 |
 | CLI | `assistantctl` | `doctor`、list/status/inspect/scaffold、install/upgrade（交互确认或 `--yes`）、enable/disable/rollback/uninstall（轮询 operation） | 只调用 Admin API，绝不直接改数据库；`purge` 服务端 501 |
@@ -25,6 +25,7 @@
 - `core/jobs/`：at-least-once 队列端口、独立 lease keepalive、离线调度策略和副作用 outbox 契约。
 - `core/models/`：本地/远程 provider、字段分类、精确披露许可和显式本地回退。
 - `core/platform|secrets|artifacts|audit/`：操作系统、凭据、受管制品与审计端口。
+- `core/auth/`：传输无关的 `AccessIdentity`、`AccessTokenVerifier` 端口与通用异常；`infrastructure/auth/`：`JwksProvider` 与 Cloudflare 实现（`RS256` 白名单、`kid` 精确命中、issuer/audience/时间声明校验、有界缓存与受控轮换刷新、总 deadline、失败 fail closed；未知 `kid` 成功刷新确认不存在为 401、节流窗口内未检查为可重试 503；F03 DONE，三轮独立验收通过）。
 
 生产适配器只能放在 `infrastructure/`；禁止把 SQL、Win32、SMTP、Playwright 或模型 SDK 导入上述核心模块。
 
@@ -62,6 +63,7 @@
 - 升级失败时旧版本保持 ENABLED 且可调用；成功升级原子切换并保留可回滚版本；回滚校验数据 Schema 兼容性。
 - PostgreSQL 重启后恢复生命周期、operation 状态并收敛瞬时态。
 - health-only 端口没有其他路由；公共 API 无扩展管理路由；Admin API 只监听回环；API 命令要求幂等键；缓存与安全响应头存在。
+- Cloudflare 模式下缺失/畸形/`alg=none`/错误 `kid`/错误签名/过期/未来 `nbf`/错误 issuer/audience/载体冲突的令牌都在路由前被拒绝；身份只来自已验签 `sub`；伪造 email 与 `X-*` 身份头不改变 actor；JWKS 获取失败或生产配置缺失时 fail closed；开发模式不受影响。
 - 新扩展骨架可被静态 Manifest parser 接受，无需改核心。
 
 ## 接力纪律
@@ -75,4 +77,3 @@
 ```
 
 然后在 `NEXT_STEPS.md` 写入命令、测试数和真实限制。不得用空实现、跳过测试或内存回退声称生产功能完成。
-

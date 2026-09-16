@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01 + F02 completed baseline / contract v1.2（F02 增补见第 11 节）
+版本：F01 + F02 + F03 completed baseline / contract v1.3（F02 增补见第 11 节，F03 增补见第 12 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -422,3 +422,61 @@ F02 把既有 Manifest/确认屏障/生命周期/Registry/JSON-RPC 契约接到�
 - **失败回滚不下线当前版本**：`LifecycleManager.rollback` 先解析并校验保留候选（含 Schema 兼容），再禁用当前版本；禁用、保存 `ROLLED_BACK`、启动、健康检查、Registry 发布与启用持久化全部在同一补偿边界内。任一步失败（含候选启动/健康/ENABLED 保存失败与取消）由 `_compensate_failed_rollback` 撤销候选 Registry、停止候选 Worker、恢复原记录并重新启用。`ROLLBACK_INCOMPATIBLE`/`ROLLBACK_NO_CANDIDATE` 时当前版本保持 `ENABLED`、Registry 与调用不受影响。Supervisor 不得在 `rollback()` 之外再次 `enable()`。
 - **阻塞复制的取消安全**：`run_blocking(func, ...)` 让 `to_thread` 的取消等待线程真正结束后再重抛 `CancelledError`；首次取消优先，线程在取消后无论成功还是抛异常都被消费，异常不得覆盖取消信号；重复取消不会中断等待。安装/卸载的复制与删除线程不会在清理之后继续重建文件。
 - **普通 `call()` 的 deadline**：与 drain 相同，单一 monotonic deadline 覆盖等待 RPC 锁、写入与读取；排队调用的总耗时不得超过调用方预算。
+
+## 12. F03 实施后的契约补充（contract v1.3）
+
+F03 用真实、可测试、fail-closed 的 Cloudflare Access JWT 验证替换了公共 API 的 503 占位边界。未改动 Admin API 暴露策略、CSRF 门、风险等级、审批 canonicalization、F01/F02 迁移或扩展 Supervisor 行为。传输无关的身份契约位于 `core/auth/`（`ports.py`），Cloudflare 取钥/JWT 验证实现位于 `infrastructure/auth/`（`cloudflare_access.py`），`api/middleware/cloudflare_access.py` 只依赖 `core.auth`，由 `app.py` composition root 接线；`core/` 与 `domain/` 不导入 `jwt`、`httpx` 或 `cryptography`，依赖方向保持 `api/infrastructure/workers -> core -> domain`，`api` 不导入 `infrastructure`（契约测试锁定）。
+
+### 12.1 令牌来源与载体
+
+- 只接受 Cloudflare 官方载体：`Cf-Access-Jwt-Assertion` 请求头（官方推荐）与浏览器 `CF_Authorization` cookie。
+- 两个载体同时存在且内容不一致时拒绝；同名头或同名 cookie 出现多次（歧义）时拒绝，cookie 重复检测跨所有原始 `Cookie` 首部字段聚合，第二个 `Cookie` 头不会被忽略；不存在的载体不产生身份。
+- 令牌 UTF-8 长度上限 8192 字节；超限、空值畸形一律 401。
+- 原始 JWT、cookie、claims 与签名密钥不写入日志、数据库、审计、响应或测试快照；错误响应只含稳定错误码。
+
+### 12.2 密码学与 claim 验证
+
+- 使用 `PyJWT` + `cryptography`；不手写 RSA/ASN.1/签名算法。算法白名单只有 `RS256`，`alg=none`、对称/非对称混淆与未声明算法全部拒绝。
+- `kid` 必填（≤256 字符），必须精确命中可信 JWKS；重复或歧义 `kid`、错误 `kty`、非 `sig` 用途、非 `RS256` 或畸形 JWKS 都使本次取钥不可用（503）。
+- `iss` 必须与规范化后的 `https://<team>.cloudflareaccess.com` 完全一致；`aud` 必须包含配置的 `PA_CF_ACCESS_AUD`（支持字符串或数组形态）。
+- `exp` 必须存在；`nbf`/`iat` 存在时必须为有限数值。未来 `nbf`/`iat`、非正数、`exp <= nbf`、`exp <= iat` 等明显异常时间声明拒绝。时钟偏差使用固定的 30 秒上限，验证器允许测试注入时钟。
+- 身份只来自已验签 claims：`sub` 必填、非空、≤256 字符，写入 `request.state.actor_id`；可选 `email` 写入 `request.state.actor_email`，但绝不信任 `Cf-Access-Authenticated-User-Email`、`X-Forwarded-*` 或任意代理身份头。
+- `request.state.access_identity` 保存经过验证的 `AccessIdentity`；`api/dependencies.get_actor` 继续读取 `request.state.actor_id`。
+
+### 12.3 JWKS 取钥、缓存与轮换
+
+- 只访问由合法 `PA_CF_ACCESS_TEAM_DOMAIN` 推导出的 `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs`。
+- `PA_CF_ACCESS_TEAM_DOMAIN` 只接受 `team`、`team.cloudflareaccess.com` 或 `https://team.cloudflareaccess.com`；其它 scheme、credentials、端口、path/query/fragment、多级域名或非 `cloudflareaccess.com` 主机导致启动失败（防 SSRF）。自定义 Access 域名与团队域外的 JWKS URL 不在 F03 支持范围。
+- `Settings.__post_init__` 让 from_env、直接构造与 `replace` 都先把 team domain/audience/public origin 写回 canonical 值再校验，因此任何 `Settings` 实例都满足规范化不变量；`create_app`/`build_container` 再调用一次 `validate()`。`cloudflare_access_verifier_from_settings` 仍防御性使用 `normalize_team_domain`/`normalize_audience`，绝不直接使用原始字段，因此被绕过不变量的实例也无法把 issuer/JWKS URL 指向任意域名。
+- `CloudflareJwksProvider` 只使用注入的 `httpx.AsyncClient`（默认懒创建、单例复用），并**每次请求显式传 `follow_redirects=False`**，注入客户端自身的重定向设置不能改变行为；请求外层由单一 monotonic 总 deadline 约束整个 stream（默认 5 秒），httpx 分块 read timeout 不能替代它，慢速滴流响应在 deadline 内失败；另有 64 KiB 响应上限、只接受 2xx JSON。
+- 公钥缓存 TTL 为 300 秒；TTL 内命中不联网。未知 `kid` 触发一次受控刷新，同一 30 秒窗口内最多一次；并发刷新通过锁与 generation 合并为一次网络请求。
+- 刷新在写入节流时间后进行网络等待；若刷新被取消（`CancelledError` 或任何 `BaseException`），节流时间恢复为原值并重新抛出取消，等待者或后续请求可立即接管刷新，不会被错误映射为未知 key。
+- 未知 `kid` 的结果必须区分两种情况：**本次成功刷新并确认该 `kid` 不在可信集合**（含等待其他调用者完成的刷新）→ `UnknownSigningKeyError`（401）；**因 30 秒节流未能执行检查**或刷新失败 → `AccessTokenUnavailableError`（503, `retryable=true`）。因此密钥轮换在节流窗口内只会是临时 503，绝不会被误报为永久 401。
+- 网络失败、超时、非 2xx、超大响应、非 JSON、无有效 key 时抛 `AccessTokenUnavailableError`（503）。**过期缓存不放行**：刷新失败时即使缓存中存在旧 key 也拒绝。
+- 取钥失败不会清除已缓存但仍未过期的 key：TTL 内的正常请求不受瞬时网络故障影响；已在缓存中的旧 key 在轮换窗口内仍可正常验证。
+
+### 12.4 HTTP 结果与配置边界
+
+| 场景 | 状态码 | `error.code` |
+|---|---|---|
+| 未提供令牌 | 401 | `CLOUDFLARE_ACCESS_TOKEN_MISSING` |
+| 畸形/过期/签名错误/issuer/audience/kid/claims/载体冲突 | 401 | `CLOUDFLARE_ACCESS_TOKEN_INVALID` |
+| verifier 缺失或 JWKS 暂不可用 | 503 | `CLOUDFLARE_ACCESS_UNAVAILABLE` |
+
+- 统一错误信封保持 `error.code/message/request_id/retryable/details`；错误消息不包含令牌、claims、密钥或第三方异常文本。
+- `PA_TRUST_CLOUDFLARE_ACCESS=false`（开发模式）保持现有 `development-owner` 行为不经 verifier；生产缺少 team domain、audience 或 `PA_PUBLIC_ORIGIN`、或配置非法时启动即拒绝，绝不自动降级为无认证模式。不新增应用内密码、登录页或 MFA。
+- `CloudflareAccessBoundaryMiddleware` 只挂载在 public API/PWA（8000）。Admin API（8001）继续只允许回环且带有效 JWT 也无法从 public app 访问安装/升级/启停/卸载路由（public 路由表本身没有这些端点）；health-only（8010）除 `/healthz` 外无任何路由。
+- CSRF（Origin + `Sec-Fetch-Site` + `X-Requested-With`）与 JWT 验证相互独立：有效 JWT 不能替代 CSRF 门。中间件顺序保持 request id 与安全响应头覆盖 401/503 错误响应。
+- 关闭顺序：public app lifespan 在 `finally` 中先尝试 `verifier.aclose()`，再在嵌套 `finally` 中调用 `container.storage.close()`；verifier 关闭失败不会跳过数据存储关闭。
+
+### 12.5 新增公共接口
+
+- `core/auth/ports.py`：`AccessIdentity(subject, email)`、`AccessTokenVerifier`（`verify(token) -> AccessIdentity`、`aclose()`）、`AccessTokenError`、`AccessTokenRejectedError`、`AccessTokenUnavailableError`、`MAX_TOKEN_BYTES`；不依赖 HTTP/JWT/密码学库。
+- `infrastructure/auth/contract.py`：`JwksProvider`（`public_key(kid) -> RSAPublicKey`）与 `UnknownSigningKeyError`（`AccessTokenRejectedError` 子类）。
+- `infrastructure/auth/cloudflare_access.py`：`CloudflareJwksProvider`、`CloudflareAccessTokenVerifier`、`cloudflare_access_verifier_from_settings(settings, *, http_client=None, clock=None)`。
+- `app.create_app` 新增可注入 `access_verifier: AccessTokenVerifier | None`；未注入时由 composition root 按 settings 构建。测试使用运行时生成的 RSA 密钥与 in-memory transport，不连接真实 Cloudflare。
+- 新增运行时依赖 `PyJWT`、`cryptography`、`httpx`（`pyproject.toml` 与 `dependency.lock`），wheel 必须包含 `core/auth` 与 `infrastructure/auth`。
+
+### 12.6 有意未实现
+
+- 自定义 Access 团队域/自定义 JWKS 域名、应用内登录/密码/MFA、Access 会话撤销与登录重定向、Web Push 与 Tunnel/Tailscale 部署编排（F08/F10）、F04 模型披露许可。不得把这些描述为 F03 已交付。

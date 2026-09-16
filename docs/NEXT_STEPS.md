@@ -2,7 +2,7 @@
 
 本清单把详细设计拆成较小、可独立验收的工作包。状态只允许 `TODO / IN_PROGRESS / DONE / BLOCKED`。后续模型一次领取一个任务，完成后在本文件写入测试命令和结果。
 
-简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01、F02 已通过最终复验；当前唯一允许领取的是 F03，不得并行或提前开始 F04。
+简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01、F02、F03 已通过最终复验；当前唯一允许领取的是 F04，不得并行或提前开始 F05。
 
 ## 基架状态
 
@@ -11,6 +11,7 @@
 | F00 | DONE | 核心、API、PWA 壳、扩展 SDK、内存适配器和测试基架 | `scripts/test.ps1`：42 passed；Ruff 与 Mypy 通过；`pip check` 无冲突；wheel 含核心/SDK/PWA/配置/迁移；Uvicorn/API/CLI/Worker 子进程烟测通过 |
 | F01 | DONE | 迁移运行器 + 真实 PostgreSQL 仓储/队列/outbox/审计/扩展状态适配器 + composition root 与启动生命周期 | 最终复验：`./scripts/test-postgres.ps1` 24 passed；`./scripts/test.ps1` 44 passed、24 skipped；Ruff/Mypy/`pip check`/`git diff --check` 通过；旧库 checkpoint 续写、Extension 完整回填、PostgreSQL Gateway 四类终态和内存审批单次消费均独立验证通过 |
 | F02 | DONE | Extension Supervisor、确认屏障、每版本 venv/Worker、生命周期、Admin API/CLI、操作持久化与恢复 | 六轮独立审计通过；`./scripts/test.ps1` 153 passed、28 skipped；`./scripts/test-postgres.ps1` 28 passed；F02 相关集合 110 collected；Ruff/Mypy/`pip check`/`git diff --check` 与 wheel 内容核验通过 |
+| F03 | DONE | Cloudflare Access JWT 验证、JWKS 缓存/轮换、public/Admin/health 边界回归 | 三轮独立验收通过；前两轮 6+2 项缺陷均修复并补反例；F03 目标集合 124 passed；`./scripts/test.ps1` 269 passed、28 skipped；PostgreSQL 28 passed；Ruff/Mypy/`pip check`/`git diff --check`、手工轮换复现与 wheel 内容核验通过 |
 
 F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基架；后续任务应替换端口适配器或新增业务扩展。当前任务进入 `QUEUED` 后不会被假 Worker 消费，这是有意的 fail-closed 行为。
 
@@ -81,19 +82,44 @@ F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基�
 
 禁区：后台自动升级；从任意 URL 拉取未固定 revision；将 venv 称为安全沙箱。
 
-### F03 — Cloudflare Access 边界（TODO，当前唯一可领取）
+### F03 — Cloudflare Access 边界（DONE，三轮独立验收通过）
 
-范围：实现 Access JWT 的签名、issuer、audience、expiry 和代理头白名单。Origin/custom-header CSRF 基架已经存在；当前 Cloudflare 模式故意对全部请求返回 503。
+范围：实现 Access JWT 的签名、issuer、audience、expiry 和代理头白名单。Origin/custom-header CSRF 基架已经存在；Cloudflare 模式此前故意对全部请求返回 503，现已替换为真实验证。
 
-能力边界：只保护用户 API；本机 Admin API 不经 Tunnel。
+完成与验收证据（2026-09-17，三轮独立验收通过）：
 
-验收：伪造/过期/错误 audience JWT 均拒绝；生产配置缺失时 fail closed；安全测试证明无法从用户 API 调扩展安装/升级/卸载。
+- 新增 `core/auth/ports.py`：`AccessIdentity`、`AccessTokenVerifier` 注入协议、`AccessTokenError`/`AccessTokenRejectedError`/`AccessTokenUnavailableError`、`MAX_TOKEN_BYTES`（api 只依赖 `core.auth`）；`infrastructure/auth/contract.py` 只保留 `JwksProvider` 与 `UnknownSigningKeyError`，密码学实现位于 `infrastructure/auth/cloudflare_access.py`。
+- 新增 `infrastructure/auth/cloudflare_access.py`：`CloudflareJwksProvider`（有界缓存、single-flight、未知 kid 受控刷新、超时/响应上限/HTTPS 固定地址）与 `CloudflareAccessTokenVerifier`（`RS256` 白名单、`kid` 精确命中、issuer/audience/exp/nbf/iat 校验、固定 30 秒 leeway、可注入时钟、`sub` -> actor）。
+- 重写 `api/middleware/cloudflare_access.py`：只接受 `Cf-Access-Jwt-Assertion` 头与 `CF_Authorization` cookie 两种官方载体；载体冲突/重复/超限拒绝；仅用已验证 claims 建立身份；稳定错误码 401（缺失/无效）与 503（不可用）；开发模式保持 `development-owner`。
+- `settings.py` 增加 `PA_CF_ACCESS_TEAM_DOMAIN`、`PA_CF_ACCESS_AUD`、`PA_PUBLIC_ORIGIN` 的规范化与启动校验：`__post_init__` 对所有构造路径写回 canonical 值再校验，非法 team domain（scheme/端口/userinfo/path/自定义域）与缺失生产配置一律拒绝启动。
+- `app.py` 新增可注入 `access_verifier` 并在 composition root 构建/关闭；Admin 与 health app 未接线，未改动其路由。
+- 运行时依赖新增 `PyJWT`、`cryptography`，`httpx` 提升为运行时依赖；`pyproject.toml`、`dependency.lock`、`.env.example` 同步。
+- 测试：`tests/unit/test_cloudflare_access_verifier.py`（RSA 运行时生成 + in-memory JWKS transport；算法混淆、kid、签名、时间声明、缓存/轮换/并发/失败矩阵）、`tests/api/test_cloudflare_access.py`（载体冲突、伪造 email 头、401/503、JWKS 故障、CSRF 不回归、public 无 Admin 路由）、`tests/unit/test_settings.py`、`tests/api/test_boundaries.py`、`tests/contract/test_f03_contract_consistency.py`（依赖声明、无硬编码 JWT、core/domain 不导入密码学栈、文档一致性）。
+- 第一轮独立验收修复（6 项，全部补反例测试）：
+  1. **P1 手工 Settings 绕过域名校验**：`Settings.__post_init__` 使 from_env、直接构造与 `replace` 全部写回规范化值并校验（第二轮进一步写回 canonical 值）；`create_app`/`build_container` 再校验一次；`cloudflare_access_verifier_from_settings` 只使用 `normalize_team_domain`/`normalize_audience` 的规范化结果。反例：foreign team domain 直接构造/`replace`/`create_app` 全部拒绝，工厂对非规范 team domain 仍构造官方 HTTPS certs URL。
+  2. **P2 JWKS 无总 deadline 且未禁止重定向**：`_fetch_keys` 外层 `asyncio.timeout` 覆盖整个 stream（慢速滴流在 deadline 内失败），每次请求显式 `follow_redirects=False`（注入客户端的重定向设置无效）。反例：注入 `follow_redirects=True` 客户端遇 302 只请求官方主机一次并 503；慢速分块在 0.1s 预算内失败。
+  3. **P2 取消污染节流状态**：刷新取消（`BaseException`）时恢复 `_last_attempt_at`/`_last_unknown_refresh_at` 后重抛，等待者立即接管刷新。反例：首个刷新持锁时取消，等待中的第二个请求完成取钥并成功验签（2 次请求）。
+  4. **P2 重复原始 Cookie 头未检测**：`_cookie_values` 遍历 `getlist("Cookie")` 聚合全部原始首部。反例：两个 `Cookie` 头各带一个 `CF_Authorization` 拒绝；一个无关 Cookie 头加一个令牌头接受。
+  5. **P2 API 反向依赖 infrastructure**：`AccessIdentity`/`AccessTokenVerifier`/通用异常与 `MAX_TOKEN_BYTES` 移至 `core/auth/ports.py`；middleware 只导入 `core.auth`；`JwksProvider` 与 `UnknownSigningKeyError` 留在 `infrastructure/auth/contract.py`。契约测试阻止 `api/**` 出现 `personal_assistant.infrastructure`，并锁定 middleware 的 `core.auth` 导入。
+  6. **P2 verifier 关闭失败跳过数据库关闭**：lifespan `finally` 用嵌套 `try/finally` 保证两个关闭都尝试。反例：`aclose()` 抛错的 verifier 下 `storage.close()` 仍被调用。
+- 第二轮独立验收修复（2 项，全部补反例测试）：
+  1. **P2 节流窗口把合法轮换误报为 401**：`CloudflareJwksProvider` 现在区分“本次成功刷新并确认 `kid` 不存在”（含等待其他调用者完成的刷新）→ `UnknownSigningKeyError`（401）与“因节流/失败未执行检查”→ `AccessTokenUnavailableError`（503, `retryable=true`）。反例：`test_throttled_unknown_kid_is_temporarily_unavailable`、`test_rotated_key_during_throttle_window_is_unavailable_then_recovers`（窗口内 503、旧 key 仍可用、30 秒后刷新成功）、`test_concurrent_unknown_kid_refresh_is_coalesced`（合并刷新下 401/503 均安全且只联网一次）、API 层 `test_rotated_key_during_throttle_window_is_retryable_503`。
+  2. **文档归属与规范化声明不准**：`NEXT_STEPS.md` 接口归属改为 `core/auth/ports.py` 与 `infrastructure/auth/contract.py` 的分工；`Settings.__post_init__` 现在对 team domain/audience/public origin 写回 canonical 值再校验（所有构造路径满足规范化不变量），factory 保留防御性规范化；`CONTRACTS` 12.3 明确 401/503 分类与文档；新增契约检查 `test_identity_contract_lives_in_core_auth`、`test_next_steps_names_the_correct_interface_owner`，并有 `test_direct_construction_writes_back_normalized_values`、`test_replace_writes_back_normalized_values`、`test_factory_defensively_normalizes_bypassed_settings`。
+- 命令证据（两轮修复后）：F03 目标集合 124 passed（`tests/unit/test_cloudflare_access_verifier.py` + `tests/api/test_cloudflare_access.py` + `tests/unit/test_settings.py` + `tests/api/test_boundaries.py` + `tests/contract/test_f03_contract_consistency.py`）；`./scripts/test.ps1` 269 passed、28 skipped；`./scripts/test-postgres.ps1` 28 passed（F01+F02 无回归）；Ruff、Mypy（138 files）、`pip check`、`git diff --check` 通过；临时目录重建 wheel 并解包确认 `core/auth`、`infrastructure/auth`、既有四份迁移与三项依赖声明齐全。
+- 最终独立复验：上述目标集、全量与 PostgreSQL 结果全部独立复现；手工验证未知 key 401、节流窗口内轮换 key 可重试 503、旧 key 继续可用且窗口后刷新恢复；wheel、工作树边界与四份迁移 checksum 均复核通过，未发现新的 P0/P1/P2 缺陷。
+- 契约同步：`CONTRACTS_AND_INTERFACES.md` 第 12 节（contract v1.3）、`IMPLEMENTATION_MAP.md`、`README.md`。
 
-失败红线：仅信任请求头里的 email；生产环境绕过认证；Admin 监听非回环地址。
+能力边界：只保护用户 API/PWA（8000）；本机 Admin API（8001）不经 Tunnel，健康只读侧车（8010）保持不变。
+
+有意未实现：自定义 Access 域名或团队域之外的 JWKS 地址、应用内登录/密码/MFA、Access 会话撤销与登录重定向、Tunnel/Tailscale 部署编排（F08/F10）。
+
+剩余风险：无法抵御被盗的 Cloudflare/浏览器会话（产品接受）；Cloudflare Access 边缘可见传输内容；密钥轮换暂态：新 `kid` 在 30 秒节流窗口内无法检查时返回 503（`retryable=true`），成功刷新后确认不存在才是 401；TTL 内已缓存 key 始终可用。
+
+失败红线复核：不信任 email/代理头（伪造头反例）；生产配置缺失/非法启动失败；Admin 仍只允许回环且 public app 无管理路由；JWKS 失败不放行；未记录原始 JWT/cookie/私钥。
 
 禁区：增加应用内密码/MFA 并声称消除被盗 Access 会话风险。
 
-### F04 — 模型适配器与披露许可（TODO）
+### F04 — 模型适配器与披露许可（TODO，当前唯一 NEXT）
 
 范围：为现有 `ModelRouter`、字段分类、精确 disclosure consent 和本地回退策略实现真实本地/远程模型适配器与持久 consent receipt。
 

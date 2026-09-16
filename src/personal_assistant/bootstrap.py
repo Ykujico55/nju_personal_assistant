@@ -86,6 +86,7 @@ def _bundled_extensions_root() -> Path:
 
 def build_container(settings: Settings | None = None) -> Container:
     settings = settings or Settings.from_env()
+    settings.validate()
     if settings.storage_backend == "postgres":
         return _build_postgres_container(settings)
     return _build_memory_container(settings)
