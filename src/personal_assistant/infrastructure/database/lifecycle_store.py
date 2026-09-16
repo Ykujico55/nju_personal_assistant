@@ -31,7 +31,8 @@ def _bare_sha256(value: str) -> str:
     return digest[:64]
 
 
-def _manifest_to_dict(manifest: ExtensionManifest) -> dict[str, Any]:
+def manifest_to_dict(manifest: ExtensionManifest) -> dict[str, Any]:
+    """Serialize an extension manifest for durable storage."""
     data: dict[str, Any] = {
         "root": str(manifest.root),
         "manifest_version": manifest.manifest_version,
@@ -64,7 +65,7 @@ def _manifest_to_dict(manifest: ExtensionManifest) -> dict[str, Any]:
     return data
 
 
-def _manifest_from_dict(data: dict[str, Any]) -> ExtensionManifest:
+def manifest_from_dict(data: dict[str, Any]) -> ExtensionManifest:
     capabilities = data.get("capabilities") or {}
     tools = tuple(
         ManifestTool(
@@ -98,6 +99,11 @@ def _manifest_from_dict(data: dict[str, Any]) -> ExtensionManifest:
     )
 
 
+_SELECT_COLUMNS = (
+    "id, lifecycle_state, retained_data, tombstone, install_path, artifact_hash, manifest"
+)
+
+
 class PostgresLifecycleStore:
     def __init__(self, database: PostgresDatabase) -> None:
         self._db = database
@@ -105,19 +111,27 @@ class PostgresLifecycleStore:
     async def get(self, extension_id: str) -> ExtensionRecord | None:
         async with self._db.connection() as connection:
             row = await connection.fetchrow(
-                "SELECT lifecycle_state, retained_data, tombstone, install_path, "
-                "artifact_hash, manifest FROM extensions WHERE id = $1",
+                f"SELECT {_SELECT_COLUMNS} FROM extensions WHERE id = $1",
                 extension_id,
             )
-        if row is None:
-            return None
+        return self._record_from_row(row) if row is not None else None
+
+    async def all(self) -> tuple[ExtensionRecord, ...]:
+        async with self._db.connection() as connection:
+            rows = await connection.fetch(
+                f"SELECT {_SELECT_COLUMNS} FROM extensions ORDER BY id"
+            )
+        return tuple(self._record_from_row(row) for row in rows)
+
+    @staticmethod
+    def _record_from_row(row: Any) -> ExtensionRecord:
         manifest = row["manifest"]
         if not isinstance(manifest, dict) or not manifest:
             raise ExtensionError(
-                f"extension {extension_id} has no persisted manifest"
+                f"extension {row['id']} has no persisted manifest"
             )
         return ExtensionRecord(
-            manifest=_manifest_from_dict(manifest),
+            manifest=manifest_from_dict(manifest),
             artifact_hash=row["artifact_hash"] or "",
             state=ExtensionState(row["lifecycle_state"]),
             install_path=row["install_path"],
@@ -126,7 +140,7 @@ class PostgresLifecycleStore:
         )
 
     async def save(self, record: ExtensionRecord) -> None:
-        manifest = _manifest_to_dict(record.manifest)
+        manifest = manifest_to_dict(record.manifest)
         async with self._db.transaction(), self._db.connection() as connection:
             # Serialize concurrent lifecycle operations for the same extension.
             await connection.execute(
@@ -178,3 +192,8 @@ class PostgresLifecycleStore:
                 manifest,
                 record.install_path,
             )
+
+
+# Backwards-compatible aliases for the private names used by the F01 test suite.
+_manifest_to_dict = manifest_to_dict
+_manifest_from_dict = manifest_from_dict

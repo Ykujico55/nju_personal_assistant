@@ -16,22 +16,46 @@ from personal_assistant.core.agent.checkpoint import (
 )
 from personal_assistant.core.approvals import ApprovalService, InMemoryApprovalRepository
 from personal_assistant.core.audit import AuditWriterPort
-from personal_assistant.core.extensions import ExtensionRegistry
-from personal_assistant.core.extensions.lifecycle import LifecycleStore
+from personal_assistant.core.extensions import (
+    ExtensionOperationStore,
+    ExtensionRegistry,
+    ExtensionSupervisorService,
+)
+from personal_assistant.core.extensions.lifecycle import (
+    ExtensionDataStore,
+    InstallCoordinator,
+    LifecycleManager,
+    LifecycleStore,
+)
 from personal_assistant.core.jobs import JobQueuePort, SideEffectOutboxPort
 from personal_assistant.core.tasks import TaskService
 from personal_assistant.core.tasks.service import EventStreamPort
 from personal_assistant.infrastructure.database import (
     PostgresAdapterConfig,
+    PostgresAdapters,
+    PostgresExtensionOperationStore,
+    PostgresVersionCatalog,
     build_postgres_adapters,
 )
+from personal_assistant.infrastructure.extensions import (
+    CompatibleVersionOperator,
+    LocalArtifactStager,
+    PostgresExtensionDataStore,
+    ProcessContractVerifier,
+    ProcessRuntimeSupervisor,
+    VenvArtifactInstaller,
+    VersionCatalog,
+)
+from personal_assistant.infrastructure.extensions.data import InMemoryExtensionDataStore
 from personal_assistant.infrastructure.memory import (
     InMemoryAuditWriter,
     InMemoryEventStream,
+    InMemoryExtensionOperationStore,
     InMemoryJobQueue,
     InMemoryLifecycleStore,
     InMemorySideEffectOutbox,
     InMemoryTaskRepository,
+    InMemoryVersionCatalog,
 )
 from personal_assistant.infrastructure.storage import NullStorageLifecycle, StorageLifecycle
 from personal_assistant.settings import Settings
@@ -43,6 +67,7 @@ class Container:
     tasks: TaskService
     approvals: ApprovalService
     extension_registry: ExtensionRegistry
+    extension_supervisor: ExtensionSupervisorService
     bundled_extensions_root: Path
     jobs: JobQueuePort
     events: EventStreamPort
@@ -66,10 +91,49 @@ def build_container(settings: Settings | None = None) -> Container:
     return _build_memory_container(settings)
 
 
+def _staging_and_install_roots(settings: Settings) -> tuple[Path, Path]:
+    return settings.extension_root / "staging", settings.extension_root / "installed"
+
+
+def _build_supervisor(
+    settings: Settings,
+    *,
+    registry: ExtensionRegistry,
+    store: LifecycleStore,
+    operations: ExtensionOperationStore,
+    version_catalog: VersionCatalog,
+    data_store: ExtensionDataStore,
+) -> ExtensionSupervisorService:
+    stager = LocalArtifactStager(_staging_and_install_roots(settings)[0])
+    installer = VenvArtifactInstaller(
+        install_root=_staging_and_install_roots(settings)[1], stager=stager
+    )
+    runtime = ProcessRuntimeSupervisor()
+    coordinator = InstallCoordinator(stager, installer, ProcessContractVerifier(), store)
+    manager = LifecycleManager(
+        store,
+        registry,
+        runtime,
+        installer,
+        data_store,
+        CompatibleVersionOperator(version_catalog),
+    )
+    return ExtensionSupervisorService(
+        coordinator=coordinator,
+        manager=manager,
+        registry=registry,
+        store=store,
+        operations=operations,
+        runtime=runtime,
+    )
+
+
 def _build_postgres_container(settings: Settings) -> Container:
-    adapters = build_postgres_adapters(
+    adapters: PostgresAdapters = build_postgres_adapters(
         PostgresAdapterConfig.from_env(settings.database_url)
     )
+    registry = ExtensionRegistry()
+    operations = PostgresExtensionOperationStore(adapters.database)
     return Container(
         settings=settings,
         tasks=TaskService(
@@ -80,7 +144,15 @@ def _build_postgres_container(settings: Settings) -> Container:
             unit_of_work=adapters.database,
         ),
         approvals=ApprovalService(adapters.approval_repository),
-        extension_registry=ExtensionRegistry(),
+        extension_registry=registry,
+        extension_supervisor=_build_supervisor(
+            settings,
+            registry=registry,
+            store=adapters.lifecycle_store,
+            operations=operations,
+            version_catalog=PostgresVersionCatalog(adapters.database),
+            data_store=PostgresExtensionDataStore(adapters.database),
+        ),
         bundled_extensions_root=_bundled_extensions_root(),
         jobs=adapters.job_queue,
         events=adapters.event_stream,
@@ -100,6 +172,9 @@ def _build_memory_container(settings: Settings) -> Container:
     events = InMemoryEventStream()
     task_repository = InMemoryTaskRepository()
     approvals = ApprovalService(InMemoryApprovalRepository())
+    registry = ExtensionRegistry()
+    lifecycle_store = InMemoryLifecycleStore()
+    operations = InMemoryExtensionOperationStore()
     return Container(
         settings=settings,
         tasks=TaskService(
@@ -109,7 +184,15 @@ def _build_memory_container(settings: Settings) -> Container:
             events=events,
         ),
         approvals=approvals,
-        extension_registry=ExtensionRegistry(),
+        extension_registry=registry,
+        extension_supervisor=_build_supervisor(
+            settings,
+            registry=registry,
+            store=lifecycle_store,
+            operations=operations,
+            version_catalog=InMemoryVersionCatalog(),
+            data_store=InMemoryExtensionDataStore(),
+        ),
         bundled_extensions_root=_bundled_extensions_root(),
         jobs=queue,
         events=events,
@@ -119,7 +202,7 @@ def _build_memory_container(settings: Settings) -> Container:
         observation_store=InMemoryObservationStore(),
         audit_writer=audit,
         side_effect_outbox=InMemorySideEffectOutbox(approvals),
-        lifecycle_store=InMemoryLifecycleStore(),
+        lifecycle_store=lifecycle_store,
     )
 
 

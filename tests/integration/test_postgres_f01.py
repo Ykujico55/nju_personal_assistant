@@ -216,11 +216,27 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_database_migrates_and_reruns_are_noops(self) -> None:
         adapters = self.adapters()
         applied = await adapters.startup()
-        self.assertEqual(("0001_core", "0002_f01_persistence"), applied)
+        self.assertEqual(
+            (
+                "0001_core",
+                "0002_f01_persistence",
+                "0003_f02_operations",
+                "0004_f02_operation_request_scope",
+            ),
+            applied,
+        )
         rows = await self._fetch(
             adapters, "SELECT version, checksum FROM schema_migrations ORDER BY version"
         )
-        self.assertEqual(["0001_core", "0002_f01_persistence"], [r["version"] for r in rows])
+        self.assertEqual(
+            [
+                "0001_core",
+                "0002_f01_persistence",
+                "0003_f02_operations",
+                "0004_f02_operation_request_scope",
+            ],
+            [r["version"] for r in rows],
+        )
         for row in rows:
             self.assertEqual(64, len(row["checksum"]))
         # Repeat startup must be a no-op, not a re-application.
@@ -232,11 +248,18 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(("0001_core",), await first.startup())
         # Same database, now seen by the real (full) migration directory.
         second = self.adapters()
-        self.assertEqual(("0002_f01_persistence",), await second.startup())
+        self.assertEqual(
+            (
+                "0002_f01_persistence",
+                "0003_f02_operations",
+                "0004_f02_operation_request_scope",
+            ),
+            await second.startup(),
+        )
         versions = await self._fetchval(
             second, "SELECT count(*) FROM schema_migrations"
         )
-        self.assertEqual(2, versions)
+        self.assertEqual(4, versions)
 
     async def test_checksum_drift_is_rejected(self) -> None:
         await self.migrate()

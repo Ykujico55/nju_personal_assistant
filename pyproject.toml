@@ -49,6 +49,8 @@ namespaces = true
 "share/personal-assistant/migrations" = [
   "migrations/0001_core.sql",
   "migrations/0002_f01_persistence.sql",
+  "migrations/0003_f02_operations.sql",
+  "migrations/0004_f02_operation_request_scope.sql",
 ]
 
 [tool.pytest.ini_options]

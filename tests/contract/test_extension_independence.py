@@ -22,6 +22,22 @@ class ExtensionIndependenceContract(unittest.TestCase):
                 offenders.append(path.relative_to(ROOT).as_posix())
         self.assertEqual([], offenders)
 
+    def test_cli_never_touches_the_database_or_infrastructure(self) -> None:
+        offenders = []
+        for path in (ROOT / "src" / "personal_assistant" / "cli").rglob("*.py"):
+            text = path.read_text("utf-8")
+            if any(
+                marker in text
+                for marker in (
+                    "personal_assistant.infrastructure",
+                    "build_container",
+                    "asyncpg",
+                    "sqlalchemy",
+                )
+            ):
+                offenders.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual([], offenders)
+
 
 if __name__ == "__main__":
     unittest.main()

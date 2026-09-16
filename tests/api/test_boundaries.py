@@ -47,22 +47,42 @@ class NetworkBoundaryTests(unittest.TestCase):
         for path in ("/api/v1/tasks/anything", "/admin/v1/extensions", "/docs", "/openapi.json"):
             self.assertEqual(404, client.get(path).status_code, path)
 
-    def test_admin_lists_but_does_not_fake_supervisor_completion(self) -> None:
+    def test_admin_install_requires_an_exact_preview_confirmation(self) -> None:
         settings = development_settings()
         client = TestClient(
             create_admin_app(settings=settings, container=build_container(settings))
         )
         listed = client.get("/admin/v1/extensions")
         self.assertEqual("example.echo", listed.json()["items"][0]["id"])
+        # A bare source is not a confirmation: the request is rejected before any
+        # staging or execution could happen.
         install = client.post(
             "/admin/v1/extensions/install",
             json={"source": "extensions/example_echo"},
             headers={"Idempotency-Key": "install-one"},
         )
-        self.assertEqual(501, install.status_code)
-        self.assertEqual(
-            "EXTENSION_SUPERVISOR_NOT_IMPLEMENTED", install.json()["error"]["code"]
+        self.assertEqual(422, install.status_code)
+        self.assertEqual("REQUEST_VALIDATION_ERROR", install.json()["error"]["code"])
+
+    def test_admin_upgrade_and_purge_are_explicit_locally(self) -> None:
+        settings = development_settings()
+        client = TestClient(
+            create_admin_app(settings=settings, container=build_container(settings))
         )
+        # Upgrade without an exact preview confirmation is rejected before any
+        # staging or execution happens.
+        upgrade = client.post(
+            "/admin/v1/extensions/example.echo/upgrade",
+            json={},
+            headers={"Idempotency-Key": "upgrade-one"},
+        )
+        self.assertEqual(409, upgrade.status_code)
+        self.assertEqual("CONFIRMATION_REQUIRED", upgrade.json()["error"]["code"])
+        purge = client.post(
+            "/admin/v1/extensions/example.echo/purge-data",
+            headers={"Idempotency-Key": "purge-one"},
+        )
+        self.assertEqual(501, purge.status_code)
 
 
 if __name__ == "__main__":

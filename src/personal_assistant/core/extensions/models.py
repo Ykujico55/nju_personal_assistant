@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -10,6 +11,27 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .manifest import ExtensionManifest
+
+
+def data_namespace(extension_id: str) -> str:
+    """Host-owned ``ext_*`` schema name for extension business data.
+
+    The encoding is injective: ``[a-z0-9]`` characters are kept, everything else
+    becomes ``_<codepoint hex>_``.  ``a.b``, ``a_b`` and ``a-b`` therefore map to
+    different namespaces.  Long identifiers keep a digest suffix so the name
+    stays a valid PostgreSQL identifier (max 63 bytes).
+    """
+
+    safe_characters = "abcdefghijklmnopqrstuvwxyz0123456789"
+    encoded = "".join(
+        character if character in safe_characters else f"_{ord(character):x}_"
+        for character in extension_id
+    )
+    namespace = f"ext_{encoded}"
+    if len(namespace) <= 63:
+        return namespace
+    digest = hashlib.sha256(extension_id.encode("utf-8")).hexdigest()[:16]
+    return f"ext_{encoded[:40]}_{digest}"
 
 
 class ExtensionState(StrEnum):

@@ -35,7 +35,20 @@ _SLOT_KEYS = {
     "forms": "FormSchemaProvider",
 }
 _RISK_LEVELS = {"READ", "INTERNAL_WRITE", "EXTERNAL_WRITE", "PROHIBITED"}
-_IGNORED_ARTIFACT_PARTS = {".git", ".venv", "__pycache__", ".pytest_cache"}
+
+# Staging, hashing and installation must all use exactly this file set: an
+# ignored path never reaches the staged tree, so it can neither change the
+# confirmed hash nor end up in the installed payload.
+IGNORED_ARTIFACT_PARTS = frozenset({".git", ".venv", "__pycache__", ".pytest_cache"})
+_IGNORED_ARTIFACT_PARTS = IGNORED_ARTIFACT_PARTS
+
+_EXACT_VERSION_RE = re.compile(
+    r"^[0-9]+(?:\.[0-9]+)*(?:[A-Za-z][A-Za-z0-9.]*)?(?:\+[A-Za-z0-9.]+)?$"
+)
+_PINNED_REQUIREMENT_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9._-]*)(\[[A-Za-z0-9._,-]+\])?==([^==;,\s<>!~*]+)$"
+)
+_SHA256_HASH_RE = re.compile(r"^--hash=sha256:([0-9a-f]{64})$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +178,8 @@ class ManifestParser:
         _validate_range(python_spec, self.python_version, "python")
 
         dependency_lock = _required_string(raw, "dependency_lock")
-        _require_safe_file(root, dependency_lock, "dependency_lock")
+        lock_path = _require_safe_file(root, dependency_lock, "dependency_lock")
+        _validate_lockfile(lock_path)
         config_schema_value = raw.get("config_schema")
         if config_schema_value is not None:
             if not isinstance(config_schema_value, str) or not config_schema_value:
@@ -326,6 +340,59 @@ def _identifier_list(value: Any, field_name: str) -> tuple[str, ...]:
     if duplicates:
         raise ManifestValidationError(f"{field_name} contains duplicates: {duplicates}")
     return normalized
+
+
+def _validate_lockfile(lock_path: Path) -> None:
+    """Static lockfile validation; this is data-only and never executes pip.
+
+    The lock must be a complete, hash-checked, exactly-pinned set: every
+    requirement line is ``name==exact.version`` (optionally with extras) followed
+    by at least one ``--hash=sha256:<64 hex>`` token.  Wildcards, ranges,
+    environment markers, options, editable installs and URL/VCS requirements are
+    rejected so pip can never resolve or fetch anything that is not pinned.
+    """
+
+    text = lock_path.read_text("utf-8")
+    logical_lines: list[tuple[int, str]] = []
+    buffer = ""
+    start_line = 0
+    for number, raw in enumerate(text.splitlines(), start=1):
+        stripped = raw.strip()
+        if not buffer:
+            start_line = number
+        if stripped.endswith("\\"):
+            buffer += stripped[:-1] + " "
+            continue
+        buffer += stripped
+        logical_lines.append((start_line, buffer))
+        buffer = ""
+    if buffer:
+        logical_lines.append((start_line, buffer))
+
+    for number, line in logical_lines:
+        if not line or line.startswith("#"):
+            continue
+        if ";" in line or "://" in line or line.startswith("-"):
+            raise ManifestValidationError(
+                f"dependency_lock line {number} is not a plain pinned requirement"
+            )
+        tokens = line.split()
+        requirement = tokens[0]
+        hashes = tokens[1:]
+        match = _PINNED_REQUIREMENT_RE.fullmatch(requirement)
+        if match is None or not _EXACT_VERSION_RE.fullmatch(match.group(3)):
+            raise ManifestValidationError(
+                f"dependency_lock line {number} must pin one exact version with '=='"
+            )
+        if not hashes:
+            raise ManifestValidationError(
+                f"dependency_lock line {number} must declare --hash=sha256:..."
+            )
+        for token in hashes:
+            if _SHA256_HASH_RE.fullmatch(token) is None:
+                raise ManifestValidationError(
+                    f"dependency_lock line {number} has an unsupported hash token"
+                )
 
 
 def _require_safe_file(root: Path, reference: str, field_name: str) -> Path:

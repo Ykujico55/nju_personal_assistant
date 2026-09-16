@@ -18,6 +18,12 @@ class InMemoryLifecycleStore:
             record = self._records.get(extension_id)
             return deepcopy(record) if record is not None else None
 
+    async def all(self) -> tuple[ExtensionRecord, ...]:
+        async with self._lock:
+            return tuple(
+                deepcopy(self._records[key]) for key in sorted(self._records)
+            )
+
     async def save(self, record: ExtensionRecord) -> None:
         async with self._lock:
             self._records[record.manifest.id] = deepcopy(record)

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -88,6 +90,30 @@ class PublicApiTests(unittest.TestCase):
         self.assertEqual("DISCOVERED", item["state"])
         self.assertEqual("no-store", response.headers["cache-control"])
         self.assertIn("script-src 'self'", response.headers["content-security-policy"])
+
+    def test_extension_state_comes_from_the_durable_store(self) -> None:
+        from personal_assistant.core.extensions import (
+            ExtensionRecord,
+            ExtensionState,
+            ManifestParser,
+            compute_artifact_hash,
+        )
+
+        example = Path(__file__).resolve().parents[2] / "extensions" / "example_echo"
+        manifest = ManifestParser().parse(example)
+        container = self.client.app.state.container
+        record = ExtensionRecord(
+            manifest=manifest,
+            artifact_hash=compute_artifact_hash(example),
+            state=ExtensionState.ENABLED,
+            install_path=str(container.settings.extension_root / "installed" / "example.echo"),
+        )
+        asyncio.run(container.lifecycle_store.save(record))
+        response = self.client.get("/api/v1/extensions")
+        self.assertEqual(200, response.status_code)
+        item = response.json()["items"][0]
+        self.assertEqual("example.echo", item["id"])
+        self.assertEqual("ENABLED", item["state"])
 
     def test_mobile_pwa_shell_is_served(self) -> None:
         response = self.client.get("/ui/")

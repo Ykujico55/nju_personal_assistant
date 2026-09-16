@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from personal_assistant_sdk import (
@@ -57,26 +59,15 @@ class EchoExtension:
         self._runtime = None
 
     def tools(self) -> tuple[ToolDescriptor, ...]:
+        # The host compares these descriptors with the manifest and the schema
+        # files byte-for-byte, so load the same files the manifest references.
         return (
             ToolDescriptor(
                 id="example.echo",
                 risk=RiskLevel.READ,
                 description="Return exactly the supplied text.",
-                input_schema={
-                    "type": "object",
-                    "properties": {"text": {"type": "string"}},
-                    "required": ["text"],
-                    "additionalProperties": False,
-                },
-                output_schema={
-                    "type": "object",
-                    "properties": {
-                        "echo": {"type": "string"},
-                        "task_id": {"type": "string"},
-                    },
-                    "required": ["echo", "task_id"],
-                    "additionalProperties": False,
-                },
+                input_schema=_load_schema("schemas/echo-input.json"),
+                output_schema=_load_schema("schemas/echo-output.json"),
             ),
         )
 
@@ -135,6 +126,12 @@ class EchoExtension:
                 field_sensitivity={"prefix": "PUBLIC"},
             ),
         )
+
+
+def _load_schema(relative: str) -> dict[str, Any]:
+    root = Path(__file__).resolve().parents[2]
+    schema: dict[str, Any] = json.loads((root / relative).read_text("utf-8"))
+    return schema
 
 
 def create_extension() -> EchoExtension:

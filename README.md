@@ -10,8 +10,16 @@
 - 持久 Agent 状态机、工具风险门、精确审批、上下文与模型披露接口的基础实现。
 - 数据库队列与 PostgreSQL Schema；开发环境提供内存适配器。
 - 扩展 Manifest、Registry、生命周期/RPC 契约和 `example_echo` 示例扩展。
+- Extension Supervisor：受控暂存与静态检查、精确确认屏障、每版本独立 venv、真实 Worker 子进程、原子 Registry Snapshot、enable/disable/upgrade/rollback/uninstall 与启动恢复（venv/Worker 只做依赖与崩溃隔离，不是恶意代码沙箱）。
 - CLI、单元/契约测试以及面向后续模型的任务清单。
 - 响应式 PWA 壳和 `assistantctl extension scaffold` 扩展生成器。
+
+扩展安装与生命周期只经本机 Admin API（`127.0.0.1:8001`），例如：
+
+```powershell
+.venv-win\Scripts\assistantctl.exe extension inspect extensions\example_echo
+.venv-win\Scripts\assistantctl.exe extension install extensions\example_echo
+```
 
 真实 smail、ehall、Cloudflare、Tailscale、Web Push 和 Windows Credential Manager **尚未实现**；它们必须作为适配器或业务扩展完成，不能用假成功替代。
 

@@ -1,4 +1,4 @@
-# Runs the real PostgreSQL F01 acceptance suite.
+# Runs the real PostgreSQL F01 + F02 acceptance suites.
 #
 # Requires a reachable PostgreSQL 17 + pgvector server (see compose.yaml). The
 # target database name must end in `_test`; tests create and drop their own
@@ -25,7 +25,7 @@ $env:PA_TEST_DATABASE_URL = $DatabaseUrl
 
 Push-Location $ProjectRoot
 try {
-    & $PythonExecutable -m pytest tests/integration/test_postgres_f01.py -v
+    & $PythonExecutable -m pytest tests/integration/test_postgres_f01.py tests/integration/test_postgres_f02.py -v
     exit $LASTEXITCODE
 } finally {
     Pop-Location

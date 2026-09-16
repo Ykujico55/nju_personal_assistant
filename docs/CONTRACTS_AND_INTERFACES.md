@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01 completed baseline / contract v1.1
+版本：F01 + F02 completed baseline / contract v1.2（F02 增补见第 11 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -345,3 +345,80 @@ F01 不得实现或改写 Supervisor/RPC；它只负责 lifecycle state 的持�
 风险：...
 下一建议：F02（只建议，不开始）
 ```
+
+## 11. F02 实施后的兼容补充（contract v1.2）
+
+F02 把既有 Manifest/确认屏障/生命周期/Registry/JSON-RPC 契约接到真实暂存目录、每版本 venv、Worker 子进程与 Local Admin API。未重写任何既有协议；以下为新增或收紧，均已由 `tests/unit/test_extension_*`、`tests/api/test_admin_extensions.py`、`tests/integration/test_extension_supervisor_real.py` 和 `tests/integration/test_postgres_f02.py` 覆盖。
+
+### 11.1 新增核心类型与端口
+
+- `core/extensions/operations.py`：`OperationState`（`PENDING/RUNNING/SUCCEEDED/FAILED`）、`ExtensionOperation`、`ExtensionOperationStore`（`create/update/get/interrupt_running`）、`DIAGNOSTIC_CODES` 安全诊断码允许列表；持久层只存允许列表中的码，不存第三方消息或堆栈。
+- `core/extensions/errors.py`：`ExtensionOperationError(code, message)`；`code` 必须属于 `DIAGNOSTIC_CODES`。
+- `core/extensions/supervision.py`：`ExtensionSupervisorService`（管理 API、CLI 与恢复共用的唯一状态机）与 `ExtensionRuntime` 运行时协议（`RuntimeSupervisor` + `invoke_tool`/`stop_all`）。
+- `core/extensions/models.py`：`data_namespace(extension_id)` 公开（原 `rpc._data_namespace` 私有实现）。
+- `LifecycleStore` 协议新增 `all()`（PostgreSQL 与内存适配器均已实现，纯新增）。
+- `ArtifactInstaller` 协议新增 `remove_version(record)`（只删除 `record.install_path` 一个版本目录）；`uninstall_code(record)` 语义明确为删除该扩展全部版本目录。
+- `InstalledArtifact` 新增 `runtime_root: Path | None = None`；`InstallationPreview` 新增 `mode: str = "install"` 与 `replaces_version: str | None = None`，二者都进入 `preview_hash`。
+- `InstallCoordinator` 新增 `prepare_auto`/`prepare_upgrade`/`install_candidate`/`discard_candidate`/`discard_staged_record`/`preview_for`/`validate`；`prepare` 语义不变。`LifecycleManager` 新增 `recover(extension_id)`，`enable` 额外接受 `QUARANTINED`（启动与健康检查仍需通过）。
+
+### 11.2 行为收紧（fail closed）
+
+- 安装执行前重新计算 staged artifact 的 SHA-256；与预览不一致即 `ConfirmationRequiredError` 并丢弃计划。
+- 验证失败时移除刚安装的版本目录并清理暂存；`install` 成功后删除暂存副本。持久化记录的 `manifest.root` 指向安装后的 payload 根目录，而不是来源或暂存路径。
+- 升级候选通过 `install_candidate` 安装与契约测试但不写入生命周期记录；只有 `LifecycleManager.upgrade` 成功后才原子切换。失败时旧版本保持 enabled 且候选目录被尽力删除。
+- 回滚仅允许 `state_schema_version >= 当前版本` 且安装目录仍存在的保留版本；否则 `ROLLBACK_INCOMPATIBLE`/`ROLLBACK_NO_CANDIDATE`。
+- `JsonRpcProcessClient` 对畸形帧、超限响应行和 id 不匹配终止进程并抛 `RpcCallError(-32700/-32092/-32093)`（原实现会泄漏 `ValueError`）；错误流的错误码集合视为不可继续关联，调用方必须重启 Worker 或不重试。
+- 恢复时：`STAGED/DISCOVERED → REJECTED`（并清理暂存树）、`STARTING → QUARANTINED`、`DRAINING/UPGRADING → DISABLED`、`UNINSTALLING` 按目录存在性收敛为 `DISABLED`/`UNINSTALLED`；持久化 `ENABLED` 记录会重启一次 Worker，失败进入 `QUARANTINED`；非终态 operation 标记 `FAILED/SUPERVISOR_RESTART`。
+
+### 11.3 管理接口（仅 Local Admin 8001）
+
+| 方法与路径 | 契约 |
+|---|---|
+| `POST /admin/v1/extensions/inspect` | `{source}`；只做暂存与静态检查；返回 `plan_id`、`confirmation_nonce`、`preview_hash`、`expires_at`、`mode`、`replaces_version`、slots/tool 风险/能力与 `executed_code: false`。 |
+| `POST /admin/v1/extensions/install` | 必须提交精确预览绑定（`plan_id`+`confirmation_nonce`+`preview_hash`+`accepted_warning`）；202 返回 operation。 |
+| `POST /admin/v1/extensions/{id}/upgrade` | 同上绑定，且预览必须属于该扩展的 upgrade 计划；202 返回 operation。 |
+| `POST /admin/v1/extensions/{id}/{enable\|disable\|rollback\|uninstall}` | 无 body 或空 body；202 返回 operation。 |
+| `POST /admin/v1/extensions/{id}/purge-data` | 明确 `501 EXTENSION_DATA_PURGE_NOT_IMPLEMENTED`。 |
+| `GET /admin/v1/extension-operations/{id}` | 持久 operation 状态与安全诊断码；不存在 404。 |
+
+公共 API (`/api/v1`) 不新增任何安装、升级、卸载、启停或 operation 路由；`assistantctl` 只调用上述接口并轮询 operation id，不导入基础设施或数据库。
+
+### 11.4 持久化与部署边界
+
+- 迁移 `0003_f02_operations.sql` 为 `extension_operations` 增加 `idempotency_key`、`command_fingerprint` 两列，并对 `(extension_id, operation, idempotency_key)` 建部分唯一索引（`WHERE idempotency_key IS NOT NULL`），作为跨进程的幂等重放/冲突护栏。SHA-256 为 `28cbda227918bfcd80366208b59713eb0dbb0b0cbdaa582cb5e55a91ce2e1e03`。既有行保持 NULL，未回填。
+- 迁移 `0004_f02_operation_request_scope.sql` 增加 `request_scope` 列与 `(request_scope, idempotency_key)` 部分唯一索引，使 install/upgrade 的幂等重放不依赖进程内 plan（重启后仍可按 HTTP 路由 + canonical body 查询）。SHA-256 为 `6b6bb9f5cea83b443c9ca345f7a9d134f6ebca69969f01e23557ecff706af6fc`。既有行保持 NULL，未回填。
+- 未确认安装计划仍在 Admin 进程内存中；Admin 必须单进程运行。进程重启会丢弃未确认计划（安全失败），已创建 operation 保存在 PostgreSQL 中，可用同一 `Idempotency-Key` 重放；已确认但中断的操作按 `SUPERVISOR_RESTART` 收敛。
+- 未实现、不得声称完成：永久 purge、扩展 `ext_*` migration 执行、Worker 崩溃后自动退避重启、远程 URL/Git 制品、多 Admin 进程共享未确认计划与跨进程 `OPERATION_IN_PROGRESS` 互斥（DB 保证命令键唯一与单次 save 串行）。
+
+### 11.5 复验修复补充（同 contract v1.2，2026-09-16 第二轮）
+
+以下为独立复验反例的修复，均已由新增测试覆盖：
+
+- **Worker 环境白名单**：`JsonRpcProcessClient.start` 不再复制 `os.environ`，只继承 Python 运行必需的少量系统键（PATH/SYSTEMROOT/TEMP 等）；数据库 URL、Token、Cookie 等一律不进入子进程。显式声明的非敏感值只能通过 `WorkerSpec.environment` 传入。
+- **制品文件集合一致**：`.git/.venv/__pycache__/.pytest_cache` 在目录暂存、zip/whl 解包、`compute_artifact_hash` 与 `VenvArtifactInstaller.copy_payload` 中统一忽略；被忽略的路径既不能改变确认哈希，也不可能进入安装目录。
+- **Lockfile 精确锁定**：每条有效行必须是 `name==exact.version`（可选 extras）并至少带一个 `--hash=sha256:<64 hex>`；通配符、范围、`!=`、环境标记、URL/VCS、可编辑安装与其他选项全部拒绝；安装命令使用 `pip install --require-hashes`。
+- **升级基线绑定**：执行升级前重新读取活动记录，要求版本仍等于预览的 `replaces_version`、候选版本仍更新、数据 Schema 不倒退，否则 `PLAN_BASELINE_CHANGED`（409），不会降级或覆盖。
+- **全链路补偿**：`LifecycleManager.upgrade` 自禁用旧版本之后的所有步骤（activate、候选持久化、重新启用）都在同一补偿边界内；失败时旧记录恢复并重新启用（补偿异常不掩盖原始错误）。安装的最终 `INSTALLED_DISABLED` 持久化失败会删除刚安装的版本目录并保留可恢复的 STAGED 记录。
+- **拒绝语义**：`reject` 对 upgrade 计划只丢弃候选，绝不写活动记录；install 拒绝写入 `REJECTED`，之后允许重新 prepare；新预览会作废同扩展的旧未确认计划；CLI 拒绝时调用 `POST /admin/v1/extension-plans/{plan_id}/reject`。
+- **有界排空**：`JsonRpcProcessClient.drain` 对整个等待（包括在途调用的锁）施加 deadline；超时终止 Worker 并抛 `RpcTimeoutError`。`LifecycleManager.disable` 校验 `DrainReport`（`drained=false` 或 `active_calls>0` 即 `DRAIN_TIMEOUT`），但状态仍安全落为 `DISABLED` 且 Worker 已停止，operation 以显式失败码暴露。
+- **契约验证加严**：`ProcessContractVerifier` 比较完整工具描述符（id/risk/input schema/output schema，schema 取 Manifest 文件内容）、各槽能力 ID 集合、`context.retrieve` 探针与 `migration.list` 数量；`NotificationProvider` 无枚举 RPC 且 `deliver` 有副作用，仅在 handshake 校验声明。
+- **操作串行化与幂等**：`ExtensionSupervisorService` 对同一扩展同一时间只允许一个生命周期操作（`OPERATION_IN_PROGRESS`，409）；同 `Idempotency-Key`+同命令指纹返回既有 operation。跨重启重放依赖 0004 的 `request_scope`（路由 + canonical body，先于内存 plan 查询），不同指纹返回 `IDEMPOTENCY_CONFLICT`。`ProcessRuntimeSupervisor.start` 另有每扩展锁，保证并发启用不会泄漏第二个 Worker。
+- **恢复隔离**：恢复时健康检查失败或最终保存失败会先以 shield 停止已启动的 Worker，再落 `QUARANTINED`。
+- **RPC 写入/取消映射**：`stdin.write/drain` 的 `OSError`（管道关闭）与读 EOF 会终止进程并抛类型化 `RpcCallError`，调用方不会看到原始 `BrokenPipeError`。取消（`CancelledError`）先终止并回收进程、标记流损坏，然后**重新抛出 `CancelledError`**，而不是伪装成普通 RPC 错误（详见 11.6）。
+- **诊断与命名空间**：`ExtensionOperation`/两个 operation store 在写入前强制 `DIAGNOSTIC_CODES` 允许列表；`data_namespace()` 改为单射编码（`[a-z0-9]` 保留，其余 `_<hex>_`），`a.b`/`a_b`/`a-b` 不再碰撞，超长 ID 追加摘要且不超过 63 字节。
+- **状态来源**：公共 `GET /api/v1/extensions` 与 Admin 列表都从持久 lifecycle store 读取状态，生产下不再依赖公共进程自己的空 Registry；`_execute` 在 `RUNNING` 转换失败时原子落 `FAILED/OPERATION_FAILED`，不会留下无任务的 `PENDING`。
+
+### 11.6 复验修复补充（同 contract v1.2，2026-09-16 第三轮）
+
+以下为第二轮独立审计 A01–A08 的修复，均已由反例测试覆盖：
+
+- **取消语义**：任何清理在 `CancelledError` 下都必须“先完成资源回收，再重新抛出 `CancelledError`”，不得伪装成普通 RPC 错误。`shield_cleanup(awaitable)`（`core/extensions/async_utils.py`）保证清理在二次取消下仍运行到完成；`terminate_process` 依次 terminate → 有界等待 → kill → wait，确保子进程被回收。
+- **RPC deadline 与取消（A04/A05）**：`drain` 把 wall-clock deadline 一次性转换为 event-loop monotonic deadline，用 `asyncio.timeout_at` 覆盖“等锁 + 写入 + 读取”；拿到锁后重新计算剩余预算，≤0 立即终止并抛 `RpcTimeoutError`。写入期与读取期的 `CancelledError` 都会先 `shield_cleanup(_break())`（标记损坏、终止并回收进程）再重抛；`DrainReport` 必须是 `drained is True` 且 `active_calls` 为 0 的整数，否则 `DRAIN_TIMEOUT` 失败关闭。
+- **安装取消清理（A02/A03）**：`VenvArtifactInstaller._run_capture` 取消时回收子进程并重抛；`install` 的失败/取消路径 shield 删除半成品版本目录。`InstallCoordinator._execute_install` 对普通异常与取消使用同一 `shield_cleanup(_abort_install)`：删除版本目录、清理 staging、终结 plan，fresh install 收敛为 `REJECTED`；契约验证 Worker 在 `verify` 的 finally 中 shield 关闭。
+- **升级补偿边界（A01）**：`LifecycleManager.upgrade` 把禁用旧版、保存 `UPGRADING`、activate、候选持久化、候选启动/健康、Registry 发布与最终保存全部纳入同一 `except BaseException` 补偿；补偿内撤销候选 Registry、停止候选 Worker、恢复旧记录并（原本 ENABLED 时）重新启用旧版本，然后重抛原始错误（含 `CancelledError` 与 `DRAIN_TIMEOUT`）。补偿失败不会被描述为升级成功。
+- **跨重启幂等（A06）**：install/upgrade 在访问内存 plan 之前先按 `request_scope` + `Idempotency-Key` 查询持久 operation；命中同指纹直接返回原 operation，不同指纹返回 `IDEMPOTENCY_CONFLICT`。`request_scope` 由路由与 canonical body 决定（`admin:extensions:install`、`admin:extensions:{id}:{operation}`）。0004 的部分唯一索引保证跨连接/跨进程只产生一个 operation；重放路径不调用 `preview_for`、installer 或 verifier。RUNNING operation 重启后收敛 FAILED，仍可被同一命令重放。
+- **诊断边界（A07）**：`create`/`update`/`interrupt_running` 在内存与 PostgreSQL 两个 store 中都显式调用 `validate_diagnostic_code`，批量 UPDATE 不会绕过白名单。
+- **文档（A08）**：本文件、`docs/NEXT_STEPS.md`、`TODO.md`、`docs/IMPLEMENTATION_MAP.md` 同步说明 0003/0004、取消语义、未确认 plan 与持久 operation 的区别；F02 在独立验收前始终保持 `IN_PROGRESS`，现已通过六轮审计并标记 `DONE`；`tests/contract/test_f02_contract_consistency.py` 锁定这些表述。
+- **失败回滚不下线当前版本**：`LifecycleManager.rollback` 先解析并校验保留候选（含 Schema 兼容），再禁用当前版本；禁用、保存 `ROLLED_BACK`、启动、健康检查、Registry 发布与启用持久化全部在同一补偿边界内。任一步失败（含候选启动/健康/ENABLED 保存失败与取消）由 `_compensate_failed_rollback` 撤销候选 Registry、停止候选 Worker、恢复原记录并重新启用。`ROLLBACK_INCOMPATIBLE`/`ROLLBACK_NO_CANDIDATE` 时当前版本保持 `ENABLED`、Registry 与调用不受影响。Supervisor 不得在 `rollback()` 之外再次 `enable()`。
+- **阻塞复制的取消安全**：`run_blocking(func, ...)` 让 `to_thread` 的取消等待线程真正结束后再重抛 `CancelledError`；首次取消优先，线程在取消后无论成功还是抛异常都被消费，异常不得覆盖取消信号；重复取消不会中断等待。安装/卸载的复制与删除线程不会在清理之后继续重建文件。
+- **普通 `call()` 的 deadline**：与 drain 相同，单一 monotonic deadline 覆盖等待 RPC 锁、写入与读取；排队调用的总耗时不得超过调用方预算。
