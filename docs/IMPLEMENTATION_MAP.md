@@ -6,7 +6,7 @@
 
 | 入口 | 默认地址 | 已实现 | 有意锁定 |
 |---|---|---|---|
-| 用户 API/PWA | `127.0.0.1:8000`、`/ui/` | 创建/查看/补充/取消任务，审批查看/确认/拒绝，扩展只读状态，SSE，PWA 壳；Cloudflare 模式下验证 Access JWT 后才建立身份（F03 DONE，三轮独立验收通过） | 任务 Worker 尚不消费队列；无任何扩展管理路由；无应用内登录 |
+| 用户 API/PWA | `127.0.0.1:8000`、`/ui/` | 创建/查看/补充/取消任务，审批查看/确认/拒绝，模型披露许可 preview/confirm/revoke，扩展只读状态，SSE，PWA 壳；Cloudflare 模式下验证 Access JWT 后才建立身份（F03 DONE，三轮独立验收通过；F04 披露许可为 IN_PROGRESS） | 任务 Worker 尚不消费队列；无任何扩展管理路由；无应用内登录；无模型调用 HTTP 路由 |
 | Local Admin API | `127.0.0.1:8001` | 扩展发现/状态、纯数据 inspect、install/upgrade（精确预览确认）、enable/disable/rollback/uninstall、operation 轮询、启动恢复 Worker | `purge-data` 明确 501；必须单进程运行 |
 | Health-only | `127.0.0.1:8010/healthz` | 只返回 `{"status":"ok"}` | 无 docs、任务、审批、扩展或管理路由 |
 | CLI | `assistantctl` | `doctor`、list/status/inspect/scaffold、install/upgrade（交互确认或 `--yes`）、enable/disable/rollback/uninstall（轮询 operation） | 只调用 Admin API，绝不直接改数据库；`purge` 服务端 501 |
@@ -23,7 +23,9 @@
 - `core/extensions/`：静态 Manifest、不可变槽位 Registry、安装确认屏障、生命周期和宿主 JSON-RPC 客户端；F02 新增 `ExtensionSupervisorService`、持久 operation 模型与恢复状态机。
 - `infrastructure/extensions/`：受控暂存、每版本 venv/payload 安装、真实 Worker 进程监督与契约验证、保留版本目录与 `ext_*` 数据保留适配器（venv/Worker 只是依赖与崩溃隔离，不是恶意代码沙箱）。
 - `core/jobs/`：at-least-once 队列端口、独立 lease keepalive、离线调度策略和副作用 outbox 契约。
-- `core/models/`：本地/远程 provider、字段分类、精确披露许可和显式本地回退。
+- `core/models/`：本地/远程 provider 端口、字段分类、canonical 字段摘要、持久披露许可服务与显式本地回退；许可除 provider/用途/字段摘要外还绑定不可复用的 `recipient_fingerprint`（adapter/规范化 endpoint/model），preview/confirm 只接受当前注册的远端 provider；ContextField 构造时按值规范化分类、未知分类 fail closed，`ModelRequest` 构造即做完整运行时校验并归一 duck-typed 字段；Router 注册时冻结 provider 的完整 `RecipientIdentity`，授权前与授权返回后各复核一次当前 fingerprint，审计只记录授权服务实际返回并采用的许可 ID 与注册快照身份；字段规范化无条件写回，非可迭代或敌对 duck 字段归一为无链 `ValidationError`；`DisclosureConsentService` 通过存储端口工作，生产路径不再接受调用栈里的临时许可对象。
+- `infrastructure/models/`：真实远端 OpenAI 兼容适配器与本地 Ollama 适配器（协议驱动 HTTP，无厂商 SDK；SecretHandle 经宿主 broker 解析，失败 fail closed；loopback 强制、总 deadline、响应上限、禁重定向、无静默重试；`trust_env=False` 不经过环境代理，类型化错误不链入 broker/httpx/JSON 异常，响应关闭抗重复取消；响应元数据不被信任（model_id 恒为配置值、usage 走适配器键白名单、非 2xx 只用固定 rejection_code 枚举），凭据限定可见 ASCII 且异常前清除敏感 frame locals，关闭失败优先级为取消 > 原始类型化错误 > 脱敏关闭错误；`complete()` 在首个 `await` 前捕获请求级 `RecipientIdentity`，出站 URL、payload model 与输出身份共用该快照，payload 构建失败也在脱敏边界内转为无链类型化错误）。
+- `infrastructure/database/disclosure_consents.py`：`model_disclosure_consents` + `model_disclosure_commands` 的真实 PostgreSQL 许可存储（迁移 `0005_f04_model_disclosure.sql`，F04 IN_PROGRESS）。
 - `core/platform|secrets|artifacts|audit/`：操作系统、凭据、受管制品与审计端口。
 - `core/auth/`：传输无关的 `AccessIdentity`、`AccessTokenVerifier` 端口与通用异常；`infrastructure/auth/`：`JwksProvider` 与 Cloudflare 实现（`RS256` 白名单、`kid` 精确命中、issuer/audience/时间声明校验、有界缓存与受控轮换刷新、总 deadline、失败 fail closed；未知 `kid` 成功刷新确认不存在为 401、节流窗口内未检查为可重试 503；F03 DONE，三轮独立验收通过）。
 
@@ -49,7 +51,9 @@
 - R3 永远不到达 executor。
 - R2 先产生精确审批；payload 漂移烧毁审批；同一审批不可重复消费。
 - 外部结果 UNKNOWN 进入对账态且不可自动重试。
-- 远程个人/敏感数据必须有匹配 provider、用途、字段哈希和期限的许可；SECRET 对本地模型也禁止。
+- 远程个人/敏感数据必须有匹配 provider、用途、字段摘要和期限的持久许可；SECRET 对本地模型、远程模型、回退路径和模型适配器都禁止。
+- 许可只能由用户对精确预览确认后创建；字段值/分类/来源/字段集合/用途/接收方任一变化都使旧许可失效；到期拒绝、撤销终态、同键异内容冲突、同键同内容跨重启重放原记录。
+- 模型适配器只返回文本：模型输出不会触发工具调用或外部副作用；远程失败不会静默改投其它 provider；远程重定向被禁用，凭据不会随重定向离开配置主机。
 - 上下文排除 SECRET/STALE，且恶意闭合标签不能逃逸不可信数据边界。
 - 作业幂等键绑定 payload；lease 独立续租；离线重放有明确 skip/coalesce/catch-up。
 - 扩展确认之前 installer/verifier 调用次数为零；真实 Worker 集成以 import 日志证明确认前 0 次执行。

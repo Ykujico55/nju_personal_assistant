@@ -222,6 +222,7 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0002_f01_persistence",
                 "0003_f02_operations",
                 "0004_f02_operation_request_scope",
+                "0005_f04_model_disclosure",
             ),
             applied,
         )
@@ -234,6 +235,7 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0002_f01_persistence",
                 "0003_f02_operations",
                 "0004_f02_operation_request_scope",
+                "0005_f04_model_disclosure",
             ],
             [r["version"] for r in rows],
         )
@@ -253,13 +255,14 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0002_f01_persistence",
                 "0003_f02_operations",
                 "0004_f02_operation_request_scope",
+                "0005_f04_model_disclosure",
             ),
             await second.startup(),
         )
         versions = await self._fetchval(
             second, "SELECT count(*) FROM schema_migrations"
         )
-        self.assertEqual(4, versions)
+        self.assertEqual(5, versions)
 
     async def test_checksum_drift_is_rejected(self) -> None:
         await self.migrate()

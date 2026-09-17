@@ -64,7 +64,10 @@ def create_app(
                 if verifier is not None:
                     await verifier.aclose()
             finally:
-                await container.storage.close()
+                try:
+                    await container.aclose()
+                finally:
+                    await container.storage.close()
 
     application = FastAPI(
         title="Personal Assistant API",

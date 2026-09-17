@@ -11,7 +11,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 class ConfigurationError(RuntimeError):
@@ -21,6 +21,10 @@ class ConfigurationError(RuntimeError):
 _CLOUDFLARE_ACCESS_SUFFIX = ".cloudflareaccess.com"
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _AUDIENCE = re.compile(r"^[\x21-\x7e]{1,256}$")
+_MODEL_ID = re.compile(r"^[\x21-\x7e]{1,128}$")
+_PROVIDER_ID = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+_SECRET_HANDLE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_MAX_MODEL_TIMEOUT_SECONDS = 600.0
 
 
 def normalize_team_domain(raw: str) -> str:
@@ -103,6 +107,84 @@ def normalize_audience(raw: str) -> str:
     return value
 
 
+def normalize_model_endpoint(
+    raw: str,
+    *,
+    field_name: str,
+    allow_http: bool = False,
+    require_loopback: bool = False,
+) -> str:
+    """Canonicalize a model endpoint and reject credential-smuggling URLs.
+
+    Remote endpoints must be https.  Local endpoints may use http, but the host
+    must be a loopback address so a "local" provider can never be pointed at a
+    remote service to bypass the disclosure-consent boundary.
+    """
+
+    value = raw.strip()
+    if not value:
+        raise ConfigurationError(f"{field_name} must not be empty")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ConfigurationError(f"{field_name} is not a valid URL") from exc
+    allowed_schemes = {"https", "http"} if allow_http else {"https"}
+    if parsed.scheme not in allowed_schemes:
+        raise ConfigurationError(
+            f"{field_name} must use {'https or http' if allow_http else 'https'}"
+        )
+    if not parsed.hostname:
+        raise ConfigurationError(f"{field_name} must include a host")
+    if parsed.username or parsed.password:
+        raise ConfigurationError(f"{field_name} must not include credentials")
+    if parsed.query or parsed.fragment:
+        raise ConfigurationError(f"{field_name} must not include a query or fragment")
+    if require_loopback and not _is_loopback(parsed.hostname):
+        raise ConfigurationError(f"{field_name} must be a loopback address")
+    host = parsed.hostname.lower()
+    path = parsed.path.rstrip("/")
+    decoded_path = path
+    for _ in range(3):
+        candidate = unquote(decoded_path)
+        if candidate == decoded_path:
+            break
+        decoded_path = candidate
+    if any(character.isspace() for character in decoded_path):
+        raise ConfigurationError(f"{field_name} contains illegal characters")
+    if any(segment in (".", "..") for segment in decoded_path.split("/")):
+        raise ConfigurationError(f"{field_name} must not contain '.' or '..' path segments")
+    netloc = host if port is None else f"{host}:{port}"
+    return f"{parsed.scheme}://{netloc}{path}"
+
+
+def normalize_model_id(raw: str, *, field_name: str) -> str:
+    value = raw.strip()
+    if not _MODEL_ID.fullmatch(value):
+        raise ConfigurationError(
+            f"{field_name} must be 1-128 printable characters without spaces"
+        )
+    return value
+
+
+def normalize_provider_id(raw: str, *, field_name: str) -> str:
+    value = raw.strip()
+    if not _PROVIDER_ID.fullmatch(value):
+        raise ConfigurationError(
+            f"{field_name} must be 1-64 characters of [A-Za-z0-9._:-]"
+        )
+    return value
+
+
+def normalize_secret_handle_id(raw: str, *, field_name: str) -> str:
+    value = raw.strip()
+    if not _SECRET_HANDLE_ID.fullmatch(value):
+        raise ConfigurationError(
+            f"{field_name} must be 1-128 opaque characters of [A-Za-z0-9._:-]"
+        )
+    return value
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -122,6 +204,18 @@ def _env_port(name: str, default: int) -> int:
         raise ConfigurationError(f"{name} must be an integer") from exc
     if not 1 <= value <= 65535:
         raise ConfigurationError(f"{name} must be between 1 and 65535")
+    return value
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be a number") from exc
+    if not 0 < value <= _MAX_MODEL_TIMEOUT_SECONDS:
+        raise ConfigurationError(
+            f"{name} must be between 0 and {_MAX_MODEL_TIMEOUT_SECONDS:g} seconds"
+        )
     return value
 
 
@@ -152,6 +246,16 @@ class Settings:
     public_origin: str | None
     cf_access_team_domain: str | None
     cf_access_aud: str | None
+    model_remote_provider_id: str = "remote.openai"
+    model_remote_base_url: str | None = None
+    model_remote_model: str | None = None
+    model_remote_secret_handle: str | None = None
+    model_remote_timeout_seconds: float = 60.0
+    model_local_provider_id: str = "local.ollama"
+    model_local_base_url: str | None = None
+    model_local_model: str | None = None
+    model_local_timeout_seconds: float = 120.0
+    model_local_fallback_provider_id: str | None = None
 
     def __post_init__(self) -> None:
         # Every construction path (from_env, direct construction, replace)
@@ -171,6 +275,69 @@ class Settings:
         if self.public_origin is not None:
             object.__setattr__(
                 self, "public_origin", normalize_public_origin(self.public_origin)
+            )
+        object.__setattr__(
+            self,
+            "model_remote_provider_id",
+            normalize_provider_id(
+                self.model_remote_provider_id, field_name="PA_MODEL_REMOTE_PROVIDER_ID"
+            ),
+        )
+        object.__setattr__(
+            self,
+            "model_local_provider_id",
+            normalize_provider_id(
+                self.model_local_provider_id, field_name="PA_MODEL_LOCAL_PROVIDER_ID"
+            ),
+        )
+        if self.model_remote_base_url is not None:
+            object.__setattr__(
+                self,
+                "model_remote_base_url",
+                normalize_model_endpoint(
+                    self.model_remote_base_url, field_name="PA_MODEL_REMOTE_BASE_URL"
+                ),
+            )
+        if self.model_local_base_url is not None:
+            object.__setattr__(
+                self,
+                "model_local_base_url",
+                normalize_model_endpoint(
+                    self.model_local_base_url,
+                    field_name="PA_MODEL_LOCAL_BASE_URL",
+                    allow_http=True,
+                    require_loopback=True,
+                ),
+            )
+        if self.model_remote_model is not None:
+            object.__setattr__(
+                self,
+                "model_remote_model",
+                normalize_model_id(self.model_remote_model, field_name="PA_MODEL_REMOTE_MODEL"),
+            )
+        if self.model_local_model is not None:
+            object.__setattr__(
+                self,
+                "model_local_model",
+                normalize_model_id(self.model_local_model, field_name="PA_MODEL_LOCAL_MODEL"),
+            )
+        if self.model_remote_secret_handle is not None:
+            object.__setattr__(
+                self,
+                "model_remote_secret_handle",
+                normalize_secret_handle_id(
+                    self.model_remote_secret_handle,
+                    field_name="PA_MODEL_REMOTE_SECRET_HANDLE",
+                ),
+            )
+        if self.model_local_fallback_provider_id is not None:
+            object.__setattr__(
+                self,
+                "model_local_fallback_provider_id",
+                normalize_provider_id(
+                    self.model_local_fallback_provider_id,
+                    field_name="PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID",
+                ),
             )
         self.validate()
 
@@ -199,6 +366,22 @@ class Settings:
             public_origin=normalize_public_origin(public_origin) if public_origin else None,
             cf_access_team_domain=normalize_team_domain(team_domain) if team_domain else None,
             cf_access_aud=normalize_audience(audience) if audience else None,
+            model_remote_provider_id=os.getenv(
+                "PA_MODEL_REMOTE_PROVIDER_ID", "remote.openai"
+            ).strip(),
+            model_remote_base_url=os.getenv("PA_MODEL_REMOTE_BASE_URL") or None,
+            model_remote_model=os.getenv("PA_MODEL_REMOTE_MODEL") or None,
+            model_remote_secret_handle=os.getenv("PA_MODEL_REMOTE_SECRET_HANDLE") or None,
+            model_remote_timeout_seconds=_env_float("PA_MODEL_REMOTE_TIMEOUT_SECONDS", 60.0),
+            model_local_provider_id=os.getenv(
+                "PA_MODEL_LOCAL_PROVIDER_ID", "local.ollama"
+            ).strip(),
+            model_local_base_url=os.getenv("PA_MODEL_LOCAL_BASE_URL") or None,
+            model_local_model=os.getenv("PA_MODEL_LOCAL_MODEL") or None,
+            model_local_timeout_seconds=_env_float("PA_MODEL_LOCAL_TIMEOUT_SECONDS", 120.0),
+            model_local_fallback_provider_id=(
+                os.getenv("PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID") or None
+            ),
         )
         return settings
 
@@ -236,6 +419,82 @@ class Settings:
         ):
             raise ConfigurationError(
                 "PA_PUBLIC_ORIGIN must be stored in normalized https://host form"
+            )
+        for timeout, field_name in (
+            (self.model_remote_timeout_seconds, "PA_MODEL_REMOTE_TIMEOUT_SECONDS"),
+            (self.model_local_timeout_seconds, "PA_MODEL_LOCAL_TIMEOUT_SECONDS"),
+        ):
+            if not 0 < timeout <= _MAX_MODEL_TIMEOUT_SECONDS:
+                raise ConfigurationError(
+                    f"{field_name} must be between 0 and "
+                    f"{_MAX_MODEL_TIMEOUT_SECONDS:g} seconds"
+                )
+        if self.model_remote_base_url is not None:
+            if (
+                normalize_model_endpoint(
+                    self.model_remote_base_url, field_name="PA_MODEL_REMOTE_BASE_URL"
+                )
+                != self.model_remote_base_url
+            ):
+                raise ConfigurationError(
+                    "PA_MODEL_REMOTE_BASE_URL must be stored in normalized https form"
+                )
+            if not self.model_remote_model:
+                raise ConfigurationError(
+                    "remote model endpoint requires PA_MODEL_REMOTE_MODEL"
+                )
+            if not self.model_remote_secret_handle:
+                raise ConfigurationError(
+                    "remote model endpoint requires PA_MODEL_REMOTE_SECRET_HANDLE"
+                )
+        else:
+            if self.model_remote_model is not None:
+                raise ConfigurationError(
+                    "PA_MODEL_REMOTE_MODEL requires PA_MODEL_REMOTE_BASE_URL"
+                )
+            if self.model_remote_secret_handle is not None:
+                raise ConfigurationError(
+                    "PA_MODEL_REMOTE_SECRET_HANDLE requires PA_MODEL_REMOTE_BASE_URL"
+                )
+        if self.model_local_base_url is not None:
+            if (
+                normalize_model_endpoint(
+                    self.model_local_base_url,
+                    field_name="PA_MODEL_LOCAL_BASE_URL",
+                    allow_http=True,
+                    require_loopback=True,
+                )
+                != self.model_local_base_url
+            ):
+                raise ConfigurationError(
+                    "PA_MODEL_LOCAL_BASE_URL must be stored in normalized loopback form"
+                )
+            if not self.model_local_model:
+                raise ConfigurationError(
+                    "local model endpoint requires PA_MODEL_LOCAL_MODEL"
+                )
+        else:
+            if self.model_local_model is not None:
+                raise ConfigurationError(
+                    "PA_MODEL_LOCAL_MODEL requires PA_MODEL_LOCAL_BASE_URL"
+                )
+            if self.model_local_fallback_provider_id is not None:
+                raise ConfigurationError(
+                    "PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID requires a configured local model"
+                )
+        if self.model_local_fallback_provider_id is not None and (
+            self.model_local_fallback_provider_id != self.model_local_provider_id
+        ):
+            raise ConfigurationError(
+                "PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID must name the configured local provider"
+            )
+        if (
+            self.model_remote_base_url is not None
+            and self.model_local_base_url is not None
+            and self.model_remote_provider_id == self.model_local_provider_id
+        ):
+            raise ConfigurationError(
+                "remote and local model providers must have distinct provider ids"
             )
         if len({self.public_port, self.admin_port, self.health_port}) != 3:
             raise ConfigurationError("public, admin and health ports must be distinct")

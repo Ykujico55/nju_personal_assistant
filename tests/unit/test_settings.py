@@ -180,6 +180,182 @@ class SettingsTests(unittest.TestCase):
             Settings.from_env()
 
 
+class ModelSettingsTests(unittest.TestCase):
+    def test_remote_model_requires_https_model_and_handle(self) -> None:
+        with self.assertRaises(ConfigurationError):
+            Settings(**direct_settings_values(model_remote_base_url="https://api.example.test/v1"))
+        with self.assertRaises(ConfigurationError):
+            Settings(
+                **direct_settings_values(
+                    model_remote_base_url="https://api.example.test/v1",
+                    model_remote_model="gpt-test",
+                )
+            )
+        with self.assertRaises(ConfigurationError):
+            Settings(
+                **direct_settings_values(
+                    model_remote_base_url="http://api.example.test/v1",
+                    model_remote_model="gpt-test",
+                    model_remote_secret_handle="handle-1",
+                )
+            )
+        for bad in (
+            "https://user:pass@api.example.test/v1",
+            "https://api.example.test/v1?k=1",
+            "https://api.example.test/v1#fragment",
+            "https:///v1",
+        ):
+            with self.subTest(base_url=bad), self.assertRaises(ConfigurationError):
+                Settings(
+                    **direct_settings_values(
+                        model_remote_base_url=bad,
+                        model_remote_model="gpt-test",
+                        model_remote_secret_handle="handle-1",
+                    )
+                )
+
+    def test_model_configuration_is_normalized_on_all_paths(self) -> None:
+        settings = Settings(
+            **direct_settings_values(
+                model_remote_provider_id=" remote.openai ",
+                model_remote_base_url="https://API.Example.Test/v1/",
+                model_remote_model=" gpt-test ",
+                model_remote_secret_handle=" Handle-1 ",
+                model_local_base_url="http://LOCALHOST:11434/",
+                model_local_model="llama3.1:8b",
+            )
+        )
+        self.assertEqual("remote.openai", settings.model_remote_provider_id)
+        self.assertEqual("https://api.example.test/v1", settings.model_remote_base_url)
+        self.assertEqual("gpt-test", settings.model_remote_model)
+        self.assertEqual("Handle-1", settings.model_remote_secret_handle)
+        self.assertEqual("http://localhost:11434", settings.model_local_base_url)
+
+        replaced = replace(settings, model_remote_base_url="https://API.Example.Test/v2/")
+        self.assertEqual("https://api.example.test/v2", replaced.model_remote_base_url)
+
+    def test_local_model_endpoint_must_be_loopback(self) -> None:
+        for bad in (
+            "http://10.0.0.5:11434",
+            "https://models.example.test",
+            "http://127.0.0.1.evil.example.test:11434",
+            "http://user:pass@127.0.0.1:11434",
+        ):
+            with self.subTest(base_url=bad), self.assertRaises(ConfigurationError):
+                Settings(
+                    **direct_settings_values(
+                        model_local_base_url=bad, model_local_model="llama3.1:8b"
+                    )
+                )
+
+    def test_partial_model_configuration_is_rejected(self) -> None:
+        with self.assertRaises(ConfigurationError):
+            Settings(**direct_settings_values(model_remote_model="gpt-test"))
+        with self.assertRaises(ConfigurationError):
+            Settings(**direct_settings_values(model_remote_secret_handle="handle-1"))
+        with self.assertRaises(ConfigurationError):
+            Settings(**direct_settings_values(model_local_model="llama3.1:8b"))
+        with self.assertRaises(ConfigurationError):
+            Settings(**direct_settings_values(model_local_fallback_provider_id="local.ollama"))
+        with self.assertRaises(ConfigurationError):
+            Settings(
+                **direct_settings_values(
+                    model_local_base_url="http://127.0.0.1:11434",
+                    model_local_model="llama3.1:8b",
+                    model_local_provider_id="local.other",
+                    model_local_fallback_provider_id="local.ollama",
+                )
+            )
+
+    def test_duplicate_local_and_remote_provider_ids_are_rejected(self) -> None:
+        with self.assertRaises(ConfigurationError):
+            Settings(
+                **direct_settings_values(
+                    model_remote_provider_id="model.shared",
+                    model_remote_base_url="https://api.example.test/v1",
+                    model_remote_model="gpt-test",
+                    model_remote_secret_handle="handle-1",
+                    model_local_provider_id="model.shared",
+                    model_local_base_url="http://127.0.0.1:11434",
+                    model_local_model="llama3.1:8b",
+                )
+            )
+
+    def test_model_endpoint_path_may_not_contain_dot_segments(self) -> None:
+        for base_url in (
+            "https://api.example.test/v1/../admin",
+            "https://api.example.test/./v1",
+            "https://api.example.test/v1/%2e%2e/admin",
+            "https://api.example.test/v1/%2E%2E/admin",
+            "https://api.example.test/v1/%2e/admin",
+            "https://api.example.test/v1%2f..%2fadmin",
+            "https://api.example.test/v1/%252e%252e/admin",
+            "https://api.example.test/%252E%252E/admin",
+        ):
+            with self.subTest(base_url=base_url), self.assertRaises(ConfigurationError):
+                Settings(
+                    **direct_settings_values(
+                        model_remote_base_url=base_url,
+                        model_remote_model="gpt-test",
+                        model_remote_secret_handle="handle-1",
+                    )
+                )
+        with self.assertRaises(ConfigurationError):
+            Settings(
+                **direct_settings_values(
+                    model_local_base_url="http://127.0.0.1:11434/../admin",
+                    model_local_model="llama3.1:8b",
+                )
+            )
+
+    def test_model_timeout_bounds(self) -> None:
+        for bad in (0.0, 601.0):
+            with self.subTest(timeout=bad), self.assertRaises(ConfigurationError):
+                Settings(**direct_settings_values(model_remote_timeout_seconds=bad))
+
+    def test_from_env_reads_model_configuration(self) -> None:
+        environment = {
+            "PA_MODEL_REMOTE_BASE_URL": "https://api.example.test/v1",
+            "PA_MODEL_REMOTE_MODEL": "gpt-test",
+            "PA_MODEL_REMOTE_SECRET_HANDLE": "handle-1",
+            "PA_MODEL_REMOTE_TIMEOUT_SECONDS": "30",
+            "PA_MODEL_LOCAL_BASE_URL": "http://127.0.0.1:11434",
+            "PA_MODEL_LOCAL_MODEL": "llama3.1:8b",
+            "PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID": "local.ollama",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings.from_env()
+        self.assertEqual("https://api.example.test/v1", settings.model_remote_base_url)
+        self.assertEqual(30.0, settings.model_remote_timeout_seconds)
+        self.assertEqual("local.ollama", settings.model_local_fallback_provider_id)
+
+        with patch.dict(
+            os.environ,
+            {**environment, "PA_MODEL_REMOTE_BASE_URL": "http://api.example.test/v1"},
+            clear=True,
+        ), self.assertRaises(ConfigurationError):
+            Settings.from_env()
+
+    def test_production_requires_complete_remote_model_configuration(self) -> None:
+        environment = trusted_environment(
+            PA_ENVIRONMENT="production",
+            PA_STORAGE_BACKEND="postgres",
+            PA_MODEL_REMOTE_BASE_URL="https://api.example.test/v1",
+            PA_MODEL_REMOTE_MODEL="gpt-test",
+            PA_MODEL_REMOTE_SECRET_HANDLE="handle-1",
+        )
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings.from_env()
+        self.assertIsNotNone(settings.model_remote_base_url)
+
+        incomplete = dict(environment)
+        del incomplete["PA_MODEL_REMOTE_SECRET_HANDLE"]
+        with patch.dict(os.environ, incomplete, clear=True), self.assertRaises(
+            ConfigurationError
+        ):
+            Settings.from_env()
+
+
 class HandBuiltSettingsTests(unittest.TestCase):
     def test_direct_construction_rejects_foreign_team_domain(self) -> None:
         with self.assertRaises(ConfigurationError):

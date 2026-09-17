@@ -9,6 +9,14 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from personal_assistant.core.approvals import ApprovalExpiredError
+from personal_assistant.core.models import DisclosureDenied
+from personal_assistant.core.models.disclosure import (
+    DisclosureDeniedError,
+    DisclosureIdempotencyConflictError,
+    DisclosurePreviewMismatchError,
+    DisclosureRecipientUnknownError,
+    DisclosureStateError,
+)
 from personal_assistant.domain import (
     ConcurrentModificationError,
     DomainError,
@@ -89,6 +97,19 @@ def install_error_handlers(app: FastAPI) -> None:
             status = 409
         elif isinstance(exc, ApprovalExpiredError):
             status = 410
+        elif isinstance(exc, DisclosureDeniedError):
+            status = 403
+        elif isinstance(exc, DisclosureRecipientUnknownError):
+            status = 404
+        elif isinstance(
+            exc,
+            (
+                DisclosurePreviewMismatchError,
+                DisclosureStateError,
+                DisclosureIdempotencyConflictError,
+            ),
+        ):
+            status = 409
         elif isinstance(exc, ValidationError):
             status = 422
         return JSONResponse(
@@ -96,6 +117,20 @@ def install_error_handlers(app: FastAPI) -> None:
             content=_body(
                 request,
                 code=getattr(exc, "code", "domain_error"),
+                message=str(exc),
+                retryable=False,
+            ),
+        )
+
+    @app.exception_handler(DisclosureDenied)
+    async def disclosure_denied(
+        request: Request, exc: DisclosureDenied
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=403,
+            content=_body(
+                request,
+                code="disclosure_denied",
                 message=str(exc),
                 retryable=False,
             ),

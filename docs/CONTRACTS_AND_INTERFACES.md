@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01 + F02 + F03 completed baseline / contract v1.3（F02 增补见第 11 节，F03 增补见第 12 节）
+版本：F01 + F02 + F03 + F04 completed baseline / contract v1.4（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -480,3 +480,71 @@ F03 用真实、可测试、fail-closed 的 Cloudflare Access JWT 验证替换�
 ### 12.6 有意未实现
 
 - 自定义 Access 团队域/自定义 JWKS 域名、应用内登录/密码/MFA、Access 会话撤销与登录重定向、Web Push 与 Tunnel/Tailscale 部署编排（F08/F10）、F04 模型披露许可。不得把这些描述为 F03 已交付。
+
+## 13. F04 实施后的契约补充（contract v1.4）
+
+F04 用真实、协议驱动的本地/远程模型适配器与持久化披露许可替换了仅有调用栈对象的占位实现。依赖方向保持 `api/infrastructure/workers -> core -> domain`：`core/models/` 只定义端口、canonical 绑定与路由规则，不导入 `httpx`、厂商 SDK 或 `infrastructure`（契约测试锁定）。R2 外部动作审批与模型披露许可是两个独立状态机：允许模型读取内容不等于允许发送，批准发送也不等于允许交给另一个模型。
+
+### 13.1 新增公共端口与类型
+
+- `core/models/errors.py`：`ModelProviderError` 与子类 `ModelProviderUnavailableError`（`MODEL_PROVIDER_UNAVAILABLE`）、`ModelProviderTimeoutError`（`MODEL_PROVIDER_TIMEOUT`）、`ModelProviderRejectedError`（`MODEL_PROVIDER_REJECTED`，含 `status_code` 与固定枚举 `rejection_code`）、`ModelProviderProtocolError`（`MODEL_PROVIDER_PROTOCOL_ERROR`）、`ModelProviderResponseTooLargeError`（`MODEL_PROVIDER_RESPONSE_TOO_LARGE`）、`ModelCredentialUnavailableError`（`MODEL_CREDENTIAL_UNAVAILABLE`）。错误消息不含提示词、字段值、凭据或厂商响应正文。
+- `core/models/disclosure.py`：`DisclosureConsentState`（`ACTIVE/REVOKED/EXPIRED`）、`DisclosureConsentRecord`、`DisclosurePreview`、`DisclosureFieldSummary`、`DisclosureConsentStore`、`DisclosureAuthorizer`、`DisclosureConsentService`，以及 `canonical_field_digest`、`redacted_field_preview`、`effective_consent_state`、`DISCLOSURE_POLICY_VERSION`。
+- `ModelRouter` 构造新增可选 `disclosure: DisclosureAuthorizer`、`default_local_fallback_id`、`audit`；`complete` 新增可选 `consent_id`、`user_id`。既有 `DisclosureConsent`（临时对象）与 `permits` 保留兼容，但只有在显式 `allow_ephemeral_disclosure=True` 时才被接受，且与持久 `disclosure` 互斥（同时提供即构造失败）。生产组合根始终注入 `DisclosureConsentService`。
+- `core/secrets/store.py` 新增 `SecretUnavailableError`；`infrastructure/secrets/unavailable.py` 新增 fail-closed 的 `UnavailableSecretStore`（F09 前的生产凭据后端占位，绝不用内存明文替代）。
+
+### 13.2 CANONICAL 字段绑定与许可失效规则
+
+- 许可绑定接收方 `provider_id`、用途 `purpose`、策略版本 `policy_version` 与字段集合摘要 `field_digest`；字段值、分类、来源或字段集合任一变化都会改变摘要，旧许可立即不可再用。许可还绑定不可复用的 `recipient_fingerprint`（provider_id + 适配器类型 + 规范化 endpoint + model 的 canonical 摘要）；同一个 `provider_id` 改指其他 endpoint/model 后，旧许可立即失效。绑定摘要采用确定性 **CANONICAL** JSON：每个字段取 `{name, value_sha256, classification, source}`，按 `(name, source, classification, value_sha256)` 排序后序列化并做 SHA-256，因此字段顺序不影响结果。
+- 预确认绑定：`preview()` 返回 `preview_hash`（provider + purpose + policy version + digest + 受保护字段数 + TTL 秒数）；`confirm()` 必须提交完全一致的 `preview_hash` 与字段集合，否则 `DisclosurePreviewMismatchError`（`disclosure_preview_mismatch`），需要重新预览。
+- 授权条件：`state = ACTIVE`、未过期、`provider_id`/`purpose`/`field_digest`/`policy_version`/`user_id` 与 `consent_id` 全部精确匹配；SECRET 字段在查询许可之前就被 `ModelRouter` 与适配器双重拒绝（`disclosure_denied`）。审计只记录授权服务实际返回并被该次远端调用采用的持久许可 ID：调用方传入的 `consent_id`、本地/回退调用、公开字段调用与临时许可都不会在审计中产生许可关联。`ModelRouter` 在注册时冻结每个 provider 的完整 `RecipientIdentity` 快照；授权前重新计算当前 fingerprint，与注册快照不一致即 `disclosure_denied` 且不发起任何远端请求，审计的 `model_id` 也只取注册快照。远端调用前会在授权返回后再次复核 fingerprint（授权过程中的 `await` 不能让中途改指向的 provider 漏过），运行时改 endpoint/model 必须重建 provider 与 router。
+- 服务层自己复核完整绑定（consent_id/user_id/provider_id/purpose/field_digest/policy_version/state/expires_at），不把授权判断委托给存储适配器；存储若返回不完整匹配的记录，`authorize` 一律返回无许可（fail closed）。
+- TTL 边界：1 分钟 ≤ TTL ≤ 7 天；到期即 `effective_consent_state == EXPIRED` 并拒绝授权，不做“宽限”。
+- 绑定字段约束：`provider_id`、`purpose`、`consent_id`、`user_id` 均非空且 ≤128 字符；所有时间参数必须是 aware 时间，naive `datetime` 一律 `ValidationError`（`ModelRouter.complete`、`authorize`、`effective_consent_state` 同样处理），不得抛出裸 `TypeError`；标识比较统一为 UTF-8 bytes 的常量时间比较，中文 `purpose`/`user_id`/`consent_id` 不会抛 `TypeError`。
+- 撤销：`revoke(consent_id, expected_version)` 是做 CAS 的终态转换（version+1，记录 `revoked_at`），此后授权永久拒绝；对已撤销许可再次撤销（不同幂等键）返回 `DisclosureStateError`（`disclosure_state_error`），错误版本返回 `ConcurrentModificationError`。撤销时若 `expires_at <= now`，许可先在同一事务/锁内原子落为 `EXPIRED`（version+1），再抛 `DisclosureStateError`；过期许可永远不会被撤销为 `REVOKED`。
+- 幂等：`model_disclosure_commands` 以 `(scope, idempotency_key)` 为主键并绑定 `command_fingerprint`。同键同内容重放返回第一次的记录（跨进程、跨重启）；同键不同内容返回 `DisclosureIdempotencyConflictError`（`idempotency_conflict`）。
+- 存储最小化：`model_disclosure_consents` 只保存 `id/owner_id/provider_id/purpose/field_digest/field_count/policy_version/recipient_fingerprint/state/created_at/expires_at/revoked_at/version`；`model_disclosure_commands` 只保存命令作用域、幂等键、指纹与许可 ID。原始字段值、模型请求正文、凭据和令牌永不入库、入审计、入日志或入异常。
+
+### 13.3 HTTP 接口（public API 8000）
+
+| 接口 | 契约 |
+|---|---|
+| `POST /api/v1/disclosures/preview` | 接收 `provider_id/purpose/instruction/fields[{name,value,classification,source}]/ttl_seconds`；返回脱敏字段摘要与 `preview_hash`；`Cache-Control: no-store`；SECRET 一律 403 `DISCLOSURE_DENIED`；未在当前组合根注册的远端 provider 返回 404 `DISCLOSURE_RECIPIENT_UNKNOWN（disclosure_recipient_unknown）`（不允许为未配置接收端预生成许可）。响应同时返回 `recipient`（adapter/endpoint/model）与 `recipient_fingerprint`。控制面中间件对所有 POST 要求 `Idempotency-Key`，preview 不写状态、忽略其值。 |
+| `POST /api/v1/disclosures` | 必须带 `Idempotency-Key` 与 `preview_hash`；202 返回持久许可；同键同内容重放返回原记录，同键异内容 409 `IDEMPOTENCY_CONFLICT`。 |
+| `GET /api/v1/disclosures/{id}` | 只返回元数据与有效状态（到期显示 `EXPIRED`）；`no-store`；不存在 404。 |
+| `POST /api/v1/disclosures/{id}/revoke` | 必须带 `Idempotency-Key` 与期望 `version`；成功返回 `REVOKED`；过期状态、版本冲突、幂等冲突分别 409。 |
+
+所有披露接口只属于用户 API；Admin API 与 health-only 侧车不新增任何披露路由。响应与错误信封（`error.code/message/request_id/retryable/details`）不包含原始字段值。
+
+### 13.4 模型适配器
+
+- `infrastructure/models/openai_compatible.py`：`OpenAICompatibleChatProvider`（远程，`is_remote=True`，OpenAI chat-completions 线协议）。API key 每次调用经 `SecretStorePort.resolve_for_broker` 从 `SecretHandle` 解析，解析失败在发请求前抛 `ModelCredentialUnavailableError`；`SecretHandle` 绝不进入请求体。
+- `infrastructure/models/ollama.py`：`OllamaChatProvider`（本地，`is_remote=False`，Ollama `/api/chat` 线协议）。构造时强制 loopback 主机，禁止把“本地”端点指向远端以绕过披露许可。
+- 公共传输语义（`infrastructure/models/base.py`）：https 远端（本地允许 http 但必须 loopback）、禁止 URL 内凭据/query/fragment、每次请求 `follow_redirects=False`（注入客户端也不能改变）、单一 monotonic 总 deadline 覆盖整个响应流、响应字节上限、非 2xx 转 `ModelProviderRejectedError`（只给出固定状态枚举 `rejection_code`，绝不读取厂商正文）、整体 deadline 超时与 httpx 层 connect/read/write/pool 超时都转 `ModelProviderTimeoutError`、连接失败/畸形 JSON/空完成转对应类型化错误、取消原样传播并关闭流。适配器不重试，也不会切换供应商；路由器在错误后只向调用方抛出，绝不改投其它远程 provider。
+- `ContextField` 在构造时把 `classification` 规范化为 `DataClassification`：字符串 `"SECRET"` 与外来 `StrEnum` 成员按值归一，非法值抛 `ValidationError`；`ModelRouter`、真实适配器与披露服务对未知分类一律 fail closed（按 SECRET 处理），外来枚举无法绕过硬阻断。`ModelRequest` 与 `ContextField` 在构造时完成完整运行时校验（purpose/instruction 必须为 str，字段对象的 name/value/source 必须是 str 且分类可规范化，duck-typed 字段被强制转换为真实 `ContextField`），非法请求在发出任何调用前 `ValidationError`。字段容器不可迭代、字段属性访问抛异常、duck 字段用 `__eq__` 伪装相等都统一安全归一为无链 `ValidationError`；规范化后的字段元组无条件写回，不依赖相等比较，可变 duck 对象不会在许可绑定后继续存活。
+- 内置适配器在 `complete()` 进入且尚未 `await` 时捕获一次请求级 `RecipientIdentity`：出站 URL、payload 里的 model、`ModelOutput.provider_id/model_id` 全程使用该快照，凭据解析或传输期间替换 `_recipient` 不会改变发送目标或记录身份。
+- 适配器在发送前再次拒绝 SECRET 字段（纵深防御）。供应商 usage 计数只接受适配器固定键白名单内的非负整数，其它键与负值一律丢弃。响应中的 `model` 字段不被信任：`ModelOutput.model_id` 恒为已配置值，审计的 `resource_id` 与 `data.model_id` 取自已注册接收方（`provider.recipient.model_id`）而非响应元数据，`data.usage` 再次按核心白名单过滤。
+- 自建 `AsyncClient` 固定 `trust_env=False`：绝不读取 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`，本地 loopback 请求与带凭据的远程请求都不会经过环境代理（真实 loopback 代理反例覆盖）。
+- 类型化错误与 broker/httpx/JSON 异常完全解耦（无 `from exc`，`__cause__`/`__context__` 为空）：格式化 traceback 不包含凭据、Authorization 头、请求正文或响应正文。`complete()` 的脱敏边界覆盖凭据解析、payload 构建、传输与响应解析全部阶段，构造异常前删除 `request`/`payload`/`headers`/`raw`/`response` 等敏感局部引用，出错的 traceback frame locals 同样取不到凭据或请求正文；payload 构建失败（含手写畸形请求）同样先丢弃原异常与敏感引用，再从干净帧抛无链 `ValidationError`；响应解析失败（含恶意深层 JSON 的 `RecursionError`）统一转 `ModelProviderProtocolError`，不向外泄漏裸异常。远端凭据限定为 ≤4096 个可见 ASCII 字符，非 ASCII/控制字符在构造 header 前即转 `ModelCredentialUnavailableError`，不会抛出保存原始凭据的裸 `UnicodeEncodeError`。
+- 响应流与客户端关闭统一走 `core/models/cleanup.run_cleanup`（抗重复取消）；`ModelRouter.aclose` 会尝试关闭全部 provider，完成清理后才抛出首个错误。关闭失败绝不覆盖取消或原始类型化错误，优先级固定为：取消 > 原始类型化错误 > 已安全脱敏的关闭错误。
+
+### 13.5 配置与组合根
+
+- 新增 `PA_MODEL_REMOTE_PROVIDER_ID`、`PA_MODEL_REMOTE_BASE_URL`、`PA_MODEL_REMOTE_MODEL`、`PA_MODEL_REMOTE_SECRET_HANDLE`、`PA_MODEL_REMOTE_TIMEOUT_SECONDS`、`PA_MODEL_LOCAL_PROVIDER_ID`、`PA_MODEL_LOCAL_BASE_URL`、`PA_MODEL_LOCAL_MODEL`、`PA_MODEL_LOCAL_TIMEOUT_SECONDS`、`PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID`。所有构造路径（直接构造、`from_env`、`replace`）写回规范化值再校验。
+- 远端端点必须 https 且同时提供 model 与 SecretHandle 句柄 ID；本地端点必须 loopback；缺失或半配置一律启动失败，不退化为不安全默认值。回退 provider 必须显式配置且必须等于已配置的本地 provider。
+- 远端与本地 provider ID 必须互不相同（重复 ID 会让 `ModelRouter` 的 provider 表静默覆盖，`ModelRouter` 构造时也会直接拒绝重复 ID）；endpoint path 不允许 `.`/`..` 段（先把百分号编码解码到稳定值再检查，覆盖 `%2e%2e`、`%252e%252e`、`%2f` 拆分）或非法空白。违反者启动/构造失败。
+- `build_container(settings, *, secret_store=None)` 接入真实适配器：远程凭据默认经 `UnavailableSecretStore` fail closed；`environment=production` 仍拒绝内存存储，`PA_STORAGE_BACKEND=memory` 只允许 development/test，生产绝不自动回退内存许可存储。
+
+### 13.6 迁移与持久化
+
+- 新增迁移 `0005_f04_model_disclosure.sql`：`model_disclosure_consents`（主键 `id`，状态约束、`expires_at > created_at`、REVOKED 必须带 `revoked_at`）（含 `recipient_fingerprint char(64) NOT NULL` 列）与 `model_disclosure_commands`（主键 `(scope, idempotency_key)`，`consent_id` 外键）。SHA-256 为 `012532834b281040d0031b48744ec7298e3c9b960bb247f51fd22c050f7534f0`。
+- `0001`–`0004` 未改动；F04 契约测试与冻结清单锁定其 SHA-256，PostgreSQL 集成测试在“只应用到 0004 的数据库”上验证升级只新增 0005 且旧 checksum 不变。
+- `PostgresDisclosureConsentStore` 在单事务内完成“命令日志 + 许可创建”；并发同键只在唯一约束竞争中产生一个赢家，落败连接重读并比较指纹；撤销用行锁 + `version` CAS 防止两个连接同时成功（并发反例：恰好一个成功，另一个 `ConcurrentModificationError`）。重启/重建 Container 后许可与撤销状态仍有效。`list_for_user` 的 `limit` 必须 ≥1（内存与 PostgreSQL 适配器一致抛 `ValidationError`），只存元数据。
+
+### 13.7 有意未实现与已知残余
+
+- Windows Credential Manager 等真实宿主凭据后端（F09）、真实厂商端到端调用（缺少真实凭据，仅以运行时 HTTP transport 验证协议）、PWA 披露许可界面与模型调用编排（F08/后续 Agent 阶段）、Embedding 与结构化输出能力。不得把上述任何一项描述为 F04 已交付。
+- 许可绑定的是数据字段集合、接收方与用途；`instruction` 控制文本不在许可绑定内（DESIGN 8.3 的披露范围是数据字段）。后续 Agent 接入必须保证 `instruction` 来自工作流定义而非外部内容，并在上下文合成层处理提示注入。
+- `PA_MODEL_REMOTE_SECRET_HANDLE` 只接受不透明句柄 ID；F09 的宿主凭据实现必须提供可区分的句柄格式，并明确禁止把密钥原文写入该字段。
+- 披露 API 只接受当前组合根注册的远端 provider（未注册 404），不允许为未配置接收端预生成许可；本地 provider 不产生披露许可。
+- 披露 preview/confirm 的请求体只有字段级上限（≤200 字段、单值 ≤200 KiB），未设整体正文上限；F08 接入前应补全局正文限制。
+- 审计只保存字段摘要与输出哈希，无法从审计重建被披露内容（有意的隐私取舍）；`model_disclosure_commands` 永久保留命令指纹（不含原文）。

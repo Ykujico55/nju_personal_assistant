@@ -6,12 +6,16 @@ from datetime import UTC, datetime, timedelta
 from personal_assistant.core.models import (
     ContextField,
     DataClassification,
-    DisclosureConsent,
     DisclosureDenied,
     ModelOutput,
     ModelRequest,
     ModelRouter,
+    RecipientIdentity,
 )
+from personal_assistant.core.models.disclosure import DisclosureConsentService
+from personal_assistant.infrastructure.memory import InMemoryDisclosureConsentStore
+
+NOW = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 
 
 class FakeProvider:
@@ -19,6 +23,12 @@ class FakeProvider:
         self.provider_id = provider_id
         self.is_remote = remote
         self.calls = 0
+        self.recipient = RecipientIdentity(
+            provider_id=provider_id,
+            adapter="fake",
+            endpoint="https://fake.example.test/v1",
+            model_id="fake",
+        )
 
     async def complete(self, request: ModelRequest) -> ModelOutput:
         self.calls += 1
@@ -28,7 +38,11 @@ class FakeProvider:
 class ModelRouterTests(unittest.IsolatedAsyncioTestCase):
     async def test_remote_sensitive_data_needs_exact_consent(self) -> None:
         provider = FakeProvider("remote", remote=True)
-        router = ModelRouter((provider,))
+        consents = DisclosureConsentService(
+            InMemoryDisclosureConsentStore(),
+            recipients={"remote": provider.recipient},
+        )
+        router = ModelRouter((provider,), disclosure=consents)
         request = ModelRequest(
             purpose="draft reply",
             instruction="draft",
@@ -37,15 +51,27 @@ class ModelRouterTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         with self.assertRaises(DisclosureDenied):
-            await router.complete(request, provider_id="remote")
+            await router.complete(
+                request, provider_id="remote", user_id="owner", now=NOW
+            )
+        self.assertEqual(0, provider.calls)
 
-        consent = DisclosureConsent.for_request(
+        preview = consents.preview(request, provider_id="remote", now=NOW)
+        record = await consents.confirm(
+            request,
             provider_id="remote",
-            request=request,
-            expires_at=datetime.now(UTC) + timedelta(minutes=5),
             user_id="owner",
+            preview_hash=preview.preview_hash,
+            idempotency_key="confirm-1",
+            now=NOW,
         )
-        result = await router.complete(request, provider_id="remote", consent=consent)
+        result = await router.complete(
+            request,
+            provider_id="remote",
+            consent_id=record.id,
+            user_id="owner",
+            now=NOW + timedelta(minutes=1),
+        )
         self.assertEqual("remote", result.provider_id)
 
         changed = ModelRequest(
@@ -54,7 +80,13 @@ class ModelRouterTests(unittest.IsolatedAsyncioTestCase):
             fields=(ContextField("mail", "changed", DataClassification.SENSITIVE, "mail:1"),),
         )
         with self.assertRaises(DisclosureDenied):
-            await router.complete(changed, provider_id="remote", consent=consent)
+            await router.complete(
+                changed,
+                provider_id="remote",
+                consent_id=record.id,
+                user_id="owner",
+                now=NOW + timedelta(minutes=1),
+            )
 
     async def test_secret_is_denied_even_for_local_provider(self) -> None:
         provider = FakeProvider("local", remote=False)

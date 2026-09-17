@@ -13,6 +13,7 @@ from .approval_repository import PostgresApprovalRepository
 from .audit_writer import PostgresAuditWriter
 from .config import PostgresAdapterConfig, normalize_dsn
 from .connection import PostgresDatabase
+from .disclosure_consents import PostgresDisclosureConsentStore
 from .job_queue import PostgresJobQueue
 from .lifecycle_store import PostgresLifecycleStore
 from .outbox import PostgresSideEffectOutbox
@@ -44,6 +45,7 @@ class PostgresAdapters:
     audit_writer: PostgresAuditWriter
     side_effect_outbox: PostgresSideEffectOutbox
     lifecycle_store: PostgresLifecycleStore
+    disclosure_consents: PostgresDisclosureConsentStore
 
     async def startup(self) -> tuple[str, ...]:
         return await self.database.startup()
@@ -68,6 +70,7 @@ def build_postgres_adapters(config: PostgresAdapterConfig) -> PostgresAdapters:
         audit_writer=PostgresAuditWriter(database),
         side_effect_outbox=PostgresSideEffectOutbox(database),
         lifecycle_store=PostgresLifecycleStore(database),
+        disclosure_consents=PostgresDisclosureConsentStore(database),
     )
 
 

@@ -1,6 +1,7 @@
 """Deterministic adapters for local development and tests only."""
 
 from .audit import InMemoryAuditWriter
+from .disclosures import InMemoryDisclosureConsentStore
 from .extensions import InMemoryLifecycleStore
 from .job_queue import InMemoryJobQueue
 from .operations import InMemoryExtensionOperationStore
@@ -11,6 +12,7 @@ from .versions import InMemoryVersionCatalog
 
 __all__ = [
     "InMemoryAuditWriter",
+    "InMemoryDisclosureConsentStore",
     "InMemoryEventStream",
     "InMemoryExtensionOperationStore",
     "InMemoryJobQueue",

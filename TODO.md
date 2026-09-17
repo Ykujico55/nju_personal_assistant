@@ -33,9 +33,12 @@
   - 第二轮独立验收的 2 项缺陷（节流窗口把合法密钥轮换误报为不可重试 401；接口归属/规范化文档过期）已修复：未检查的未知 `kid` 现在返回可重试 503，成功刷新确认不存在才 401；`Settings` 所有构造路径写回 canonical 值再校验。
   - 证据：F03 目标集合 `124 passed`；`./scripts/test.ps1` `269 passed、28 skipped`；`./scripts/test-postgres.ps1` `28 passed`（F01+F02 无回归）；Ruff、Mypy（138 files）、`pip check`、`git diff --check` 通过；wheel 含 `core/auth`、`infrastructure/auth` 与四份迁移。详见 `docs/NEXT_STEPS.md`。
   - 最终独立复验：F03 目标集合 `124 passed`；全量 `269 passed、28 skipped`；PostgreSQL `28 passed`；手工轮换复现、wheel 内容与四份迁移 checksum 均通过复核。
-  - 未交付（有意）：自定义 Access 域名、应用内登录/MFA、Tunnel/Tailscale 编排、F04 披露许可。
-- [ ] **F04 — 模型适配器与敏感披露许可（NEXT / TODO）**
-  - 接入真实本地/远程模型，持久化精确披露许可；SECRET 在所有模型路径继续硬阻断。当前唯一允许推进的任务。
+  - 未交付（有意，均属于 F03 范围之外）：自定义 Access 域名、应用内登录/MFA、Tunnel/Tailscale 编排；F04 披露许可已由 F04 单独实现（见下）。
+- [ ] **F04 — 模型适配器与敏感披露许可（NEXT / IN_PROGRESS，等待独立验收）**
+  - 已实现：`core/models/disclosure.py` 的持久披露许可端口/服务（`DisclosureConsentService`/`DisclosureAuthorizer`/`canonical_field_digest`）、`core/models/errors.py` 类型化 provider 错误、`ModelRouter` 接入持久许可查询与显式本地回退；`infrastructure/models/` 的真实远端 OpenAI 兼容适配器与本地 Ollama 适配器（协议驱动 HTTP、SecretHandle 宿主解析 fail closed、loopback 强制、禁重定向、有界响应、总 deadline、取消安全、不重试）；`PostgresDisclosureConsentStore` + 内存测试替身；迁移 `0005_f04_model_disclosure.sql`（`model_disclosure_consents`/`model_disclosure_commands`，SHA-256 `012532834b281040d0031b48744ec7298e3c9b960bb247f51fd22c050f7534f0`）；`PA_MODEL_*` 配置在直接构造/`from_env`/`replace` 全部规范化并校验；public API 的 `preview/confirm/revoke` 最小接口；组合根接入真实适配器与 fail-closed 凭据占位。
+  - 证据：两轮自我审查 16 项与第三至七轮验收修复后，F04 目标集合 `161 passed`（含 `test_model_disclosure.py`、`test_model_router_f04.py`、`test_model_adapters.py`、`test_bootstrap_f04.py`、`test_disclosures.py`、`test_f04_contract_consistency.py`、`test_settings.py`、`test_model_router.py`）；`./scripts/test.ps1` `409 passed, 37 skipped`；`./scripts/test-postgres.ps1` `37 passed`（F01 24 + F02 4 + F04 9）；Ruff、Mypy（150 files）、`pip check`、`git diff --check` 通过；wheel 含 `core/models/disclosure.py`、`infrastructure/models/*`、`PostgresDisclosureConsentStore` 与五份迁移。原始结果、逐项反例与残余风险见 `docs/NEXT_STEPS.md` 与契约 13.7。
+  - 仍未实现：Windows Credential Manager 真实凭据后端（F09，当前为 fail-closed 占位）、真实厂商端到端（无真实凭据，只有 HTTP transport 协议测试）、Embedding/结构化输出、PWA 披露界面与模型调用编排（F08/后续）。未开始 F05，未 commit，未 push。
+- [ ] **F05 — 个人知识扩展（WAITING）**：F04 验收完成前不得启动。
 
 F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02 已完成并通过六轮独立审计；F03 已完成并通过三轮独立审计；当前只允许推进 F04。
 
