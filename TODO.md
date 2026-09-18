@@ -34,13 +34,20 @@
   - 证据：F03 目标集合 `124 passed`；`./scripts/test.ps1` `269 passed、28 skipped`；`./scripts/test-postgres.ps1` `28 passed`（F01+F02 无回归）；Ruff、Mypy（138 files）、`pip check`、`git diff --check` 通过；wheel 含 `core/auth`、`infrastructure/auth` 与四份迁移。详见 `docs/NEXT_STEPS.md`。
   - 最终独立复验：F03 目标集合 `124 passed`；全量 `269 passed、28 skipped`；PostgreSQL `28 passed`；手工轮换复现、wheel 内容与四份迁移 checksum 均通过复核。
   - 未交付（有意，均属于 F03 范围之外）：自定义 Access 域名、应用内登录/MFA、Tunnel/Tailscale 编排；F04 披露许可已由 F04 单独实现（见下）。
-- [ ] **F04 — 模型适配器与敏感披露许可（NEXT / IN_PROGRESS，等待独立验收）**
+- [x] **F04 — 模型适配器与敏感披露许可（DONE — 独立验收通过）**
   - 已实现：`core/models/disclosure.py` 的持久披露许可端口/服务（`DisclosureConsentService`/`DisclosureAuthorizer`/`canonical_field_digest`）、`core/models/errors.py` 类型化 provider 错误、`ModelRouter` 接入持久许可查询与显式本地回退；`infrastructure/models/` 的真实远端 OpenAI 兼容适配器与本地 Ollama 适配器（协议驱动 HTTP、SecretHandle 宿主解析 fail closed、loopback 强制、禁重定向、有界响应、总 deadline、取消安全、不重试）；`PostgresDisclosureConsentStore` + 内存测试替身；迁移 `0005_f04_model_disclosure.sql`（`model_disclosure_consents`/`model_disclosure_commands`，SHA-256 `012532834b281040d0031b48744ec7298e3c9b960bb247f51fd22c050f7534f0`）；`PA_MODEL_*` 配置在直接构造/`from_env`/`replace` 全部规范化并校验；public API 的 `preview/confirm/revoke` 最小接口；组合根接入真实适配器与 fail-closed 凭据占位。
-  - 证据：两轮自我审查 16 项与第三至七轮验收修复后，F04 目标集合 `161 passed`（含 `test_model_disclosure.py`、`test_model_router_f04.py`、`test_model_adapters.py`、`test_bootstrap_f04.py`、`test_disclosures.py`、`test_f04_contract_consistency.py`、`test_settings.py`、`test_model_router.py`）；`./scripts/test.ps1` `409 passed, 37 skipped`；`./scripts/test-postgres.ps1` `37 passed`（F01 24 + F02 4 + F04 9）；Ruff、Mypy（150 files）、`pip check`、`git diff --check` 通过；wheel 含 `core/models/disclosure.py`、`infrastructure/models/*`、`PostgresDisclosureConsentStore` 与五份迁移。原始结果、逐项反例与残余风险见 `docs/NEXT_STEPS.md` 与契约 13.7。
-  - 仍未实现：Windows Credential Manager 真实凭据后端（F09，当前为 fail-closed 占位）、真实厂商端到端（无真实凭据，只有 HTTP transport 协议测试）、Embedding/结构化输出、PWA 披露界面与模型调用编排（F08/后续）。未开始 F05，未 commit，未 push。
-- [ ] **F05 — 个人知识扩展（WAITING）**：F04 验收完成前不得启动。
+  - 证据：两轮自我审查 16 项与第三至七轮验收修复后，F04 目标集合 `161 passed`（含 `test_model_disclosure.py`、`test_model_router_f04.py`、`test_model_adapters.py`、`test_bootstrap_f04.py`、`test_disclosures.py`、`test_f04_contract_consistency.py`、`test_settings.py`、`test_model_router.py`）；`./scripts/test.ps1` `409 passed, 37 skipped`；`./scripts/test-postgres.ps1` `37 passed`（F01 24 + F02 4 + F04 9）；Ruff、Mypy（150 files）、`pip check`、`git diff --check` 通过；wheel 含 `core/models/disclosure.py`、`infrastructure/models/*`、`PostgresDisclosureConsentStore` 与五份迁移。原始结果、逐项反例与残余风险见 `docs/NEXT_STEPS.md` 与契约 13.7。最终独立验收通过（七轮修复后）：F04 目标集合 `161 passed`；全量 `409 passed、37 skipped`；PostgreSQL `37 passed`；Ruff、Mypy、`pip check`、`git diff --check` 通过；`0001`–`0005` checksum 与报告一致，旧迁移未改动。
+  - 仍未实现：Windows Credential Manager 真实凭据后端（F09，当前为 fail-closed 占位）、真实厂商端到端（无真实凭据，只有 HTTP transport 协议测试）、Embedding/结构化输出、PWA 披露界面与模型调用编排（F08/后续）。未 commit，未 push。
+- [x] **F05 — 个人知识扩展（DONE — 完整独立审计与修复后通过）**：已交付 `extensions/personal_knowledge`（`knowledge.file_changes`/`knowledge.retrieve`/`knowledge.search` READ/`knowledge.reindex` INTERNAL_WRITE/`knowledge.reconcile`/`knowledge.roots`/`knowledge.index_schema`）、通用宿主能力（全双工 RPC、`host.data.execute/transaction/migrate` 数据代理、`ExtensionConfigStore` 配置通道与 Admin `GET/PUT .../config`）、授权根路径安全、Markdown/TXT/PDF 抽取与稳定 locator、SHA-256 版本化分块与来源快照 CAS、扩展自有 `ext_*` Schema 迁移、PostgreSQL FTS + pgvector RRF 混合检索、引用复核与删除传播、embedding 端口（默认显式降级为仅 FTS）。
+  - 第二轮独立验收修复（6×P1 + 2×P2）已完成并在最终复验中通过：数据代理三路径统一核心表拦截、授权根即时边界与删除传播、首次失败重试、取消/孤立候选清理与激活 CAS、embedding 身份纳入增量差异（含维度探测）、Ollama 无代理总 deadline、capability 授权门、STALE/DELETED 不返回正文。
+  - 第三轮完整修复（8 项）已完成：首次数据调用先串行创建专属 Schema 且动态刷新核心关系禁表；SDK deadline 传入宿主并把 PostgreSQL statement timeout 类型化为 `DATA_TIMEOUT`；同版本构建采用 `built_by` 全链路 owner + 无副作用 CAS；移动后旧路径可建立新 source；向量检索严格绑定活动版本 embedding identity；长单行/大 PDF 页可精确分块且 embedding/数据库写入有界批处理；Ollama 截断响应类型化；事件以单调 generation 区分重复 A→B→A→B 转换。
+  - 最终独立审计与自审计修复：配置严格 JSON/Schema/并发原子写入与启动复核；读取和 PDF 解压双层字节上限；来源激活/移动/删除使用完整快照 CAS 且 generation 严格单调；长构建 heartbeat 租约；轮询事件与 reconciliation 共用转换语义；数据参数深度、向量帧和聚合结果有界；迁移单次校验读取、逐语句白名单与 search_path 越权阻断。每项均有反例测试。
+  - 证据：`./scripts/test.ps1` → 597 passed、81 skipped，Ruff/Mypy（166 files）通过；`./scripts/test-postgres.ps1` → 81 passed（PostgreSQL 17.11 + pgvector，含真实 Worker）；`pip check`/`git diff --check` 干净。扩展迁移 `0001_knowledge_index.sql` SHA-256 为 `0f8758f97cce7206ac0b5cd4aa159f1b7b43de79cf1fa77a811a67f8aecd759d`；`0001`–`0005` 核心迁移未改。详见 `docs/NEXT_STEPS.md`。
+  - 未实现（有意）：宿主自动执行 MigrationProvider（当前由扩展经数据能力触发）、OS 级文件监听（F09）、向量 ANN 索引（无维度约束列）、真实远程 embedding、PWA 表单渲染（F08）、永久 purge（501）。
 
-F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02 已完成并通过六轮独立审计；F03 已完成并通过三轮独立审计；当前只允许推进 F04。
+- [ ] **F06 — smail 扩展（NEXT，未开始）**：只允许下一位 Agent 领取本项；能力边界、验收条件与失败红线见 `docs/NEXT_STEPS.md`。
+
+F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02 已完成并通过六轮独立审计；F03 已完成并通过三轮独立审计；F04 已通过独立验收；F05 已通过完整独立审计及修复后自审计；F06 为唯一 `NEXT`，尚未开始。
 
 ## 每次交接必须留下
 

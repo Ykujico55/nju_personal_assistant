@@ -3,6 +3,7 @@
 from .config import PostgresAdapterConfig, normalize_dsn
 from .connection import PostgresDatabase
 from .disclosure_consents import PostgresDisclosureConsentStore
+from .extension_data import PostgresExtensionDataAccess
 from .extension_versions import PostgresVersionCatalog
 from .migrate import (
     MIGRATION_ADVISORY_LOCK_KEY,
@@ -22,6 +23,7 @@ __all__ = [
     "PostgresAdapters",
     "PostgresDatabase",
     "PostgresDisclosureConsentStore",
+    "PostgresExtensionDataAccess",
     "PostgresExtensionOperationStore",
     "PostgresVersionCatalog",
     "build_postgres_adapters",

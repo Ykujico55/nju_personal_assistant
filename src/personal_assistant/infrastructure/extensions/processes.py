@@ -16,6 +16,15 @@ from pathlib import Path
 from typing import Any
 
 from personal_assistant.core.extensions.async_utils import shield_cleanup
+from personal_assistant.core.extensions.config import (
+    ExtensionConfigStore,
+    validate_extension_config,
+)
+from personal_assistant.core.extensions.data_access import (
+    CAPABILITY_EXTENSION_DATA,
+    ExtensionDataAccess,
+    ExtensionDataContext,
+)
 from personal_assistant.core.extensions.errors import (
     ExtensionOperationError,
     RpcCallError,
@@ -23,13 +32,15 @@ from personal_assistant.core.extensions.errors import (
 )
 from personal_assistant.core.extensions.lifecycle import InstalledArtifact
 from personal_assistant.core.extensions.manifest import ExtensionManifest
-from personal_assistant.core.extensions.models import ExtensionRecord
+from personal_assistant.core.extensions.models import ExtensionRecord, data_namespace
 from personal_assistant.core.extensions.rpc import (
     ExtensionWorker,
+    HostRequestHandler,
     JsonRpcProcessClient,
     WorkerSpec,
 )
 
+from .config_store import load_extension_config_schema
 from .installer import venv_python
 
 _ID_SLOT_METHODS = {
@@ -50,6 +61,7 @@ def _build_worker(
     version_dir: Path,
     *,
     max_frame_bytes: int,
+    host_handler: HostRequestHandler | None = None,
 ) -> ExtensionWorker:
     if not version_dir.is_dir():
         raise ExtensionOperationError(
@@ -65,6 +77,7 @@ def _build_worker(
             module=manifest.module_name,
             python_executable=str(python),
             cwd=str(_payload_root(version_dir)),
+            host_handler=host_handler,
         ),
         max_frame_bytes=max_frame_bytes,
     )
@@ -79,11 +92,15 @@ class ProcessRuntimeSupervisor:
         health_timeout_seconds: float = 5.0,
         drain_timeout_seconds: float = 30.0,
         max_frame_bytes: int = 4 * 1024 * 1024,
+        data_access: ExtensionDataAccess | None = None,
+        config_store: ExtensionConfigStore | None = None,
     ) -> None:
         self._handshake_timeout = handshake_timeout_seconds
         self._health_timeout = health_timeout_seconds
         self._drain_timeout = drain_timeout_seconds
         self._max_frame_bytes = max_frame_bytes
+        self._data_access = data_access
+        self._config_store = config_store
         self._workers: dict[str, ExtensionWorker] = {}
         self._start_locks: dict[str, asyncio.Lock] = {}
 
@@ -93,22 +110,77 @@ class ProcessRuntimeSupervisor:
         # workers and leak the one the supervisor does not track.
         lock = self._start_locks.setdefault(extension_id, asyncio.Lock())
         async with lock:
+            self._require_capabilities(record.manifest)
             existing = self._workers.get(extension_id)
             if existing is not None and existing.client.running:
                 return
             if existing is not None:
                 await existing.close()
                 self._workers.pop(extension_id, None)
+            config: Mapping[str, Any] = {}
+            if self._config_store is not None:
+                config = await self._config_store.get(extension_id)
+            schema = load_extension_config_schema(record.manifest)
+            # A missing config is an intentional pre-configuration state: the
+            # worker may start and report ``awaiting_configuration``.  Any
+            # persisted non-empty document is revalidated against the installed
+            # version's current schema before code starts, so an extension
+            # upgrade or a damaged file cannot inject stale configuration.
+            if config:
+                config = validate_extension_config(schema, config)
             version_dir = Path(record.install_path or "")
             worker = _build_worker(
-                record.manifest, version_dir, max_frame_bytes=self._max_frame_bytes
+                record.manifest,
+                version_dir,
+                max_frame_bytes=self._max_frame_bytes,
+                host_handler=self._host_handler(record),
             )
             try:
-                await worker.start(timeout_seconds=self._handshake_timeout)
+                await worker.start(
+                    non_secret_config=config,
+                    timeout_seconds=self._handshake_timeout,
+                )
             except BaseException:
                 await worker.close()
                 raise
             self._workers[extension_id] = worker
+
+    def _capability_available(self, capability: str) -> bool:
+        if capability == CAPABILITY_EXTENSION_DATA:
+            return self._data_access is not None and self._data_access.available
+        return False
+
+    def _require_capabilities(self, manifest: ExtensionManifest) -> None:
+        required = tuple(manifest.capabilities.required)
+        missing = [name for name in required if not self._capability_available(name)]
+        if missing:
+            raise ExtensionOperationError(
+                "REQUIRED_CAPABILITY_UNAVAILABLE",
+                "required extension capabilities are not available: "
+                + ", ".join(sorted(missing)),
+            )
+
+    def _host_handler(self, record: ExtensionRecord) -> HostRequestHandler | None:
+        data_access = self._data_access
+        if data_access is None or not data_access.available:
+            return None
+        manifest = record.manifest
+        declared = set(manifest.capabilities.required) | set(manifest.capabilities.optional)
+        if CAPABILITY_EXTENSION_DATA not in declared:
+            # The host only exposes one capability per worker when the manifest
+            # actually declares it.
+            return None
+        context = ExtensionDataContext(
+            extension_id=manifest.id,
+            extension_version=manifest.version,
+            namespace=data_namespace(manifest.id),
+            payload_root=Path(manifest.root),
+        )
+
+        async def handler(method: str, params: Mapping[str, Any]) -> Any:
+            return await data_access.handle(method, params, context=context)
+
+        return handler
 
     async def health(self, record: ExtensionRecord) -> bool:
         worker = self._workers.get(record.manifest.id)

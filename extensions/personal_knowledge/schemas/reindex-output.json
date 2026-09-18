@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge.reindex output",
+  "type": "object",
+  "properties": {
+    "mode": {"type": "string", "enum": ["incremental", "full"]},
+    "roots": {"type": "integer"},
+    "scanned": {"type": "integer"},
+    "added": {"type": "integer"},
+    "modified": {"type": "integer"},
+    "moved": {"type": "integer"},
+    "deleted": {"type": "integer"},
+    "unchanged": {"type": "integer"},
+    "versions_built": {"type": "integer"},
+    "events": {"type": "integer"},
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {"type": "string"},
+          "path": {"type": "string"},
+          "message": {"type": "string"}
+        },
+        "required": ["code", "message"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "mode", "roots", "scanned", "added", "modified", "moved", "deleted",
+    "unchanged", "versions_built", "events", "errors"
+  ],
+  "additionalProperties": false
+}

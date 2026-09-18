@@ -112,6 +112,22 @@ def decode_response(frame: bytes | str, *, max_bytes: int = 1_048_576) -> RpcRes
     return RpcResponse(id=response_id, result=body["result"])
 
 
+def decode_frame(
+    frame: bytes | str, *, max_bytes: int = 1_048_576
+) -> RpcRequest | RpcResponse:
+    """Decode one frame as either a request or a response.
+
+    The stdio channel is full duplex: the host sends requests to the worker and
+    the worker may send host-capability requests back over the same stream.  A
+    frame carrying ``method`` is a request; everything else is a response.
+    """
+
+    body = _decode_json_object(frame, max_bytes=max_bytes)
+    if "method" in body:
+        return decode_request(frame, max_bytes=max_bytes)
+    return decode_response(frame, max_bytes=max_bytes)
+
+
 def _decode_json_object(frame: bytes | str, *, max_bytes: int) -> dict[str, Any]:
     raw = frame.encode("utf-8") if isinstance(frame, str) else frame
     if len(raw) > max_bytes:

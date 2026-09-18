@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge.search output",
+  "type": "object",
+  "properties": {
+    "unknown": {"type": "boolean"},
+    "vector_mode": {"type": "string", "enum": ["enabled", "disabled"]},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string"},
+          "source_uri": {"type": "string"},
+          "source_id": {"type": "string"},
+          "source_version": {"type": "string"},
+          "content_hash": {"type": "string"},
+          "locator": {
+            "type": "object",
+            "properties": {
+              "kind": {"type": "string"},
+              "start": {"type": "integer"},
+              "end": {"type": "integer"},
+              "page": {"type": "integer"},
+              "label": {"type": "string"}
+            },
+            "required": ["kind", "start", "end"],
+            "additionalProperties": false
+          },
+          "heading_path": {"type": "array", "items": {"type": "string"}},
+          "page": {"type": "integer"},
+          "line_start": {"type": "integer"},
+          "line_end": {"type": "integer"},
+          "media_type": {"type": "string"},
+          "extension_id": {"type": "string"},
+          "extension_version": {"type": "string"},
+          "sensitivity": {"type": "string", "enum": ["PUBLIC", "PERSONAL", "SENSITIVE"]},
+          "trust": {"type": "string"},
+          "status": {"type": "string", "enum": ["CURRENT", "STALE", "DELETED"]},
+          "score": {"type": "number"}
+        },
+        "required": [
+          "text", "source_uri", "source_version", "content_hash", "locator",
+          "extension_id", "extension_version", "sensitivity", "trust", "status"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["unknown", "vector_mode", "results"],
+  "additionalProperties": false
+}

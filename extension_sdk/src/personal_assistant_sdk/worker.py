@@ -3,17 +3,26 @@
 The worker boundary isolates dependencies and crashes; it is deliberately not a
 security sandbox.  A user who installs an extension trusts code running under the
 same operating-system account.
+
+The stream is full duplex: the host drives the worker through stable JSON-RPC
+methods, and the worker may send its own requests back to the host (for example
+the generic extension data capability) over the same channel.  Frames carrying
+``method`` are requests; all other frames are responses.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
+import threading
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from typing import Any
 
 from . import PROTOCOL_VERSION
+from .host import HostBroker
 from .models import (
     ContextQuery,
     InvocationContext,
@@ -34,7 +43,14 @@ from .protocols import (
     ToolProvider,
     WorkflowProvider,
 )
-from .rpc import RpcError, RpcProtocolError, RpcRequest, RpcResponse, decode_request, encode_frame
+from .rpc import (
+    RpcError,
+    RpcProtocolError,
+    RpcRequest,
+    RpcResponse,
+    decode_frame,
+    encode_frame,
+)
 
 
 class WorkerDispatchError(Exception):
@@ -60,6 +76,10 @@ class ExtensionDispatcher:
         self._draining = False
         self._active_calls = 0
         self._max_result_bytes = max_result_bytes
+        self._host_broker: HostBroker | None = None
+
+    def attach_host_broker(self, broker: HostBroker) -> None:
+        self._host_broker = broker
 
     async def dispatch(self, request: RpcRequest) -> RpcResponse:
         try:
@@ -165,6 +185,8 @@ class ExtensionDispatcher:
         )
         if runtime.protocol_version != protocol_version:
             raise WorkerDispatchError(-32005, "runtime protocol version mismatch")
+        if self._host_broker is not None:
+            runtime = replace(runtime, host_data=self._host_broker)
         extension = self._factory()
         if not isinstance(extension, Extension):
             raise WorkerDispatchError(-32006, "entrypoint does not implement Extension")
@@ -200,65 +222,141 @@ async def serve_streams(
 ) -> None:
     """Serve newline-delimited JSON-RPC until EOF or shutdown."""
 
-    while True:
+    async def next_frame() -> bytes | None:
         frame = await reader.readline()
-        if not frame:
-            break
-        request_id: str | None = None
-        try:
-            request = decode_request(frame, max_bytes=max_frame_bytes)
-            request_id = request.id
-            response = await dispatcher.dispatch(request)
-        except RpcProtocolError as exc:
-            response = RpcResponse(
-                id=request_id,
-                error=RpcError(-32700, str(exc), {"outcome": "PERMANENT"}),
-            )
-        writer.write(encode_frame(response))
+        return frame or None
+
+    async def write_frame(frame: bytes) -> None:
+        writer.write(frame)
         await writer.drain()
-        if request_id is not None and request.method == "system.shutdown":
-            break
+
+    await _serve_full_duplex(
+        dispatcher, next_frame, write_frame, max_frame_bytes=max_frame_bytes
+    )
+
+
+async def _serve_full_duplex(
+    dispatcher: ExtensionDispatcher,
+    next_frame: Callable[[], Awaitable[bytes | None]],
+    write_frame: Callable[[bytes], Awaitable[None]],
+    *,
+    max_frame_bytes: int,
+) -> None:
+    write_lock = asyncio.Lock()
+
+    async def send(encoded: bytes) -> None:
+        async with write_lock:
+            await write_frame(encoded)
+
+    broker = HostBroker(send, max_frame_bytes=max_frame_bytes)
+    dispatcher.attach_host_broker(broker)
+    requests: asyncio.Queue[RpcRequest | None] = asyncio.Queue()
+    fatal = asyncio.Event()
+
+    async def reader_loop() -> None:
+        try:
+            while True:
+                frame = await next_frame()
+                if frame is None:
+                    requests.put_nowait(None)
+                    return
+                try:
+                    message = decode_frame(frame, max_bytes=max_frame_bytes)
+                except RpcProtocolError:
+                    await send(
+                        encode_frame(
+                            RpcResponse(
+                                id=None,
+                                error=RpcError(
+                                    -32700, "invalid JSON-RPC frame", {"outcome": "PERMANENT"}
+                                ),
+                            )
+                        )
+                    )
+                    continue
+                if isinstance(message, RpcRequest):
+                    requests.put_nowait(message)
+                    continue
+                if not broker.resolve(message):
+                    # A response that matches no pending call destroys stream
+                    # correlation; the worker stops instead of guessing.
+                    fatal.set()
+                    requests.put_nowait(None)
+                    return
+        except asyncio.CancelledError:
+            raise
+        except (OSError, ValueError):
+            fatal.set()
+            requests.put_nowait(None)
+
+    reader_task = asyncio.create_task(reader_loop())
+    try:
+        while True:
+            request = await requests.get()
+            if request is None:
+                return
+            response = await dispatcher.dispatch(request)
+            await send(encode_frame(response))
+            if request.method == "system.shutdown":
+                return
+    finally:
+        broker.close()
+        reader_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await reader_task
 
 
 def run_stdio_worker(extension_factory: Callable[[], Extension]) -> None:
     """Run a worker over process stdin/stdout.
 
-    ``asyncio`` pipe hookup is not portable for every Windows event loop, so the
-    reference runner delegates blocking stdio reads/writes to worker threads.
+    ``asyncio`` pipe hookup is not portable for every Windows event loop, so a
+    dedicated daemon thread feeds stdin frames into the loop.  Daemon threads do
+    not block interpreter exit after ``system.shutdown``.
     """
 
     asyncio.run(_serve_blocking_stdio(ExtensionDispatcher(extension_factory)))
 
 
 async def _serve_blocking_stdio(dispatcher: ExtensionDispatcher) -> None:
-    while True:
-        frame = await asyncio.to_thread(sys.stdin.buffer.readline)
-        if not frame:
-            return
-        request_id: str | None = None
-        method: str | None = None
-        try:
-            request = decode_request(frame)
-            request_id = request.id
-            method = request.method
-            response = await dispatcher.dispatch(request)
-        except RpcProtocolError as exc:
-            response = RpcResponse(
-                id=request_id,
-                error=RpcError(-32700, str(exc), {"outcome": "PERMANENT"}),
-            )
-        encoded = encode_frame(response)
-        await asyncio.to_thread(_write_stdout, encoded)
-        if method == "system.shutdown":
-            return
+    loop = asyncio.get_running_loop()
+    frames: asyncio.Queue[bytes | None] = asyncio.Queue()
 
+    def _read_stdin() -> None:
+        while True:
+            try:
+                frame = sys.stdin.buffer.readline()
+            except (OSError, ValueError):
+                frame = b""
+            loop.call_soon_threadsafe(frames.put_nowait, frame or None)
+            if not frame:
+                return
 
-def _write_stdout(frame: bytes) -> None:
-    sys.stdout.buffer.write(frame)
-    sys.stdout.buffer.flush()
+    reader_thread = threading.Thread(
+        target=_read_stdin, name="extension-stdin", daemon=True
+    )
+    reader_thread.start()
+
+    async def next_frame() -> bytes | None:
+        return await frames.get()
+
+    async def write_frame(frame: bytes) -> None:
+        sys.stdout.buffer.write(frame)
+        sys.stdout.buffer.flush()
+
+    await _serve_full_duplex(
+        dispatcher, next_frame, write_frame, max_frame_bytes=1024 * 1024
+    )
 
 
 def _object(value: Any, name: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{name} must be an object")
     return value
+
+
+__all__ = [
+    "ExtensionDispatcher",
+    "WorkerDispatchError",
+    "run_stdio_worker",
+    "serve_streams",
+]

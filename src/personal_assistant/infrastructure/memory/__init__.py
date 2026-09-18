@@ -2,6 +2,7 @@
 
 from .audit import InMemoryAuditWriter
 from .disclosures import InMemoryDisclosureConsentStore
+from .extension_data import UnavailableExtensionDataAccess
 from .extensions import InMemoryLifecycleStore
 from .job_queue import InMemoryJobQueue
 from .operations import InMemoryExtensionOperationStore
@@ -21,4 +22,5 @@ __all__ = [
     "InMemorySideEffectOutbox",
     "InMemoryTaskRepository",
     "InMemoryVersionCatalog",
+    "UnavailableExtensionDataAccess",
 ]

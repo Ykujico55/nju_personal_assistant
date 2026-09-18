@@ -12,7 +12,7 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $PythonExecutable -m ruff check src extension_sdk extensions tests
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $PythonExecutable -m mypy src\personal_assistant extension_sdk\src\personal_assistant_sdk extensions\example_echo\src\example_echo
+    & $PythonExecutable -m mypy src\personal_assistant extension_sdk\src\personal_assistant_sdk extensions\example_echo\src\example_echo extensions\personal_knowledge\src\personal_knowledge
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } finally {
     Pop-Location

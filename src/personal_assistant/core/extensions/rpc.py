@@ -1,4 +1,11 @@
-"""Host-side stdio JSON-RPC client and extension worker facade."""
+"""Host-side stdio JSON-RPC client and extension worker facade.
+
+The channel is full duplex.  The host drives the worker with stable JSON-RPC
+requests; the worker may send its own requests back for generic host
+capabilities (for example the extension data broker).  Every correlation
+failure, timeout or malformed frame stops the process and surfaces a typed
+error; nothing is silently retried.
+"""
 
 from __future__ import annotations
 
@@ -8,16 +15,18 @@ import os
 import sys
 import uuid
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from personal_assistant_sdk import PROTOCOL_VERSION
 from personal_assistant_sdk.rpc import (
+    RpcError,
     RpcProtocolError,
     RpcRequest,
-    decode_response,
+    RpcResponse,
+    decode_frame,
     encode_frame,
 )
 
@@ -52,6 +61,9 @@ _SAFE_ENVIRONMENT_KEYS = frozenset(
     }
 )
 
+# A worker-initiated request handler: ``handler(method, params) -> result``.
+HostRequestHandler = Callable[[str, Mapping[str, Any]], Awaitable[Any]]
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerSpec:
@@ -59,13 +71,17 @@ class WorkerSpec:
     python_executable: str = sys.executable
     cwd: str | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
+    host_handler: HostRequestHandler | None = field(default=None, compare=False)
 
 
 class JsonRpcProcessClient:
-    """One-call-at-a-time client for a dedicated extension process.
+    """Full-duplex client for a dedicated extension process.
 
-    A timeout makes the stream correlation ambiguous, so the process is stopped
-    and must be restarted by the supervisor.  Calls are never silently retried.
+    Host calls are serialized one at a time.  Worker-initiated host-capability
+    requests are handled concurrently by the reader so a call in flight can
+    always reach the host.  A timeout makes the stream correlation ambiguous, so
+    the process is stopped and must be restarted by the supervisor.  Calls are
+    never silently retried.
     """
 
     def __init__(
@@ -79,9 +95,12 @@ class JsonRpcProcessClient:
         self._process: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
         self._stderr_task: asyncio.Task[None] | None = None
+        self._reader_task: asyncio.Task[None] | None = None
         self._diagnostics: deque[str] = deque(maxlen=100)
         self._broken = False
         self._in_flight = False
+        self._pending: dict[str, asyncio.Future[Any]] = {}
+        self._failure: RpcCallError | None = None
 
     @property
     def diagnostics(self) -> tuple[str, ...]:
@@ -114,7 +133,10 @@ class JsonRpcProcessClient:
             limit=self._max_frame_bytes + 1,
         )
         self._broken = False
+        self._failure = None
+        self._pending = {}
         self._stderr_task = asyncio.create_task(self._capture_stderr())
+        self._reader_task = asyncio.create_task(self._read_loop())
 
     async def call(
         self,
@@ -207,32 +229,36 @@ class JsonRpcProcessClient:
     async def _exchange(
         self, method: str, params: Mapping[str, Any], timeout_seconds: float
     ) -> Any:
-        """Send one request and read one response; caller holds ``self._lock``."""
+        """Send one request and await its correlated response; caller holds the lock."""
 
         process = self._process
         if process is None or process.returncode is not None or self._broken:
             raise RpcCallError(-32090, "extension worker is not running")
         assert process.stdin is not None
-        assert process.stdout is not None
         request = RpcRequest(id=f"call_{uuid.uuid4().hex}", method=method, params=params)
         encoded_request = encode_frame(request)
         if len(encoded_request) > self._max_frame_bytes:
             raise RpcCallError(-32600, "extension request exceeded maximum frame size")
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Any] = loop.create_future()
+        self._pending[request.id] = future
         try:
             process.stdin.write(encoded_request)
             await process.stdin.drain()
         except asyncio.CancelledError:
             # The correlation with the in-flight request is lost; the worker can
             # never be trusted again, so it is stopped before re-raising.
+            self._pending.pop(request.id, None)
             await shield_cleanup(self._break())
             raise
         except (OSError, ValueError) as exc:
+            self._pending.pop(request.id, None)
             await self._break()
             raise RpcCallError(
                 -32091, "extension worker closed its input stream"
             ) from exc
         try:
-            frame = await asyncio.wait_for(process.stdout.readline(), timeout_seconds)
+            return await asyncio.wait_for(future, timeout_seconds)
         except TimeoutError as exc:
             await self._break()
             raise RpcTimeoutError(f"extension RPC timed out: {method}") from exc
@@ -240,36 +266,133 @@ class JsonRpcProcessClient:
             # The correlation with the in-flight request is lost on cancellation.
             await shield_cleanup(self._break())
             raise
-        except ValueError as exc:
-            # The asyncio stream limit was exceeded before a newline arrived.
-            await self._break()
-            raise RpcCallError(
-                -32092, "extension response exceeded maximum frame size"
-            ) from exc
-        if not frame:
-            await self._break()
-            code = process.returncode
-            raise RpcCallError(-32091, f"extension worker exited unexpectedly ({code})")
-        if len(frame) > self._max_frame_bytes:
-            await self._break()
-            raise RpcCallError(-32092, "extension response exceeded maximum frame size")
+        finally:
+            self._pending.pop(request.id, None)
+
+    async def _read_loop(self) -> None:
+        """Route frames: worker requests are handled, responses are correlated."""
+
+        process = self._process
+        if process is None or process.stdout is None:
+            return
         try:
-            response = decode_response(frame, max_bytes=self._max_frame_bytes)
-        except RpcProtocolError as exc:
-            await self._break()
-            raise RpcCallError(
-                -32700, "extension sent an invalid JSON-RPC frame"
-            ) from exc
-        if response.id != request.id:
-            await self._break()
-            raise RpcCallError(-32093, "extension response id mismatch")
-        if response.error is not None:
-            raise RpcCallError(
-                response.error.code,
-                response.error.message,
-                dict(response.error.data),
+            while True:
+                try:
+                    frame = await process.stdout.readline()
+                except ValueError:
+                    await self._fail(
+                        RpcCallError(
+                            -32092, "extension response exceeded maximum frame size"
+                        )
+                    )
+                    return
+                if not frame:
+                    code = process.returncode
+                    await self._fail(
+                        RpcCallError(
+                            -32091, f"extension worker exited unexpectedly ({code})"
+                        )
+                    )
+                    return
+                if len(frame) > self._max_frame_bytes:
+                    await self._fail(
+                        RpcCallError(
+                            -32092, "extension response exceeded maximum frame size"
+                        )
+                    )
+                    return
+                try:
+                    message = decode_frame(frame, max_bytes=self._max_frame_bytes)
+                except RpcProtocolError:
+                    await self._fail(
+                        RpcCallError(-32700, "extension sent an invalid JSON-RPC frame")
+                    )
+                    return
+                if isinstance(message, RpcRequest):
+                    await self._handle_host_request(message)
+                    continue
+                future = self._pending.pop(message.id or "", None)
+                if message.id is None or future is None:
+                    await self._fail(
+                        RpcCallError(-32093, "extension response id mismatch")
+                    )
+                    return
+                if future.done():
+                    continue
+                if message.error is not None:
+                    future.set_exception(
+                        RpcCallError(
+                            message.error.code,
+                            message.error.message,
+                            dict(message.error.data),
+                        )
+                    )
+                else:
+                    future.set_result(message.result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await self._fail(RpcCallError(-32100, "extension stream failed unexpectedly"))
+
+    async def _handle_host_request(self, request: RpcRequest) -> None:
+        handler = self._spec.host_handler
+        if handler is None:
+            response = RpcResponse(
+                id=request.id,
+                error=RpcError(
+                    -32601,
+                    f"host capability is not available: {request.method}",
+                    {"code": "DATA_UNAVAILABLE", "retryable": False},
+                ),
             )
-        return response.result
+        else:
+            try:
+                result = await handler(request.method, request.params)
+                response = RpcResponse(id=request.id, result=_json_result(result))
+            except ExtensionOperationError as exc:
+                response = RpcResponse(
+                    id=request.id,
+                    error=RpcError(
+                        -32100,
+                        str(exc),
+                        {"code": _safe_host_code(exc.code), "retryable": False},
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                response = RpcResponse(
+                    id=request.id,
+                    error=RpcError(
+                        -32100,
+                        "host capability failed",
+                        {"code": "DATA_INTERNAL_ERROR", "retryable": False},
+                    ),
+                )
+        encoded = encode_frame(response)
+        if len(encoded) > self._max_frame_bytes:
+            encoded = encode_frame(
+                RpcResponse(
+                    id=request.id,
+                    error=RpcError(
+                        -32101,
+                        "host capability result exceeded the frame limit",
+                        {"code": "DATA_RESULT_TOO_LARGE", "retryable": False},
+                    ),
+                )
+            )
+        try:
+            process = self._process
+            if process is None or process.stdin is None:
+                return
+            process.stdin.write(encoded)
+            await process.stdin.drain()
+        except asyncio.CancelledError:
+            raise
+        except (OSError, ValueError):
+            await self._fail(
+                RpcCallError(-32091, "extension worker closed its input stream")
+            )
 
     async def close(self, *, graceful_timeout_seconds: float = 2.0) -> None:
         process = self._process
@@ -284,22 +407,75 @@ class JsonRpcProcessClient:
                 )
         await self._terminate()
 
+    async def _fail(self, error: RpcCallError) -> None:
+        """Mark the stream failed, fail every waiter, and stop the process."""
+
+        self._broken = True
+        self._failure = error
+        self._fail_pending(error)
+        await self._terminate(bounded=True)
+
     async def _break(self) -> None:
         """Correlate the broken stream with a stopped process, never a retry."""
 
         self._broken = True
-        await self._terminate()
+        error = self._failure or RpcCallError(
+            -32090, "extension worker is not running"
+        )
+        self._fail_pending(error)
+        await self._terminate(bounded=True)
 
-    async def _terminate(self) -> None:
+    def _fail_pending(self, error: RpcCallError) -> None:
+        pending = list(self._pending.values())
+        self._pending.clear()
+        for future in pending:
+            if not future.done():
+                future.set_exception(error)
+
+    async def _terminate(
+        self,
+        *,
+        grace_seconds: float = 2.0,
+        bounded: bool = False,
+    ) -> None:
+        # Swap state out first so a concurrent reader/waiter failure is a no-op
+        # instead of a second full teardown racing the first one.
         process = self._process
-        if process is not None:
-            await terminate_process(process)
-        if self._stderr_task is not None:
-            if not self._stderr_task.done():
-                self._stderr_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._stderr_task
+        reader = self._reader_task
+        stderr = self._stderr_task
         self._process = None
+        self._reader_task = None
+        self._stderr_task = None
+        current = asyncio.current_task()
+        if process is not None:
+            if bounded:
+                # A broken/timed-out stream only needs the process stopped; the
+                # OS exit notification must never stretch a caller's deadline.
+                await self._stop_bounded(process, timeout_seconds=0.25)
+            else:
+                await terminate_process(process, grace_seconds=grace_seconds)
+        if reader is not None and reader is not current and not reader.done():
+            reader.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.wait_for(reader, 1.0)
+        if stderr is not None and stderr is not current and not stderr.done():
+            stderr.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.wait_for(stderr, 1.0)
+
+    @staticmethod
+    async def _stop_bounded(
+        process: asyncio.subprocess.Process, *, timeout_seconds: float
+    ) -> None:
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), timeout_seconds)
+        except TimeoutError:
+            # Reap in the background; the kill signal was already delivered, so
+            # the process is stopping even if the OS exit event is slow.
+            asyncio.get_running_loop().create_task(_reap(process))
 
     async def _capture_stderr(self) -> None:
         process = self._process
@@ -424,6 +600,27 @@ class ExtensionWorker:
             {**_base_params(self.manifest.id, self.manifest.version), **dict(params)},
             timeout_seconds=timeout,
         )
+
+
+async def _reap(process: asyncio.subprocess.Process) -> None:
+    with contextlib.suppress(Exception):
+        await process.wait()
+
+
+def _json_result(result: Any) -> Any:
+    """Host capability results must be strict JSON values."""
+
+    if result is None:
+        return {}
+    if isinstance(result, (bool, int, float, str, Mapping, list, tuple)):
+        return result
+    raise TypeError(f"host capability returned unsupported value type: {type(result).__name__}")
+
+
+def _safe_host_code(code: object) -> object:
+    if isinstance(code, str) and code and len(code) <= 64:
+        return code
+    return "DATA_INTERNAL_ERROR"
 
 
 def _base_params(extension_id: str, extension_version: str) -> dict[str, str]:

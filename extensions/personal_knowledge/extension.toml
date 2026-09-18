@@ -1,0 +1,33 @@
+manifest_version = "1"
+id = "personal.knowledge"
+name = "Personal Knowledge"
+version = "0.1.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.14"
+entrypoint = "personal_knowledge.worker:create_extension"
+dependency_lock = "requirements.lock"
+config_schema = "schemas/config.json"
+state_schema_version = 1
+healthcheck = "system.health"
+
+event_sources = ["knowledge.file_changes"]
+context_providers = ["knowledge.retrieve"]
+schedules = ["knowledge.reconcile"]
+migrations = ["knowledge.index_schema"]
+forms = ["knowledge.roots"]
+
+[[tools]]
+id = "knowledge.search"
+risk = "READ"
+input_schema = "schemas/search-input.json"
+output_schema = "schemas/search-output.json"
+
+[[tools]]
+id = "knowledge.reindex"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/reindex-input.json"
+output_schema = "schemas/reindex-output.json"
+
+[capabilities]
+required = ["extension.data.sql"]
+optional = []

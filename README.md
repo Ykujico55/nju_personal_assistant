@@ -12,7 +12,8 @@
 - 扩展 Manifest、Registry、生命周期/RPC 契约和 `example_echo` 示例扩展。
 - Extension Supervisor：受控暂存与静态检查、精确确认屏障、每版本独立 venv、真实 Worker 子进程、原子 Registry Snapshot、enable/disable/upgrade/rollback/uninstall 与启动恢复（venv/Worker 只做依赖与崩溃隔离，不是恶意代码沙箱）。
 - Cloudflare Access 边界：公共 API 在 `PA_TRUST_CLOUDFLARE_ACCESS=true` 时验证 Access JWT（`RS256`、`kid`、issuer、audience、expiry）后建立身份，JWKS 有界缓存与受控轮换，失败 fail closed（F03 DONE，三轮独立验收通过）。
-- 模型适配器与披露许可（F04 IN_PROGRESS）：真实远端 OpenAI 兼容适配器与本地 Ollama 适配器（协议驱动 HTTP，无厂商 SDK，错误类型化、无静默重试、禁重定向、有界响应、总 deadline），持久化 `model_disclosure_consents` 许可（精确 provider/用途/字段摘要与不可复用接收端指纹绑定、到期/撤销、幂等重放）与 public API 的 preview/confirm/revoke 接口；SECRET 在所有模型路径硬阻断。
+- 模型适配器与披露许可（F04 DONE）：真实远端 OpenAI 兼容适配器与本地 Ollama 适配器（协议驱动 HTTP，无厂商 SDK，错误类型化、无静默重试、禁重定向、有界响应、总 deadline），持久化 `model_disclosure_consents` 许可（精确 provider/用途/字段摘要与不可复用接收端指纹绑定、到期/撤销、幂等重放）与 public API 的 preview/confirm/revoke 接口；SECRET 在所有模型路径硬阻断。
+- 个人知识扩展（F05 DONE，独立审计与修复后通过）：`extensions/personal_knowledge` 注册 `knowledge.file_changes`、`knowledge.retrieve`、`knowledge.search`(READ)、`knowledge.reindex`(INTERNAL_WRITE)、`knowledge.reconcile`、`knowledge.roots` 与 `knowledge.index_schema`，实现授权目录扫描、Markdown/TXT/PDF 抽取与稳定 locator、owner/心跳租约绑定的 SHA-256 版本化分块与严格来源快照 CAS、扩展自有 `ext_*` Schema、embedding identity 隔离的 PostgreSQL FTS + pgvector 混合（RRF）检索、可验证引用与删除传播。扩展不接触数据库凭据：语句经通用宿主数据能力（`host.data.execute/transaction/migrate`）在扩展 Schema 内执行；配置经通用 `GET/PUT /admin/v1/extensions/{extension_id}/config` 通道注入并在启动时按当前版本 Schema 复核。默认 `embedding.provider=none` 时显式降级为仅 FTS。
 - CLI、单元/契约测试以及面向后续模型的任务清单。
 - 响应式 PWA 壳和 `assistantctl extension scaffold` 扩展生成器。
 
@@ -22,6 +23,16 @@
 .venv-win\Scripts\assistantctl.exe extension inspect extensions\example_echo
 .venv-win\Scripts\assistantctl.exe extension install extensions\example_echo
 ```
+
+扩展的非秘密配置经同一 Admin API 的通用通道设置（例如个人知识扩展的授权目录），保存后在下一次 enable/recover 时注入 Worker：
+
+```powershell
+$body = '{"config":{"roots":[{"path":"C:/Users/me/Documents/notes","key":"notes"}],"embedding":{"provider":"none"}}}'
+Invoke-RestMethod -Method Put -Uri http://127.0.0.1:8001/admin/v1/extensions/personal.knowledge/config `
+  -Headers @{ "Idempotency-Key" = "knowledge-config-1" } -ContentType "application/json" -Body $body
+```
+
+个人知识扩展的索引数据位于 PostgreSQL `ext_personal_2e_knowledge` Schema，不写入核心表；源目录始终只读。
 
 Cloudflare Access JWT 验证已实现并通过三轮独立验收（F03 DONE），但 Tunnel/Tailscale 部署编排、真实 smail、ehall、Web Push 和 Windows Credential Manager **尚未实现**；它们必须作为适配器或业务扩展完成，不能用假成功替代。Windows Credential Manager（F09）完成前，生产环境的远程模型凭据后端是 fail-closed 占位（`UnavailableSecretStore`），不会静默使用内存明文；协议行为只能通过注入 HTTP transport 测试，尚未完成真实厂商端到端验证。
 

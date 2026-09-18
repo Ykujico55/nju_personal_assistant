@@ -1,5 +1,12 @@
 """Host-side extension discovery, registry, lifecycle, and worker supervision."""
 
+from .config import ExtensionConfigError, ExtensionConfigStore, validate_extension_config
+from .data_access import (
+    HOST_DATA_METHODS,
+    DataAccessError,
+    ExtensionDataAccess,
+    ExtensionDataContext,
+)
 from .errors import (
     ConfirmationRequiredError,
     DuplicateCapabilityError,
@@ -33,6 +40,11 @@ __all__ = [
     "TERMINAL_OPERATION_STATES",
     "CapabilityOwner",
     "ConfirmationRequiredError",
+    "DataAccessError",
+    "ExtensionConfigError",
+    "ExtensionConfigStore",
+    "ExtensionDataAccess",
+    "ExtensionDataContext",
     "DuplicateCapabilityError",
     "ExtensionError",
     "ExtensionManifest",
@@ -44,6 +56,7 @@ __all__ = [
     "ExtensionRuntime",
     "ExtensionState",
     "ExtensionSupervisorService",
+    "HOST_DATA_METHODS",
     "InvalidLifecycleTransition",
     "ManifestParser",
     "ManifestValidationError",
@@ -53,4 +66,5 @@ __all__ = [
     "RpcTimeoutError",
     "compute_artifact_hash",
     "data_namespace",
+    "validate_extension_config",
 ]

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge.search input",
+  "type": "object",
+  "properties": {
+    "query": {"type": "string", "minLength": 1, "maxLength": 512},
+    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    "filters": {
+      "type": "object",
+      "properties": {
+        "root_keys": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"type": "string", "minLength": 1, "maxLength": 64}
+        },
+        "media_types": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
+        "source_ids": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "required": ["query"],
+  "additionalProperties": false
+}

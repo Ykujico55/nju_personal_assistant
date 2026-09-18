@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import Depends, FastAPI, Request
 from pydantic import BaseModel, Field, ValidationError
@@ -23,6 +24,10 @@ from personal_assistant.core.extensions import (
     ExtensionRecord,
     ManifestValidationError,
 )
+from personal_assistant.core.extensions.config import (
+    ExtensionConfigError,
+    validate_extension_config,
+)
 from personal_assistant.core.extensions.errors import (
     ConfirmationRequiredError,
     ExtensionError,
@@ -33,6 +38,9 @@ from personal_assistant.core.extensions.lifecycle import (
     InstallationPreview,
 )
 from personal_assistant.core.extensions.operations import ExtensionOperation
+from personal_assistant.infrastructure.extensions.config_store import (
+    load_extension_config_schema,
+)
 from personal_assistant.settings import Settings
 
 
@@ -45,6 +53,10 @@ class InstallConfirmationRequest(BaseModel):
     confirmation_nonce: str = Field(min_length=1, max_length=128)
     preview_hash: str = Field(min_length=1, max_length=128)
     accepted_warning: bool = False
+
+
+class ConfigUpdateRequest(BaseModel):
+    config: dict[str, Any]
 
 
 def _manifest_view(
@@ -108,6 +120,32 @@ def _operation_view(operation: ExtensionOperation) -> dict[str, object]:
         "created_at": operation.created_at.isoformat(),
         "updated_at": operation.updated_at.isoformat(),
     }
+
+
+def _config_schema(manifest: ExtensionManifest) -> dict[str, Any] | None:
+    try:
+        return load_extension_config_schema(manifest)
+    except ExtensionConfigError as exc:
+        raise ApplicationError(
+            "EXTENSION_CONFIG_SCHEMA_UNREADABLE",
+            "The extension config schema could not be read.",
+            500,
+        ) from exc
+
+
+async def _resolve_manifest(
+    selected: Container, extension_id: str
+) -> ExtensionManifest:
+    record = await selected.extension_supervisor.record(extension_id)
+    if record is not None:
+        return record.manifest
+    manifests = selected.extension_registry.discover(
+        str(selected.bundled_extensions_root)
+    )
+    manifest = next((item for item in manifests if item.id == extension_id), None)
+    if manifest is None:
+        raise ApplicationError("EXTENSION_NOT_FOUND", "Extension was not discovered.", 404)
+    return manifest
 
 
 def _application_error(exc: Exception) -> ApplicationError:
@@ -219,6 +257,38 @@ def create_app(
         if manifest is None:
             raise ApplicationError("EXTENSION_NOT_FOUND", "Extension was not discovered.", 404)
         return _manifest_view(manifest)
+
+    @application.get("/admin/v1/extensions/{extension_id}/config")
+    async def extension_config(
+        extension_id: str,
+        selected: Container = Depends(get_container),
+    ) -> dict[str, object]:
+        manifest = await _resolve_manifest(selected, extension_id)
+        return {
+            "extension_id": extension_id,
+            "config": dict(await selected.extension_config_store.get(extension_id)),
+            "config_schema": _config_schema(manifest),
+        }
+
+    @application.put("/admin/v1/extensions/{extension_id}/config")
+    async def update_extension_config(
+        extension_id: str,
+        payload: ConfigUpdateRequest,
+        selected: Container = Depends(get_container),
+    ) -> dict[str, object]:
+        manifest = await _resolve_manifest(selected, extension_id)
+        try:
+            validated = validate_extension_config(
+                _config_schema(manifest), payload.config, field_name="config"
+            )
+        except ExtensionConfigError as exc:
+            raise ApplicationError("INVALID_EXTENSION_CONFIG", str(exc), 422) from exc
+        await selected.extension_config_store.save(extension_id, validated)
+        return {
+            "extension_id": extension_id,
+            "config": validated,
+            "restart_required": True,
+        }
 
     @application.post("/admin/v1/extensions/inspect")
     async def inspect_extension(

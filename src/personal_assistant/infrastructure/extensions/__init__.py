@@ -6,6 +6,7 @@ worker processes isolate dependencies and crashes.  They are not a malicious-cod
 sandbox.
 """
 
+from .config_store import FileExtensionConfigStore
 from .data import InMemoryExtensionDataStore, PostgresExtensionDataStore
 from .installer import VenvArtifactInstaller
 from .processes import ProcessContractVerifier, ProcessRuntimeSupervisor
@@ -14,6 +15,7 @@ from .versions import CompatibleVersionOperator, RetainedVersion, VersionCatalog
 
 __all__ = [
     "CompatibleVersionOperator",
+    "FileExtensionConfigStore",
     "InMemoryExtensionDataStore",
     "LocalArtifactStager",
     "PostgresExtensionDataStore",

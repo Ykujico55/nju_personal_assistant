@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01 + F02 + F03 + F04 completed baseline / contract v1.4（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节）
+版本：F01 + F02 + F03 + F04 + F05 completed baseline / contract v1.5（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节，F05 增补见第 14 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -548,3 +548,98 @@ F04 用真实、协议驱动的本地/远程模型适配器与持久化披露许
 - 披露 API 只接受当前组合根注册的远端 provider（未注册 404），不允许为未配置接收端预生成许可；本地 provider 不产生披露许可。
 - 披露 preview/confirm 的请求体只有字段级上限（≤200 字段、单值 ≤200 KiB），未设整体正文上限；F08 接入前应补全局正文限制。
 - 审计只保存字段摘要与输出哈希，无法从审计重建被披露内容（有意的隐私取舍）；`model_disclosure_commands` 永久保留命令指纹（不含原文）。
+
+## 14. F05 实施后的契约补充（contract v1.5，DONE，完整独立审计与修复后自审计通过）
+
+F05 交付 `personal.knowledge` 扩展与它需要的三个通用宿主能力：全双工 RPC、通用扩展数据代理、通用扩展配置通道。核心没有出现任何 `personal.knowledge` 分支、业务路由或业务表；`0001`–`0005` 未改动；扩展业务数据全部位于 `ext_personal_2e_knowledge` Schema。
+
+### 14.1 SDK 新增公共接口（向后兼容）
+
+- `personal_assistant_sdk.models.HostDataClient`（Protocol）：`execute(statement, parameters, *, timeout_seconds)`、`transaction(statements, *, timeout_seconds)`、`migrate(migrations, *, timeout_seconds)`、`aclose()`。宿主是唯一执行者，扩展永远拿不到连接串、密码或主机路径。
+- `RuntimeContext.host_data: HostDataClient | None = None`：由 worker 运行时在 handshake 后注入，不经过 JSON 序列化；旧的 worker 代码不受影响。
+- `MigrationDescriptor.path: str | None = None`：扩展自有迁移文件的 payload 相对路径；宿主用它解析并校验迁移，不使用扩展提供的绝对路径。
+- `personal_assistant_sdk.host.HostBroker` / `HostCapabilityError`：worker 侧的宿主能力客户端，方法名固定为 `host.data.execute` / `host.data.transaction` / `host.data.migrate`；错误码经 JSON-RPC `error.data.code` 传递。
+- `personal_assistant_sdk.rpc.decode_frame`：全双工帧判定 helper（含 `method` 为请求，否则为响应）。
+- 通道语义：stdio 现在同时承载宿主→worker 请求和 worker→宿主能力请求；请求 id 不匹配、未知响应 id、畸形帧仍立即破坏流。宿主侧 `WorkerSpec.host_handler` 为可选异步处理器，未提供时 worker 请求得到 `DATA_UNAVAILABLE` 错误且流保持可用。
+
+### 14.2 通用扩展数据能力（宿主唯一执行者）
+
+- 宿主协议 `core.extensions.data_access.ExtensionDataAccess.handle(method, params, *, context)`；`ExtensionDataContext` 绑定 `extension_id/version`、`namespace` 与已安装 payload 根目录。适配器暴露 `available: bool`，宿主只在能力已声明且可用时向 Worker 注册 handler；`required = ["extension.data.sql"]` 不可用时 `enable` 失败并落 `REQUIRED_CAPABILITY_UNAVAILABLE`。
+- 语句守卫（**execute、transaction、migrate 三条路径一致**）：单语句（字符串/美元引用/注释内的 `;` 不算分隔符）、首关键字白名单（`SELECT/WITH/VALUES/INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/COMMENT/TRUNCATE`）、拒绝 `public.`/`information_schema`/`pg_catalog`/`pg_toast`/`pg_temp`、其他 `ext_*` Schema、`pg_read_file`/`lo_import`/`dblink`/`set_config`/`CREATE ROLE`/`ALTER SYSTEM` 等构造；迁移先安全拆分字符串/注释/美元引用之外的语句，再逐条执行同一首关键字白名单，`COPY/GRANT/DO/CALL` 等不得借迁移绕过；语句 ≤64 KiB、参数 ≤256 个、单参数 ≤256 KiB、参数嵌套深度 ≤32，非有限浮点拒绝。
+- 命名空间隔离：每条语句在单一事务内执行；宿主先在同一有界事务中以 namespace advisory lock 串行创建专属 Schema，再把 `search_path` 设为扩展 Schema、pgvector 类型所在 Schema 与 `pg_catalog`，因此首次 execute/transaction 也不可能把未限定 DDL 落入 `public`。宿主每次请求重新读取非扩展 Schema 的关系名（核心表），对启动后新增的未限定核心表引用同样 fail closed。
+- 事务批：`host.data.transaction` 在一个事务内顺序执行 ≤512 条语句，任一条失败则整体回滚。
+- 迁移：`host.data.migrate` 只接受 `{version, path, checksum, description}`；路径必须位于已安装 payload 内，文件经一次有界读取后以同一份已校验字节计算 SHA-256 并执行，禁止校验/执行之间二次读取的 TOCTOU；已登记版本 checksum 漂移即 `DATA_MIGRATION_INVALID`。迁移登记表 `extension_data_migrations` 位于扩展自己的 Schema，迁移按命名空间 advisory lock 串行化，整个批次在一个事务内应用或全部回滚；`SET/RESET search_path` 及等效越权构造拒绝。
+- 结果：`{rows, rowcount}`；行数上限 10 000，单次 execute 或 transaction 聚合 JSON 结果 ≤512 KiB，非有限数值不得进入 RPC；SDK 的 execute/transaction/migrate 必须同时把 `timeout_seconds` 写入 RPC 参数并作为本地等待上限，宿主以其设置 `statement_timeout`（默认 30/120/300 秒，上限 900 秒）。PostgreSQL `QueryCanceledError` 和 advisory-lock timeout 统一映射为 `DATA_TIMEOUT`。错误码固定为 `DATA_UNAVAILABLE`/`DATA_STATEMENT_REJECTED`/`DATA_TIMEOUT`/`DATA_MIGRATION_INVALID`/`DATA_RESULT_TOO_LARGE`/`DATA_PROTOCOL_ERROR`/`DATA_INTERNAL_ERROR`。
+- 边界声明：扩展是用户信任代码；该能力是凭据与凭据边界代理，不是恶意代码沙箱。`PA_STORAGE_BACKEND=memory` 时宿主实现 fail closed（`DATA_UNAVAILABLE`），扩展必须显式降级而不是假装持久化。
+
+### 14.3 通用扩展配置通道
+
+- `core.extensions.config.ExtensionConfigStore`（`get`/`save`）与 `validate_extension_config`：只接受严格 JSON 对象（≤64 KiB，拒绝 NaN/Infinity），按 manifest `config_schema` 的显式 JSON-Schema 子集校验（`type/properties/required/additionalProperties/items/minItems/maxItems/minLength/maxLength/pattern/enum/minimum/maximum`）；Schema 自身 ≤256 KiB，任意深度出现不支持关键字均 fail closed。
+- `FileExtensionConfigStore` 把非秘密配置写入 `PA_EXTENSION_ROOT/config/<extension_id>.json`（扩展 ID 白名单校验、实际读后大小复核、唯一临时文件、flush+fsync、同扩展进程内写锁与原子替换）；并发保存不得互相覆盖临时文件或留下半成品；凭据不得进入该文件。
+- Admin API（仅回环 8001）：`GET /admin/v1/extensions/{extension_id}/config` 返回配置与 `config_schema`；`PUT` 校验后持久化并返回 `restart_required: true`（下一次 enable/recover 注入）。public API 无该路由。
+- 注入：`ProcessRuntimeSupervisor` 在启动 worker 前读取配置；非空持久配置必须再次按**当前已安装版本**的 `config_schema` 校验，通过后才在 handshake 中作为 `non_secret_config` 注入，防止升级后的旧配置绕过；配置缺失/空配置时扩展自报 `awaiting_configuration`，`system.health` 仍返回 healthy，避免安装时因未配置而失败。
+
+### 14.4 personal.knowledge 数据模型、版本语义与引用
+
+- 扩展自有迁移 `migrations/0001_knowledge_index.sql`（随扩展制品发布，不在核心 `migrations/`）：`knowledge_sources`、`knowledge_versions`、`knowledge_chunks`（`to_tsvector('simple', text)` 生成列 + GIN FTS 索引、无维度约束的 `vector` 列）、`knowledge_tombstones`、`knowledge_events`、`knowledge_meta`。
+- `version_id = sha256(content_hash + extractor_name:version + embedding_identity)`；内容、抽取器或 embedding 身份任一变化都会产生新版本。`embedding_identity = provider|model|dim|version` 随版本持久化，模型/维度变化触发重建，不混用向量空间。
+- 原始文件字节是唯一事实源：`knowledge_sources.content_hash` 只在版本完整构建并原子激活时才前进。分块先写入旁路 `BUILDING` 版本且对查询不可见；最后由单个 CAS 事务把候选改为 READY 并切换 `active_version`。查询只 join `active_version`，旧活动版本在新版本 READY 前持续可查。
+- 失败/取消/持久化失败：候选 owner 是不可复用的 reconcile `run_id`；`begin_version` 对既有 READY 或他人 BUILDING 只返回未取得 owner，不重置状态。分块写入、heartbeat、激活和 `fail_version` 都要求同一 `built_by`；失败清理只能删除自己仍为 BUILDING 的版本（FK 级联分块），绝不能清理已 READY 的版本或他人候选。长构建在 embedding/分块批次间刷新 `heartbeat_at`，孤立清理只回收超过租约的候选；扫描失败不修改已登记哈希。
+- 幂等与并发：激活在同一 CTE 中锁定并同时验证 source 的 expected root/path/generation/active_version 快照、候选 BUILDING 状态与 owner，只有 eligible 候选才会提升 READY 和切换指针；CAS 失败不产生 READY 副作用。并发或重复 reconciliation 收敛为每来源一个活动版本。重命名/移动保留原 `source_id`；旧路径重用若与移动来源 ID 碰撞，使用稳定的内容绑定后备 ID 建立独立来源。
+- 删除传播：删除由单条 CAS CTE 完成，仅当 root/path/generation 快照仍匹配才删除分块、FTS、向量与版本行；成功删除消耗一个 generation 并把递增值写入不含正文的 tombstone，重现文件从 tombstone 继续单调 generation；陈旧删除无副作用。检索不再返回旧正文，旧引用复核为 DELETED，并写入 `knowledge.file_deleted` 事件。
+- locator：一般 Markdown/TXT 使用 1 基闭区间行号，PDF 使用 1 基页码 + 页内 0 基字符区间；无法用整行表达的超长文本使用文档内 0 基字符区间 `document_fragment`。任一返回片段都必须由 locator 从抽取文本逐字复算。单 chunk 同时受字符数与 64 KiB UTF-8 上限约束。
+- Evidence/搜索输出至少包含 `source_uri`、`source_version`、`content_hash`、`locator`（kind/page/line）、`heading_path`、`media_type`、`extension_id/version`、`sensitivity=PERSONAL`、`trust=USER_SOURCE`、`status`；展示为 CURRENT 之前重新读取源文件并核对哈希，变化/删除/越界/不可读一律 STALE/DELETED 并安排 reconciliation，没有证据时返回空结果与 `unknown=true`。
+- 混合检索：PostgreSQL FTS（`plainto_tsquery('simple', ...)`）与 pgvector 精确检索独立排名，使用固定 `k=60` 的 RRF 融合，稳定并列规则为 `(source_id, version_id, ordinal)`；结果去重且顺序可复现；query ≤512 字符、limit 1–50、filters 只允许 `root_keys/media_types/source_ids`。向量距离只在 MATERIALIZED 的活动版本 identity 匹配集上计算；配置的 provider/model/dim/version 与索引不一致时不得触碰旧向量空间，安全退回 FTS 并标记 `vector_mode=disabled`。
+- Embedding：默认 `provider=none`，检索显式降级为仅 FTS 并在输出标记 `vector_mode=disabled`；`provider=ollama` 只允许回环 HTTP，个人正文绝不发往远程服务；为保证一小时 BUILDING 租约，串行 Ollama embedding 每批最多 16 条并在批次间 heartbeat；向量语句批按实际 JSON（含向量字面量）计入帧预算。测试使用的确定性 hash 向量明确标记为测试替身，不代表生产语义 embedding。
+
+### 14.4b 独立验收修复（第二轮，2026-09-17）
+
+第一轮独立验收发现的 6 项 P1 + 2 项 P2 已修复，均有真实 PostgreSQL / 真实 Worker 反例：
+
+- **数据代理越权**：`forbidden_relations` 现在同时传入 execute、transaction 与 migration 三条路径；`test_transaction_and_migration_cannot_touch_core_tables` 证明 `SELECT/ALTER tasks` 与迁移文件中的 `ALTER TABLE tasks` 被拒绝且 `tasks` 未被修改、迁移 ledger 未登记。
+- **授权根即时边界**：`search` 总是把当前授权 root key 并入查询过滤（调用方提供的 root 过滤只做交集，越权/已移除 root 立即返回空）；`reconcile` 读取全部 source，将不再授权的 root 的 source 删除并写 tombstone，不依赖该 root 是否被扫描。反例：`test_removed_root_is_immediately_unsearchable_and_reconciled`。
+- **首次构建失败可重试**：增量差异把 `active_version IS NULL` 视为必须重建；`test_first_build_failure_is_retried_on_the_next_scan`（注入激活失败后下一轮成功）。
+- **取消/失败清理与激活 CAS**：`_build` 捕获 `BaseException`，用抗重复取消的 shield 清理候选后重抛；reconcile 开始时只清理其他 run 遗留且超过 1 小时的 `BUILDING`。最终实现以 `built_by` 作为不可复用 owner：`fail_version` 只删匹配 owner 的 BUILDING，`activate_version` 在 `eligible` CTE 中先锁定并同时验证 source CAS、候选状态和 owner，随后才提升 READY/切换指针；被更新版本取代的旧构建失败时无 READY 副作用，也不会删除活动版本或他人候选。反例：`test_cancelled_build_leaves_no_building_rows`、`test_activation_never_destroys_another_build_candidate`、`test_same_version_cannot_be_reclaimed_or_cleaned_by_another_run`、`test_orphan_building_version_is_cleaned_up`。
+- **embedding 身份变化触发重建**：未变化文件也要比较活动版本的 extractor 名/版本与完整 embedding 身份（provider/model/dim/version），任一不同即重建；Ollama 维度在写入任何身份之前先通过 probe 学得，避免把 `dim=0` 固化。反例：`test_embedding_identity_change_rebuilds_versions`（model-a/16 → model-b/8 重建，且第二次运行 unchanged）。
+- **Ollama 本机边界**：改为 `asyncio.open_connection` 直连（stdlib），不读取任何环境代理、不跟随重定向，单一 monotonic 总 deadline 覆盖连接/写入/读取，取消时同步关闭 socket（无后台线程继续传输）。反例：`test_environment_proxies_are_never_consulted`（代理零连接）、`test_slow_trickle_respects_the_total_deadline`、`test_cancellation_closes_the_socket`。
+- **capability 授权**：`ProcessRuntimeSupervisor` 只在 Manifest 声明 `extension.data.sql` 且数据能力 `available` 时注册 `host.data.*` handler；`required` capability 不可用（未配置/内存后端）时启动/启用失败并落 `REQUIRED_CAPABILITY_UNAVAILABLE`。反例：`tests/unit/test_extension_capability_gating.py`。
+- **失效证据不携带正文**：新增 `SearchResult`；只有 `CURRENT` 结果带正文，`STALE`/`DELETED` 只返回元数据（来源、locator、旧哈希、状态）并写入 reconciliation 事件；`ContextProvider.retrieve` 只返回 `CURRENT` 证据，其余一律丢弃，没有可靠证据时返回空。反例：`test_stale_and_deleted_results_never_expose_their_body`、真实 Worker 的删除后 `retrieve` 为空。
+
+### 14.4c 第三轮完整修复（2026-09-17）
+
+- **首次 Schema 与 deadline**：execute/transaction/migrate 都在 search path 前有界创建 namespace；动态核心关系表不缓存；SDK deadline 进入 RPC 参数，数据库取消映射 `DATA_TIMEOUT`。
+- **构建 owner 与无副作用 CAS**：同一版本只允许一个 `built_by` owner，分块、激活、清理全链校验 owner；CAS 不满足时候选保持 BUILDING，活动 READY 版本及分块不变。
+- **来源与事件身份**：移动后旧路径可获得碰撞后备 source id；`knowledge_sources.generation` 每次成功激活/移动单调递增并进入事件幂等键，A→B→A→B 每次真实转换都产生事件，删除/重建通过 tombstone 延续 generation。
+- **有界大文件管线**：超长单行与大 PDF 页拆成可复算 locator 片段；embedding 每批最多 512 条，数据库 transaction 同时按条数和估算 UTF-8 字节限批，任何受支持大小的单个文件不会仅因批次上限失败。
+- **向量与 Ollama 协议**：向量查询精确绑定活动版本 embedding identity；Content-Length 截断/流读取不完整统一为 `EMBEDDING_PROTOCOL_ERROR`，配置阶段只接受合法 loopback HTTP URL。
+- 反例：`test_execute_before_migration_creates_and_stays_in_its_namespace`、`test_late_core_relation_and_statement_timeout_fail_closed`、`test_same_version_cannot_be_reclaimed_or_cleaned_by_another_run`、`test_renamed_path_can_be_reused_by_a_new_source`、`test_long_single_line_within_limit_builds_and_remains_locatable`、`test_changed_embedding_identity_never_queries_old_vector_space`、`test_repeated_hash_transition_is_not_permanently_deduplicated`、`test_truncated_content_length_is_a_typed_protocol_error`。
+
+### 14.4d 第四轮完整独立审计修复（2026-09-18）
+
+- **配置与输入边界**：配置值拒绝 NaN/Infinity；Schema 校验递归检查未支持关键字，不能藏在嵌套结构中；`safe_read_bytes` 在真实读取后再次校验长度并重新解析路径，防止预检查后内容增长或链接目标变化。
+- **有界抽取**：PDF 单个 Flate 流和全部页面解码后的聚合字节都有独立硬上限，压缩炸弹不能绕过源文件大小限制。
+- **来源身份与并发**：跨媒体类型重命名（如 `.txt`→`.md`）必须因 extractor/media type 变化重建；陈旧并发 move 不能重复推进 generation 或写事件。
+- **数据适配器活性与隔离**：首次向量类型 Schema 发现复用当前事务连接，单连接池不会自锁；namespace advisory lock 超时转 `DATA_TIMEOUT`；迁移不能以 `SET LOCAL search_path` 把未限定对象写入核心 Schema。
+- 主要反例：`test_read_limit_is_checked_after_actual_read`、`test_pdf_total_decoded_page_bytes_are_bounded`、`test_cross_media_rename_rebuilds_with_the_new_extractor`、`test_concurrent_stale_move_is_side_effect_free`、`test_vector_schema_discovery_does_not_require_a_second_connection`、`test_namespace_lock_timeout_is_typed`、`test_migration_cannot_override_search_path`。
+
+### 14.4e 第五轮修复后自审计（2026-09-18）
+
+- **配置存储再审计**：直接存储路径也执行严格 JSON、文件大小与非有限数值检查；同扩展并发保存串行且临时文件唯一；Supervisor 对已有非空配置按当前安装版本 Schema 再验证后才启动。
+- **版本租约与 CAS 再审计**：激活/移动/删除绑定完整来源快照；删除本身消耗 generation；BUILDING 增加 `heartbeat_at`，构建批次续租，清理只回收真正过期 owner。
+- **事件一致性再审计**：`EventSource.poll` 与 reconciliation 共用同一差异规则；rename 只发 MOVED；re-add 从 tombstone generation 延续；旧路径复用使用碰撞后备 identity；提前到达的 modified 事件以观察哈希与 reconcile 去重。
+- **RPC/数据库预算再审计**：向量 transaction 按实际 JSON 字节流式分批；参数嵌套深度 ≤32；所有非有限数值拒绝；execute/transaction 聚合结果 ≤512 KiB。
+- **迁移与抽取再审计**：迁移文件只读取一次，校验的同一字节随后执行；安全语句拆分后逐条应用白名单；PDF 聚合解压上限覆盖多页累计。
+- 最终证据：`./scripts/test.ps1` 为 `597 passed, 81 skipped`，Ruff/Mypy（166 files）通过；`./scripts/test-postgres.ps1` 为 `81 passed`（PostgreSQL 17.11 + pgvector，含真实 Worker）；`pip check`、`git diff --check` 通过。扩展迁移 SHA-256 为 `0f8758f97cce7206ac0b5cd4aa159f1b7b43de79cf1fa77a811a67f8aecd759d`，核心 `0001`–`0005` 未改。
+
+### 14.5 授权根与路径安全
+
+- 根目录来自通用配置；每个根必须存在且是目录，多个根不得互相包含（避免重复索引），最多 16 个。
+- 读取前解析真实路径：拒绝绝对路径、Windows 盘符、`..`、根外符号链接/junction、大小写绕过；遍历时不跟随链接/junction，隐藏目录默认跳过（`include_hidden` 可显式开启）。
+- 源文件只读：索引过程读取文件内容与元数据，但绝不写入、重命名、修改时间戳或权限；系统生成内容只写入扩展 Schema 与受管扩展目录。
+
+### 14.6 有意未实现（不得描述为 F05 已交付）
+
+- 宿主在 enable/upgrade 阶段自动执行 `MigrationProvider`：F05 由扩展在工作调用中通过通用数据能力触发迁移；`migration.list` 仍用于安装契约校验。
+- OS 级文件监听（Windows `ReadDirectoryChangesW`/watchdog 属 F09）：`EventSource.poll` 是轮询式增量检测，正确性由 reconciliation 保证。
+- 未创建 HNSW/IVFFlat 向量索引：pgvector 无法为无维度约束列建索引，当前为精确检索；固定单一本地模型后可另加维度特定索引。
+- 真实远程 embedding 与语义向量质量验收、PWA Schema 表单渲染、永久 purge（保持 501）、smail/ehall/Web Push（F06+）。

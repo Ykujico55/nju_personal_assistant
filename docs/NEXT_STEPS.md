@@ -1,8 +1,8 @@
 # 实现接力清单
 
-本清单把详细设计拆成较小、可独立验收的工作包。状态只允许 `TODO / IN_PROGRESS / DONE / BLOCKED`。后续模型一次领取一个任务，完成后在本文件写入测试命令和结果。
+本清单把详细设计拆成较小、可独立验收的工作包。状态只允许 `TODO / NEXT / IN_PROGRESS / DONE / BLOCKED`。后续模型一次领取一个任务，完成后在本文件写入测试命令和结果。
 
-简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01、F02、F03 已通过最终复验；F04 已实现并保持 `IN_PROGRESS`，等待独立验收；F05 保持 `WAITING`，不得并行或提前开始。
+简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01–F05 已通过最终复验并标记 `DONE`；F06 是唯一 `NEXT`，尚未开始；F07+ 保持 `TODO`，不得提前开始。
 
 ## 基架状态
 
@@ -12,7 +12,9 @@
 | F01 | DONE | 迁移运行器 + 真实 PostgreSQL 仓储/队列/outbox/审计/扩展状态适配器 + composition root 与启动生命周期 | 最终复验：`./scripts/test-postgres.ps1` 24 passed；`./scripts/test.ps1` 44 passed、24 skipped；Ruff/Mypy/`pip check`/`git diff --check` 通过；旧库 checkpoint 续写、Extension 完整回填、PostgreSQL Gateway 四类终态和内存审批单次消费均独立验证通过 |
 | F02 | DONE | Extension Supervisor、确认屏障、每版本 venv/Worker、生命周期、Admin API/CLI、操作持久化与恢复 | 六轮独立审计通过；`./scripts/test.ps1` 153 passed、28 skipped；`./scripts/test-postgres.ps1` 28 passed；F02 相关集合 110 collected；Ruff/Mypy/`pip check`/`git diff --check` 与 wheel 内容核验通过 |
 | F03 | DONE | Cloudflare Access JWT 验证、JWKS 缓存/轮换、public/Admin/health 边界回归 | 三轮独立验收通过；前两轮 6+2 项缺陷均修复并补反例；F03 目标集合 124 passed；`./scripts/test.ps1` 269 passed、28 skipped；PostgreSQL 28 passed；Ruff/Mypy/`pip check`/`git diff --check`、手工轮换复现与 wheel 内容核验通过 |
-| F04 | IN_PROGRESS | 真实本地/远程模型适配器、canonical 披露许可（持久 + 内存）、迁移 0005、`PA_MODEL_*` 配置、public 披露接口 | 两轮自我审查 16 项与第三至七轮验收修复后目标集合 161 passed；`./scripts/test.ps1` 409 passed、37 skipped；`./scripts/test-postgres.ps1` 37 passed（F01 24 + F02 4 + F04 9）；Ruff/Mypy（150 files）/`pip check`/`git diff --check` 通过；wheel 含模型模块、许可模块与 0005 迁移；等待独立验收 |
+| F04 | DONE | 真实本地/远程模型适配器、canonical 披露许可（持久 + 内存）、迁移 0005、`PA_MODEL_*` 配置、public 披露接口 | 两轮自我审查 16 项与第三至七轮验收修复后目标集合 161 passed；`./scripts/test.ps1` 409 passed、37 skipped；`./scripts/test-postgres.ps1` 37 passed（F01 24 + F02 4 + F04 9）；Ruff/Mypy（150 files）/`pip check`/`git diff --check` 通过；wheel 含模型模块、许可模块与 0005 迁移；独立验收通过 |
+| F05 | DONE | 个人知识扩展：授权目录扫描、Markdown/TXT/PDF 抽取、版本化索引、PostgreSQL FTS + pgvector 混合检索、可验证引用、删除传播；通用宿主数据能力与扩展配置通道 | 完整独立审计和修复后自审计通过；全量 597 passed、81 skipped；PostgreSQL/真实 Worker 81 passed；其余证据见下方 F05 章节 |
+| F06 | NEXT | smail 扩展：IMAP 读取、草稿、R2 SMTP 发送与对账 | 尚未开始，只允许下一位 Agent 领取本项 |
 
 F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基架；后续任务应替换端口适配器或新增业务扩展。当前任务进入 `QUEUED` 后不会被假 Worker 消费，这是有意的 fail-closed 行为。
 
@@ -120,7 +122,7 @@ F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基�
 
 禁区：增加应用内密码/MFA 并声称消除被盗 Access 会话风险。
 
-### F04 — 模型适配器与披露许可（IN_PROGRESS，等待独立验收）
+### F04 — 模型适配器与披露许可（DONE，独立验收通过）
 
 范围：为现有 `ModelRouter`、字段分类、精确 disclosure consent 和本地回退策略实现真实本地/远程模型适配器与持久 consent receipt。
 
@@ -167,12 +169,13 @@ F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基�
   ① 接收端检查与发送之间的竞态：Router 现在在授权返回后、调用 provider 前再次复核 fingerprint（授权期间改指向即 `DisclosureDenied`、零调用）；内置适配器在 `complete()` 进入且尚未 `await` 时捕获请求级 `RecipientIdentity`，URL、payload model 与输出身份全程使用该快照，凭据解析期间替换 `_recipient` 不会改变发送目标或记录身份（`test_recipient_change_during_authorization_is_denied`、`test_recipient_snapshot_is_pinned_across_credential_awaits`）；
   ② 字段规范化曾被 duck field 的 `__eq__` 跳过：现规范化元组无条件写回，可变 duck 对象不会在许可绑定后继续存活（`test_field_with_lying_equality_is_still_copied`，契约测试禁止 `!= self.fields`）；
   ③ 非可迭代 `fields`（`None`/`123`）与字段属性访问异常统一安全归一为无链 `ValidationError`，不再抛裸 `TypeError`/`AttributeError`（`test_malformed_field_components_are_rejected`）。
+- **独立验收结果（2026-09-17，通过）**：第七轮定向反例（接收端授权期间竞态、duck `__eq__` 绕过字段绑定、非可迭代 `fields`）均通过复验；F04 目标集合 `161 passed`；`./scripts/test.ps1` `409 passed, 37 skipped`；`./scripts/test-postgres.ps1` `37 passed`；Ruff、Mypy、`pip check`、`git diff --check` 通过；`0001`–`0005` checksum 与报告一致，旧迁移未改动。
 - **逐项反例映射**：SECRET 本地/远程/回退 0 次 provider 调用（`test_secret_is_blocked_before_consent_lookup_on_every_path`、`test_secret_is_denied_even_for_local_provider`、适配器 `test_adapter_refuses_secret_fields_before_sending`、`test_local_adapter_refuses_secret_fields_before_sending`）；未授权敏感字段不外发（`test_remote_requires_persisted_consent`）；provider/purpose/值/分类/来源变化失效（`test_binding_changes_invalidate_persisted_consent`、`test_digest_is_order_independent_and_binds_every_component`）；过期/撤销拒绝（`test_expired_and_revoked_consents_are_denied`、`test_revoke_is_terminal_and_replay_safe`）；重启与 Container 重建后可用（`test_container_rebuild_keeps_persisted_consent_usable`）；幂等重放与冲突（`test_confirm_is_idempotent_and_conflicts_on_new_content`、`test_idempotency_conflict_on_changed_content`、`test_concurrent_connections_cannot_create_conflicting_consents`）；并发唯一（PostgreSQL 集成测试）；无原文泄漏（`test_audit_records_binding_without_sensitive_values_or_credentials`、`test_raw_values_never_reach_consent_tables`、`test_preview_never_contains_raw_values`）；HTTP 超时/慢速/畸形/超限/取消类型化且关闭流（`test_slow_response_times_out_and_closes_stream`、`test_oversized_response_is_rejected_and_stream_closed`、`test_cancellation_propagates_and_closes_stream`、`test_malformed_and_incomplete_responses_are_protocol_errors`）；远程失败不改投（`test_remote_failure_never_falls_back_to_another_provider`、`test_provider_is_never_retried_silently`）；显式本地回退与 SECRET 复核（`test_fallback_only_on_missing_consent_and_must_be_local`、`test_default_fallback_comes_from_constructor_configuration`）；工具样式输出不执行（`test_tool_style_model_output_is_text_not_execution`）；依赖方向（`test_core_and_domain_never_import_http_or_vendor_sdks`、`test_router_never_executes_tools_or_touches_gateways`）；旧迁移不变（`test_frozen_migration_files_are_byte_identical`、`test_upgrade_from_0004_adds_only_0005_and_keeps_old_checksums`）；wheel（`test_0005_is_registered_for_wheel_packaging` + 手工解包核验）。
 - **未实现（不得当作已完成）**：Windows Credential Manager 等真实宿主凭据后端（F09；当前 fail-closed 占位，生产远程调用会以 `MODEL_CREDENTIAL_UNAVAILABLE` 失败）；真实厂商端到端（无真实凭据，只有运行时 HTTP transport 协议测试，不能宣称厂商 E2E 通过）；Embedding/结构化输出；PWA 披露界面与 Agent 模型调用编排（F08/后续）；模型调用 HTTP 路由。
 - **剩余风险**：许可 TTL 内被盗的 Access/浏览器会话可继续使用既有许可（与 R2 审批共享的产品边界）；SSE/审计只记录摘要，无法从审计重建被披露内容（有意的隐私取舍）；`model_disclosure_commands` 永久保留命令指纹（不含原文）；本机 Admin 进程重启会丢弃未确认预览（预览无状态，重新生成即可）。
 - **失败红线复核**：SECRET/D3 未到达任何适配器（路由器 + 适配器双重拒绝，反例断言 provider 调用次数为 0）；无许可不向远程发送 PERSONAL/SENSITIVE；许可记录不含敏感原文；API key 只在 `resolve_for_broker` 返回值中短暂存在，不进入请求体/日志/异常/数据库/审计/fixture；未修改 0001–0004；远程失败不改投；模型输出不执行工具；production 不自动使用内存许可存储；未删除或弱化任何测试。
 
-### F05 — 个人知识扩展（TODO）
+### F05 — 个人知识扩展（DONE，完整独立审计与修复后自审计通过）
 
 范围：增量扫描、内容哈希、抽取、PostgreSQL FTS + pgvector、证据引用、删除传播。
 
@@ -184,7 +187,35 @@ F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基�
 
 禁区：把向量库当唯一副本；把个人正文提交 Git。
 
-### F06 — smail 扩展（TODO）
+#### 架构缺口清单（实现前检查，2026-09-17）
+
+1. **扩展配置通道缺失**：`RuntimeContext.non_secret_config` 生产路径恒为空，无配置存储与注入。F05 新增通用 `ExtensionConfigStore` + `FileExtensionConfigStore` + Admin `GET/PUT /admin/v1/extensions/{id}/config`，由 `ProcessRuntimeSupervisor` 在 handshake 时注入；核心无 `personal.knowledge` 分支。
+2. **扩展迁移未执行**：宿主只校验 `migration.list` 数量，没有 `ext_*` 迁移执行入口。F05 新增通用迁移机制：扩展通过 `host.data.migrate` 提交 `{version, path, checksum, description}`，宿主在已安装 payload 内解析、校验 SHA-256、经语句守卫后执行，并在扩展自有 Schema 内登记 `extension_data_migrations`（命名空间 advisory lock 串行化，批次单事务）。
+3. **无数据库访问通道**：Worker 不能拿连接串/密码。F05 新增全双工 stdio（worker→宿主请求）与通用数据代理 `host.data.execute/transaction/migrate`：单语句守卫、参数/超时/行数上限、`search_path` 只含扩展 Schema + pgvector 类型 Schema + `pg_catalog`，并动态拒绝核心表未限定引用。`PA_STORAGE_BACKEND=memory` 时 fail closed。
+4. **无 embedding 通道**：F04 只交付聊天模型。F05 在扩展内定义 `EmbeddingProvider` 端口与身份（provider/model/dim/version），默认 `none` 显式降级为仅 FTS；`ollama` 仅允许回环 HTTP；测试用确定性 hash 替身并明确标注非语义模型；身份随版本持久化，变化触发重建。
+
+#### 交付与证据（2026-09-18，已标 DONE）
+
+- **扩展制品**：`extensions/personal_knowledge`（Manifest + 4 个 JSON Schema + 扩展自有迁移 `migrations/0001_knowledge_index.sql` + `src/personal_knowledge/*`），工具风险仅 `READ`/`INTERNAL_WRITE`，无 `EXTERNAL_WRITE`。
+- **SDK 兼容新增**：`HostDataClient`、`RuntimeContext.host_data`、`MigrationDescriptor.path`、`HostBroker`/`HostCapabilityError`、`rpc.decode_frame`；全双工宿主客户端在请求 id 不匹配时仍破坏流，未配置 `host_handler` 时返回 `DATA_UNAVAILABLE` 且流可用。
+- **通用宿主能力**：`core/extensions/data_access.py`（守卫与协议）、`core/extensions/config.py`（JSON-Schema 子集校验与配置端口）、`infrastructure/database/extension_data.py`（真实执行 + 迁移 + 绑定校验）、`infrastructure/extensions/config_store.py`、`infrastructure/memory/extension_data.py`（fail closed）。
+- **扩展能力**：路径安全（拒绝 `..`/绝对路径/盘符/根外符号链接与 junction/大小写绕过；遍历不跟随链接；只读）、Markdown/TXT/PDF 抽取与稳定 locator、SHA-256 版本化分块、`active_version` 原子切换、RRF 融合、引用复核与删除传播、`EventSource` 轮询式变更检测 + `reconcile` 计划。
+- **契约文档**：`CONTRACTS_AND_INTERFACES.md` 第 14 节（contract v1.5）逐项冻结上述语义；`tests/contract/test_f05_contract_consistency.py` 锁定槽位/风险/依赖方向/迁移历史/文档表述。
+- **独立验收修复（第二轮，2026-09-17，最终复验通过）**：独立验收提出 6 项 P1 + 2 项 P2，全部先补真实反例再修复：① `forbidden_relations` 统一进入 execute/transaction/migrate 三条路径（真实 PostgreSQL 证明 `SELECT/ALTER tasks` 与恶意迁移被拒绝且核心表未变、ledger 未登记）；② 授权根成为即时查询边界并删除已移除根（`search` 强制 root 交集、`reconcile` 读取全部 source 并 tombstone 未授权根）；③ `active_version IS NULL` 强制重试首次失败的构建；④ 取消/失败统一 shield 清理候选、reconcile 清理孤立 `BUILDING`，最终由第三轮收紧为 owner 绑定且 CAS 资格检查先于 READY 提升；⑤ 增量差异纳入 extractor 与完整 embedding 身份，Ollama 维度先 probe 再持久化；⑥ Ollama 改为 `asyncio.open_connection` 直连（无环境代理、无重定向、单调总 deadline、取消即关闭）；⑦ capability 授权门（未声明/不可用即拒绝 enable，`REQUIRED_CAPABILITY_UNAVAILABLE`）；⑧ `SearchResult` 只让 `CURRENT` 携带正文，STALE/DELETED 仅元数据且 `retrieve` 只返回 CURRENT。反例见 `tests/integration/test_postgres_f05.py` 的 acceptance counterexamples 段落、`tests/unit/test_extension_capability_gating.py`、`tests/unit/test_knowledge_embedding.py` 的代理/滴流/取消测试。
+- **第三轮完整修复（2026-09-17，最终复验通过）**：针对再次审计的 8 项缺陷逐项补反例并修复：① execute/transaction/migrate 在设置 `search_path` 前以有界 advisory lock 创建专属 Schema，避免首次 DDL 落入 pgvector 所在 `public`，核心关系禁表每次请求刷新；② worker SDK 把 deadline 写入请求参数，数据库 statement timeout 统一映射 `DATA_TIMEOUT`；③ `begin_version` 不再覆盖既有 READY/他人 BUILDING，同一 `built_by` owner 贯穿 chunk 写入、无副作用 CAS 激活和失败清理；④移动后重用旧路径时稳定选择碰撞后备 source id；⑤向量查询只在 MATERIALIZED identity 匹配集上计算距离，模型/维度漂移在 reconcile 前安全退回 FTS；⑥超长单行/大 PDF 页使用可复算字符 locator 分片，embedding ≤512 条/批，数据库帧按字节有界批处理；⑦ Ollama 截断 Content-Length 转 `EMBEDDING_PROTOCOL_ERROR`；⑧ source generation 进入事件幂等键，重复真实转换不再永久丢事件。新增真实 PostgreSQL 反例覆盖 namespace、动态核心表、timeout、owner、路径复用、长单行、identity 漂移与重复事件。
+- **迁移**：F05 未新增核心迁移（`0001`–`0005` 未改动，checksum 由契约测试锁定）；扩展自有迁移 `extensions/personal_knowledge/migrations/0001_knowledge_index.sql`，SHA-256 `0f8758f97cce7206ac0b5cd4aa159f1b7b43de79cf1fa77a811a67f8aecd759d`，由宿主在扩展 `ext_*` Schema 内执行并登记 `extension_data_migrations`。
+- **制品核验**：`pip wheel . --no-deps --no-build-isolation` 产出框架 wheel（171 个条目），含 `core/extensions/{data_access,config,rpc}.py`、`infrastructure/database/extension_data.py`、`infrastructure/extensions/config_store.py`、`memory/extension_data.py`、`personal_assistant_sdk/host.py`、PWA、config 与 `0001`–`0005` 全部迁移，且不含任何 `personal_knowledge`/`extensions/` 条目；扩展以独立 zip 制品（`extension.toml` 位于制品根）经真实 Supervisor 完成 install → enable → reindex → search → uninstall 烟测（自动化测试 `test_zip_artifact_installs_and_serves`）。注：Python wheel 形式的扩展包会把 manifest 放在 `.data/data/` 下，不满足 Supervisor 的“manifest 位于制品根”要求，因此制品格式为目录或 zip。
+- **失败/原子性反例**：注入抽取器故障后旧活动版本仍可查询、无 BUILDING 残留、下次 reconciliation 成功切换（`test_build_failure_keeps_old_version_queryable`）；手工插入的半成品版本对查询不可见（`test_building_version_is_invisible_to_queries`）；并发 reconciliation 收敛为每来源唯一活动版本（`test_concurrent_reconciliation_converges`）；删除后分块/版本/tombstone 语义与检索为空（`test_delete_removes_content_and_keeps_minimal_tombstone`）；引用在源文件变化后为 STALE、删除后为 DELETED（`test_stale_citation_after_change_is_not_current`、`test_worker_retrieve_marks_deleted_sources`）；索引过程不修改源文件（`test_indexing_never_modifies_source_files`）；越界符号链接不被索引（`test_out_of_root_symlink_is_never_indexed`）。
+- **黄金查询集**：合成语料 9 个文件、12 条查询，FTS-only 与（确定性测试替身）混合模式均 `Recall@5 ≥ 0.90`，所有返回引用的 locator 切片与源文件逐字一致、哈希匹配（`test_golden_query_set_recall_and_citations`）；无证据查询返回 `unknown=true`（`test_search_is_unknown_without_evidence`）。
+- **第四轮完整独立审计（8 组缺陷）**：① 配置校验拒绝非有限数值与隐藏在未支持结构内的 Schema 关键字；② 文件实际读取和 PDF Flate/页面聚合解压均在读后再次执行硬字节上限；③ `.txt`↔`.md` 跨媒体类型移动触发抽取器身份重建；④并发陈旧移动不能重复推进 generation/事件；⑤数据适配器首次向量 Schema 探测复用当前连接，不在单连接池内自锁；⑥ namespace advisory lock 超时统一类型化；⑦迁移禁止通过 `SET LOCAL search_path` 越权；⑧反例覆盖上述路径并在真实 PostgreSQL 上复验。
+- **第五轮修复后自审计（严格同级）**：继续发现并修复配置存储严格 JSON/大小/并发替换、启动时按当前版本 Schema 复核、路径读后重新解析、来源激活/删除完整快照 CAS、删除消耗 generation、长构建 heartbeat 租约、事件轮询与 reconciliation 共享 rename/re-add/dedupe 语义、向量 JSON 帧与数据库结果总字节限制、参数深度/非有限值、迁移单次校验读取与逐语句白名单、PDF 页面聚合解压上限。修复后再次执行目标、全量、PostgreSQL/Worker、静态与制品验证。
+- **最终命令证据（第五轮审计后）**：`./scripts/test.ps1` → `597 passed, 81 skipped`，Ruff `All checks passed!`，Mypy `Success: no issues found in 166 source files`；`./scripts/test-postgres.ps1` → `81 passed`（PostgreSQL 17.11 + pgvector，含真实 Worker）；`python -m pip check` 与 `git diff --check` 通过。
+
+未实现（有意）：宿主在 enable 时自动执行 MigrationProvider（当前由扩展经数据能力触发）；OS 级文件监听（F09）；无维度约束向量列的 HNSW 索引（当前精确检索）；真实远程 embedding 与语义向量质量验收；PWA Schema 表单渲染（F08）；永久 purge 仍 501。
+
+剩余风险：本机进程创建延迟会影响 F02 既有的亚秒级 RPC 计时测试（与 F05 代码无关，环境负载敏感）；`plainto_tsquery('simple')` 对无空格中文长句只能整句匹配（黄金查询集使用词边界清晰的内容）；向量维度未约束时无法建 ANN 索引，规模上限依赖精确检索。
+
+### F06 — smail 扩展（NEXT，未开始）
 
 范围：IMAP SSL 轮询、UIDVALIDITY/UID 去重、线程历史、草稿、受控 SMTP SSL 发送及对账。
 

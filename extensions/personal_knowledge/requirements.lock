@@ -1,0 +1,4 @@
+# This extension has no third-party runtime dependencies.
+# PDF text extraction, hashing and the loopback embedding client use only the
+# Python standard library; the host SDK is installed by the extension supervisor
+# from its trusted SDK wheel.

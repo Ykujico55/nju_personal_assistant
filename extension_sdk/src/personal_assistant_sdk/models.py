@@ -6,11 +6,20 @@ resources; they intentionally expose neither credentials nor absolute host paths
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from enum import Enum, StrEnum
 from types import UnionType
-from typing import Any, Union, cast, get_args, get_origin, get_type_hints
+from typing import (
+    Any,
+    Protocol,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+    runtime_checkable,
+)
 
 JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 
@@ -63,6 +72,43 @@ class CapabilityHandle:
     expires_at: str
 
 
+@runtime_checkable
+class HostDataClient(Protocol):
+    """Generic host-owned data capability.
+
+    The host brokers every statement; extensions never receive database
+    credentials, connection strings or absolute host paths.  Statements are
+    executed against the extension's own ``ext_*`` namespace under host-defined
+    guards, and migrations are applied from the installed payload with checksum
+    verification.  This is a convenience boundary for trusted extension code,
+    not a hostile-code sandbox.
+    """
+
+    async def execute(
+        self,
+        statement: str,
+        parameters: Sequence[JsonValue] = (),
+        *,
+        timeout_seconds: float = 30.0,
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def transaction(
+        self,
+        statements: Sequence[Mapping[str, JsonValue]],
+        *,
+        timeout_seconds: float = 60.0,
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def migrate(
+        self,
+        migrations: Sequence[Mapping[str, JsonValue]],
+        *,
+        timeout_seconds: float = 60.0,
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def aclose(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeContext:
     protocol_version: str
@@ -72,6 +118,7 @@ class RuntimeContext:
     manifest_schema_hash: str = ""
     non_secret_config: Mapping[str, JsonValue] = field(default_factory=dict)
     capability_handles: tuple[CapabilityHandle, ...] = ()
+    host_data: HostDataClient | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +269,7 @@ class MigrationDescriptor:
     version: int
     checksum: str
     description: str
+    path: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

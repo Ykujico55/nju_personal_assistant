@@ -21,6 +21,8 @@ from personal_assistant.core.extensions import (
     ExtensionRegistry,
     ExtensionSupervisorService,
 )
+from personal_assistant.core.extensions.config import ExtensionConfigStore
+from personal_assistant.core.extensions.data_access import ExtensionDataAccess
 from personal_assistant.core.extensions.lifecycle import (
     ExtensionDataStore,
     InstallCoordinator,
@@ -40,12 +42,14 @@ from personal_assistant.core.tasks.service import EventStreamPort
 from personal_assistant.infrastructure.database import (
     PostgresAdapterConfig,
     PostgresAdapters,
+    PostgresExtensionDataAccess,
     PostgresExtensionOperationStore,
     PostgresVersionCatalog,
     build_postgres_adapters,
 )
 from personal_assistant.infrastructure.extensions import (
     CompatibleVersionOperator,
+    FileExtensionConfigStore,
     LocalArtifactStager,
     PostgresExtensionDataStore,
     ProcessContractVerifier,
@@ -65,6 +69,7 @@ from personal_assistant.infrastructure.memory import (
     InMemorySideEffectOutbox,
     InMemoryTaskRepository,
     InMemoryVersionCatalog,
+    UnavailableExtensionDataAccess,
 )
 from personal_assistant.infrastructure.models import (
     OllamaChatProvider,
@@ -94,6 +99,7 @@ class Container:
     audit_writer: AuditWriterPort
     side_effect_outbox: SideEffectOutboxPort
     lifecycle_store: LifecycleStore
+    extension_config_store: ExtensionConfigStore
     disclosures: DisclosureConsentService
     model_router: ModelRouter | None
 
@@ -198,12 +204,16 @@ def _build_supervisor(
     operations: ExtensionOperationStore,
     version_catalog: VersionCatalog,
     data_store: ExtensionDataStore,
+    data_access: ExtensionDataAccess,
+    config_store: ExtensionConfigStore,
 ) -> ExtensionSupervisorService:
     stager = LocalArtifactStager(_staging_and_install_roots(settings)[0])
     installer = VenvArtifactInstaller(
         install_root=_staging_and_install_roots(settings)[1], stager=stager
     )
-    runtime = ProcessRuntimeSupervisor()
+    runtime = ProcessRuntimeSupervisor(
+        data_access=data_access, config_store=config_store
+    )
     coordinator = InstallCoordinator(stager, installer, ProcessContractVerifier(), store)
     manager = LifecycleManager(
         store,
@@ -236,6 +246,7 @@ def _build_postgres_container(
     disclosures = DisclosureConsentService(
         adapters.disclosure_consents, recipients=_remote_recipients(providers)
     )
+    config_store = FileExtensionConfigStore(settings.extension_root / "config")
     return Container(
         settings=settings,
         tasks=TaskService(
@@ -254,6 +265,8 @@ def _build_postgres_container(
             operations=operations,
             version_catalog=PostgresVersionCatalog(adapters.database),
             data_store=PostgresExtensionDataStore(adapters.database),
+            data_access=PostgresExtensionDataAccess(adapters.database),
+            config_store=config_store,
         ),
         bundled_extensions_root=_bundled_extensions_root(),
         jobs=adapters.job_queue,
@@ -265,6 +278,7 @@ def _build_postgres_container(
         audit_writer=adapters.audit_writer,
         side_effect_outbox=adapters.side_effect_outbox,
         lifecycle_store=adapters.lifecycle_store,
+        extension_config_store=config_store,
         disclosures=disclosures,
         model_router=_build_model_router(
             settings,
@@ -291,6 +305,7 @@ def _build_memory_container(
     disclosures = DisclosureConsentService(
         InMemoryDisclosureConsentStore(), recipients=_remote_recipients(providers)
     )
+    config_store = FileExtensionConfigStore(settings.extension_root / "config")
     return Container(
         settings=settings,
         tasks=TaskService(
@@ -308,6 +323,8 @@ def _build_memory_container(
             operations=operations,
             version_catalog=InMemoryVersionCatalog(),
             data_store=InMemoryExtensionDataStore(),
+            data_access=UnavailableExtensionDataAccess(),
+            config_store=config_store,
         ),
         bundled_extensions_root=_bundled_extensions_root(),
         jobs=queue,
@@ -319,6 +336,7 @@ def _build_memory_container(
         audit_writer=audit,
         side_effect_outbox=InMemorySideEffectOutbox(approvals),
         lifecycle_store=lifecycle_store,
+        extension_config_store=config_store,
         disclosures=disclosures,
         model_router=_build_model_router(
             settings,

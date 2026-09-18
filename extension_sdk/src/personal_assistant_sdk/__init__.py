@@ -4,6 +4,7 @@ Business extensions may import this package.  They must not import
 ``personal_assistant.core`` or any infrastructure package from the host.
 """
 
+from .host import HostBroker, HostCapabilityError
 from .models import (
     ArtifactHandle,
     CapabilityHandle,
@@ -17,6 +18,7 @@ from .models import (
     ExtensionInfo,
     FormSchemaDescriptor,
     HealthReport,
+    HostDataClient,
     InvocationContext,
     MigrationDescriptor,
     NotificationRequest,
@@ -65,6 +67,9 @@ __all__ = [
     "FormSchemaDescriptor",
     "FormSchemaProvider",
     "HealthReport",
+    "HostBroker",
+    "HostCapabilityError",
+    "HostDataClient",
     "InvocationContext",
     "MigrationDescriptor",
     "MigrationProvider",

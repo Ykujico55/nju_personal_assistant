@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import unittest
 
+from personal_assistant_sdk.host import HostBroker
 from personal_assistant_sdk.rpc import (
     RpcProtocolError,
     RpcRequest,
+    RpcResponse,
     decode_request,
     encode_frame,
 )
@@ -22,6 +25,28 @@ class SdkRpcTests(unittest.TestCase):
             decode_request(frame, max_bytes=10)
 
 
+class HostBrokerTimeoutContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_data_deadline_is_sent_to_the_host_as_well_as_applied_locally(self) -> None:
+        frames: list[dict[str, object]] = []
+        broker: HostBroker
+
+        async def write_frame(frame: bytes) -> None:
+            body = json.loads(frame)
+            frames.append(body)
+            broker.resolve(RpcResponse(id=str(body["id"]), result={"rows": [], "rowcount": 0}))
+
+        broker = HostBroker(write_frame)
+        await broker.execute("SELECT 1", timeout_seconds=1.25)
+        await broker.transaction(
+            [{"statement": "SELECT 1", "parameters": []}], timeout_seconds=2.5
+        )
+        await broker.migrate([], timeout_seconds=3.75)
+
+        self.assertEqual(
+            [1.25, 2.5, 3.75],
+            [frame["params"]["timeout_seconds"] for frame in frames],  # type: ignore[index]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
-
