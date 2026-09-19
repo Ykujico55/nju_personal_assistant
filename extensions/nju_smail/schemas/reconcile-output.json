@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "local_action_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "reconciliation": {
+      "type": "string"
+    },
+    "diagnostic_code": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "local_action_id",
+    "state",
+    "reconciliation"
+  ]
+}

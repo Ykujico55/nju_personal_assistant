@@ -1,0 +1,4 @@
+# This extension has no third-party runtime dependencies.
+# IMAP/SMTP/TLS and MIME handling use the standard library and the host mail
+# broker; the host SDK is installed by the extension supervisor from its
+# trusted SDK wheel.

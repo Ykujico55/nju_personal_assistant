@@ -25,7 +25,7 @@ $env:PA_TEST_DATABASE_URL = $DatabaseUrl
 
 Push-Location $ProjectRoot
 try {
-    & $PythonExecutable -m pytest tests/integration/test_postgres_f01.py tests/integration/test_postgres_f02.py tests/integration/test_postgres_f04.py tests/integration/test_postgres_f05.py tests/integration/test_personal_knowledge_worker_real.py -v
+    & $PythonExecutable -m pytest tests/integration/test_postgres_f01.py tests/integration/test_postgres_f02.py tests/integration/test_postgres_f04.py tests/integration/test_postgres_f05.py tests/integration/test_personal_knowledge_worker_real.py tests/integration/test_postgres_f06.py tests/integration/test_smail_worker_real.py -v
     exit $LASTEXITCODE
 } finally {
     Pop-Location

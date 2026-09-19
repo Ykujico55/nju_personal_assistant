@@ -38,6 +38,7 @@ from personal_assistant.core.extensions.lifecycle import (
     InstallationPreview,
 )
 from personal_assistant.core.extensions.operations import ExtensionOperation
+from personal_assistant.core.mail import MailAccountRecord
 from personal_assistant.infrastructure.extensions.config_store import (
     load_extension_config_schema,
 )
@@ -57,6 +58,26 @@ class InstallConfirmationRequest(BaseModel):
 
 class ConfigUpdateRequest(BaseModel):
     config: dict[str, Any]
+
+
+class MailAccountRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    account_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")
+    address: str = Field(min_length=3, max_length=320)
+    imap_host: str = Field(min_length=1, max_length=255)
+    smtp_host: str = Field(min_length=1, max_length=255)
+    secret_handle_id: str = Field(min_length=1, max_length=128)
+    imap_port: int = Field(default=993, ge=1, le=65535)
+    smtp_port: int = Field(default=465, ge=1, le=65535)
+    display_name: str = Field(default="", max_length=120)
+    read_enabled: bool = True
+    send_enabled: bool = False
+    tls_mode: str = Field(default="auto", pattern=r"^(auto|implicit|starttls)$")
+
+
+class MailAccountsUpdateRequest(BaseModel):
+    accounts: list[MailAccountRequest] = Field(default_factory=list, max_length=32)
 
 
 def _manifest_view(
@@ -84,6 +105,24 @@ def _record_view(record: ExtensionRecord) -> dict[str, object]:
         "install_path": record.install_path,
         "data_retained": record.data_retained,
         "tombstone": record.tombstone,
+    }
+
+
+def _mail_account_view(record: MailAccountRecord) -> dict[str, object]:
+    return {
+        "account_id": record.account_id,
+        "address": record.address,
+        "imap_host": record.imap_host,
+        "imap_port": record.imap_port,
+        "smtp_host": record.smtp_host,
+        "smtp_port": record.smtp_port,
+        "secret_handle_id": record.secret_handle_id,
+        "display_name": record.display_name,
+        "read_enabled": record.read_enabled,
+        "send_enabled": record.send_enabled,
+        "tls_mode": record.tls_mode,
+        "generation": record.generation,
+        "fingerprint": record.fingerprint(),
     }
 
 
@@ -202,6 +241,10 @@ def create_app(
         try:
             # A persisted ENABLED extension is restarted once; failures quarantine.
             await supervisor.recover()
+            await container.refresh_tool_registry()
+            await container.mail_ledger.recover_stale_executions(
+                active_owners=container.mail_execution_owners.active()
+            )
             yield
         finally:
             await supervisor.stop_all()
@@ -289,6 +332,49 @@ def create_app(
             "config": validated,
             "restart_required": True,
         }
+
+    @application.get("/admin/v1/mail/accounts")
+    async def mail_accounts(
+        selected: Container = Depends(get_container),
+    ) -> dict[str, object]:
+        records = await selected.mail_accounts.list()
+        return {"accounts": [_mail_account_view(record) for record in records]}
+
+    @application.put("/admin/v1/mail/accounts")
+    async def update_mail_accounts(
+        payload: MailAccountsUpdateRequest,
+        selected: Container = Depends(get_container),
+    ) -> dict[str, object]:
+        # Host-owned registry: extensions can only reference account ids, never
+        # submit endpoints or credential handles.  The local user registers the
+        # non-secret metadata and the SecretHandle id here (loopback only).
+        try:
+            records = tuple(
+                MailAccountRecord(
+                    account_id=item.account_id,
+                    address=item.address,
+                    imap_host=item.imap_host,
+                    imap_port=item.imap_port,
+                    smtp_host=item.smtp_host,
+                    smtp_port=item.smtp_port,
+                    secret_handle_id=item.secret_handle_id,
+                    display_name=item.display_name,
+                    read_enabled=item.read_enabled,
+                    send_enabled=item.send_enabled,
+                    tls_mode=item.tls_mode,
+                )
+                for item in payload.accounts
+            )
+        except ValueError as exc:
+            raise ApplicationError("INVALID_MAIL_ACCOUNT", str(exc), 422) from exc
+        try:
+            await selected.mail_accounts.replace_all(records)
+        except ValueError as exc:
+            raise ApplicationError("INVALID_MAIL_ACCOUNT", str(exc), 422) from exc
+        # The registry bumps each existing account's generation, so return the
+        # stored records rather than the pre-write request objects.
+        stored = await selected.mail_accounts.list()
+        return {"accounts": [_mail_account_view(record) for record in stored]}
 
     @application.post("/admin/v1/extensions/inspect")
     async def inspect_extension(

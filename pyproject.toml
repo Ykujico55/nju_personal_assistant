@@ -54,6 +54,7 @@ namespaces = true
   "migrations/0003_f02_operations.sql",
   "migrations/0004_f02_operation_request_scope.sql",
   "migrations/0005_f04_model_disclosure.sql",
+  "migrations/0006_f06_mail_transport.sql",
 ]
 
 [tool.pytest.ini_options]
@@ -64,6 +65,7 @@ pythonpath = [
     "extension_sdk/src",
     "extensions/example_echo/src",
     "extensions/personal_knowledge/src",
+    "extensions/nju_smail/src",
 ]
 asyncio_mode = "auto"
 

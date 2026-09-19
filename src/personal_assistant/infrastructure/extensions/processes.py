@@ -15,6 +15,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from personal_assistant.core.extensions.artifact_access import (
+    CAPABILITY_ARTIFACT_READ,
+    CAPABILITY_ARTIFACT_WRITE,
+    HOST_ARTIFACT_METHODS,
+    ExtensionArtifactAccess,
+    ExtensionArtifactContext,
+)
 from personal_assistant.core.extensions.async_utils import shield_cleanup
 from personal_assistant.core.extensions.config import (
     ExtensionConfigStore,
@@ -22,6 +29,7 @@ from personal_assistant.core.extensions.config import (
 )
 from personal_assistant.core.extensions.data_access import (
     CAPABILITY_EXTENSION_DATA,
+    HOST_DATA_METHODS,
     ExtensionDataAccess,
     ExtensionDataContext,
 )
@@ -39,9 +47,17 @@ from personal_assistant.core.extensions.rpc import (
     JsonRpcProcessClient,
     WorkerSpec,
 )
+from personal_assistant.infrastructure.mail.host import (
+    HOST_MAIL_METHODS,
+    MailCapabilityContext,
+    MailHostCapability,
+)
 
 from .config_store import load_extension_config_schema
 from .installer import venv_python
+
+MAIL_READ_CAPABILITY = "mail.read"
+MAIL_SEND_CAPABILITY = "mail.send"
 
 _ID_SLOT_METHODS = {
     "EventSource": "event_source.list",
@@ -94,6 +110,9 @@ class ProcessRuntimeSupervisor:
         max_frame_bytes: int = 4 * 1024 * 1024,
         data_access: ExtensionDataAccess | None = None,
         config_store: ExtensionConfigStore | None = None,
+        mail_capability: MailHostCapability | None = None,
+        mail_send_available: bool = False,
+        artifact_access: ExtensionArtifactAccess | None = None,
     ) -> None:
         self._handshake_timeout = handshake_timeout_seconds
         self._health_timeout = health_timeout_seconds
@@ -101,6 +120,9 @@ class ProcessRuntimeSupervisor:
         self._max_frame_bytes = max_frame_bytes
         self._data_access = data_access
         self._config_store = config_store
+        self._mail_capability = mail_capability
+        self._mail_send_available = mail_send_available
+        self._artifact_access = artifact_access
         self._workers: dict[str, ExtensionWorker] = {}
         self._start_locks: dict[str, asyncio.Lock] = {}
 
@@ -148,6 +170,12 @@ class ProcessRuntimeSupervisor:
     def _capability_available(self, capability: str) -> bool:
         if capability == CAPABILITY_EXTENSION_DATA:
             return self._data_access is not None and self._data_access.available
+        if capability in {CAPABILITY_ARTIFACT_READ, CAPABILITY_ARTIFACT_WRITE}:
+            return self._artifact_access is not None and self._artifact_access.available
+        if capability == MAIL_READ_CAPABILITY:
+            return self._mail_capability is not None and self._mail_capability.available
+        if capability == MAIL_SEND_CAPABILITY:
+            return self._mail_send_available
         return False
 
     def _require_capabilities(self, manifest: ExtensionManifest) -> None:
@@ -161,24 +189,72 @@ class ProcessRuntimeSupervisor:
             )
 
     def _host_handler(self, record: ExtensionRecord) -> HostRequestHandler | None:
-        data_access = self._data_access
-        if data_access is None or not data_access.available:
-            return None
         manifest = record.manifest
         declared = set(manifest.capabilities.required) | set(manifest.capabilities.optional)
-        if CAPABILITY_EXTENSION_DATA not in declared:
-            # The host only exposes one capability per worker when the manifest
-            # actually declares it.
+        routes: list[tuple[frozenset[str], HostRequestHandler]] = []
+        data_access = self._data_access
+        if (
+            data_access is not None
+            and data_access.available
+            and CAPABILITY_EXTENSION_DATA in declared
+        ):
+            data_context = ExtensionDataContext(
+                extension_id=manifest.id,
+                extension_version=manifest.version,
+                namespace=data_namespace(manifest.id),
+                payload_root=Path(manifest.root),
+            )
+
+            async def data_handler(
+                method: str, params: Mapping[str, Any]
+            ) -> Any:
+                return await data_access.handle(method, params, context=data_context)
+
+            routes.append((HOST_DATA_METHODS, data_handler))
+        mail_capability = self._mail_capability
+        if (
+            mail_capability is not None
+            and mail_capability.available
+            and MAIL_READ_CAPABILITY in declared
+        ):
+            mail_context = MailCapabilityContext(
+                extension_id=manifest.id, extension_version=manifest.version
+            )
+
+            async def mail_handler(
+                method: str, params: Mapping[str, Any]
+            ) -> Any:
+                return await mail_capability.handle(method, params, context=mail_context)
+
+            routes.append((HOST_MAIL_METHODS, mail_handler))
+        artifact_access = self._artifact_access
+        if (
+            artifact_access is not None
+            and artifact_access.available
+            and declared & {CAPABILITY_ARTIFACT_READ, CAPABILITY_ARTIFACT_WRITE}
+        ):
+            artifact_context = ExtensionArtifactContext(
+                extension_id=manifest.id, extension_version=manifest.version
+            )
+
+            async def artifact_handler(
+                method: str, params: Mapping[str, Any]
+            ) -> Any:
+                return await artifact_access.handle(
+                    method, params, context=artifact_context
+                )
+
+            routes.append((HOST_ARTIFACT_METHODS, artifact_handler))
+        if not routes:
             return None
-        context = ExtensionDataContext(
-            extension_id=manifest.id,
-            extension_version=manifest.version,
-            namespace=data_namespace(manifest.id),
-            payload_root=Path(manifest.root),
-        )
 
         async def handler(method: str, params: Mapping[str, Any]) -> Any:
-            return await data_access.handle(method, params, context=context)
+            for methods, route in routes:
+                if method in methods:
+                    return await route(method, params)
+            raise ExtensionOperationError(
+                "DATA_PROTOCOL_ERROR", f"host capability is not available: {method}"
+            )
 
         return handler
 

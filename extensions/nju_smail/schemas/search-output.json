@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "unknown": {
+      "type": "boolean"
+    },
+    "results": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "results"
+  ]
+}

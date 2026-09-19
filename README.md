@@ -14,6 +14,7 @@
 - Cloudflare Access 边界：公共 API 在 `PA_TRUST_CLOUDFLARE_ACCESS=true` 时验证 Access JWT（`RS256`、`kid`、issuer、audience、expiry）后建立身份，JWKS 有界缓存与受控轮换，失败 fail closed（F03 DONE，三轮独立验收通过）。
 - 模型适配器与披露许可（F04 DONE）：真实远端 OpenAI 兼容适配器与本地 Ollama 适配器（协议驱动 HTTP，无厂商 SDK，错误类型化、无静默重试、禁重定向、有界响应、总 deadline），持久化 `model_disclosure_consents` 许可（精确 provider/用途/字段摘要与不可复用接收端指纹绑定、到期/撤销、幂等重放）与 public API 的 preview/confirm/revoke 接口；SECRET 在所有模型路径硬阻断。
 - 个人知识扩展（F05 DONE，独立审计与修复后通过）：`extensions/personal_knowledge` 注册 `knowledge.file_changes`、`knowledge.retrieve`、`knowledge.search`(READ)、`knowledge.reindex`(INTERNAL_WRITE)、`knowledge.reconcile`、`knowledge.roots` 与 `knowledge.index_schema`，实现授权目录扫描、Markdown/TXT/PDF 抽取与稳定 locator、owner/心跳租约绑定的 SHA-256 版本化分块与严格来源快照 CAS、扩展自有 `ext_*` Schema、embedding identity 隔离的 PostgreSQL FTS + pgvector 混合（RRF）检索、可验证引用与删除传播。扩展不接触数据库凭据：语句经通用宿主数据能力（`host.data.execute/transaction/migrate`）在扩展 Schema 内执行；配置经通用 `GET/PUT /admin/v1/extensions/{extension_id}/config` 通道注入并在启动时按当前版本 Schema 复核。默认 `embedding.provider=none` 时显式降级为仅 FTS。
+- smail 邮件扩展（F06 DONE，六轮独立审计及补充复验通过）：`extensions/nju_smail` 提供只读 IMAP 轮询（`smail.poll_inbox`、`smail.sync`）、线程上下文（`smail.thread_history`）、检索（`smail.search` READ）、版本化草稿（`smail.prepare_reply` INTERNAL_WRITE）与受控发送（`smail.send` EXTERNAL_WRITE）；通用宿主能力 `core/mail` + `infrastructure/mail`（真实 TLS IMAP 只读客户端、显式阶段 SMTP 客户端、唯一连接建立者 `MailTransportBroker`、审批快照校验执行器 `MailSendExecutor`）与 `host.artifact.*` 制品能力。消息去重以 `(账户, 文件夹, UIDVALIDITY, UID)` 为主、`Message-ID + 规范化内容哈希` 为辅；草稿每次编辑产生新版本与新的稳定动作 ID/Message-ID；发送必须经过 Tool Gateway、R2 审批与 SideEffect Outbox，实际发送的 MIME 字节/收件人/附件哈希与审批快照一致；部分拒收保存逐收件人明细；UNKNOWN 不自动重发并由 Sent 只读对账。客户端专用密码只经 `SecretHandle` 由宿主解析，扩展不建立 IMAP/SMTP 连接；读取与发送能力独立配置（`PA_MAIL_SEND_ENABLED` + `PA_MAIL_TEST_RECIPIENTS` 受控地址 allowlist）；宿主账户注册表持有端点与凭据句柄，扩展只提交 `account_id` 与宿主计算的账户 fingerprint；注册表 generation 删除后不复用，派发期间账户变更会经可失效 guard 在连接/认证/DATA 前中止。发送结果只由宿主权威账本决定，扩展没有写入工具（`smail.send_status` 仅把宿主状态投影到本地视图）。真实 smail 账号 E2E 未执行：缺少用户账号、凭据与受控地址，当前证据为协议级模拟服务器 + 真实 TLS/socket + 真实 PostgreSQL + 真实 Worker/组合根测试。
 - CLI、单元/契约测试以及面向后续模型的任务清单。
 - 响应式 PWA 壳和 `assistantctl extension scaffold` 扩展生成器。
 
@@ -34,7 +35,7 @@ Invoke-RestMethod -Method Put -Uri http://127.0.0.1:8001/admin/v1/extensions/per
 
 个人知识扩展的索引数据位于 PostgreSQL `ext_personal_2e_knowledge` Schema，不写入核心表；源目录始终只读。
 
-Cloudflare Access JWT 验证已实现并通过三轮独立验收（F03 DONE），但 Tunnel/Tailscale 部署编排、真实 smail、ehall、Web Push 和 Windows Credential Manager **尚未实现**；它们必须作为适配器或业务扩展完成，不能用假成功替代。Windows Credential Manager（F09）完成前，生产环境的远程模型凭据后端是 fail-closed 占位（`UnavailableSecretStore`），不会静默使用内存明文；协议行为只能通过注入 HTTP transport 测试，尚未完成真实厂商端到端验证。
+Cloudflare Access JWT 验证已实现并通过三轮独立验收（F03 DONE），但 Tunnel/Tailscale 部署编排、真实 smail E2E、ehall、Web Push 和 Windows Credential Manager **尚未实现**；它们必须作为适配器或业务扩展完成，不能用假成功替代。Windows Credential Manager（F09）完成前，生产环境的远程模型凭据与邮件客户端密码后端都是 fail-closed 占位（`UnavailableSecretStore`），不会静默使用内存明文；协议行为只能通过注入 HTTP transport 或模拟邮件服务器测试，尚未完成真实厂商/邮箱端到端验证。
 
 开发模式创建的任务会可靠进入内存队列，但 Agent Worker 仍有意锁定，因此会停在 `QUEUED`。这是基架状态，不是可用的完整助理。
 
@@ -65,6 +66,8 @@ docker compose up -d postgres
 - 显式本地回退：`PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID`，必须等于已配置的本地 provider ID。
 
 敏感/个人字段发往远端模型前必须存在持久的、精确绑定 provider、用途和字段摘要的披露许可；`SECRET` 在本地、远端和回退路径全部拒绝。生产环境当前没有 Windows Credential Manager（F09），远程凭据解析会 fail closed。
+
+smail 邮件扩展的读取与发送独立配置：`PA_MAIL_SEND_ENABLED=true` 时才开放 `mail.send` 能力，且必须提供 `PA_MAIL_TEST_RECIPIENTS`（逗号分隔的受控测试地址，未登记的收件人在建立连接前被拒绝）；`PA_MAIL_MAX_MESSAGE_BYTES` 限制单封大小。账户端点、端口与 `SecretHandle` 只保存在宿主所有的邮件账户注册表（Local Admin `GET/PUT /admin/v1/mail/accounts`，仅回环）；扩展配置只能引用 `account_id`，扩展无法提交服务器地址或凭据句柄，客户端专用密码进入宿主凭据后端，绝不写入配置文件或数据库。
 
 另外两个安全边界必须单独启动：
 

@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "accounts": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object"
+      }
+    },
+    "new_messages": {
+      "type": "integer"
+    },
+    "events": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "accounts",
+    "new_messages",
+    "events"
+  ]
+}

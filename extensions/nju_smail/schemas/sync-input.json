@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "folder": {
+      "type": "string",
+      "maxLength": 255
+    },
+    "force": {
+      "type": "boolean"
+    }
+  }
+}

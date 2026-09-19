@@ -5,6 +5,7 @@ from .disclosures import InMemoryDisclosureConsentStore
 from .extension_data import UnavailableExtensionDataAccess
 from .extensions import InMemoryLifecycleStore
 from .job_queue import InMemoryJobQueue
+from .mail import InMemoryExtensionArtifactAccess, InMemoryMailDeliveryLedger
 from .operations import InMemoryExtensionOperationStore
 from .outbox import InMemorySideEffectOutbox
 from .secrets import InMemorySecretStore
@@ -15,9 +16,11 @@ __all__ = [
     "InMemoryAuditWriter",
     "InMemoryDisclosureConsentStore",
     "InMemoryEventStream",
+    "InMemoryExtensionArtifactAccess",
     "InMemoryExtensionOperationStore",
     "InMemoryJobQueue",
     "InMemoryLifecycleStore",
+    "InMemoryMailDeliveryLedger",
     "InMemorySecretStore",
     "InMemorySideEffectOutbox",
     "InMemoryTaskRepository",

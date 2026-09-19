@@ -1,0 +1,74 @@
+{
+  "type": "object",
+  "properties": {
+    "draft_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "canonical_digest": {
+      "type": "string"
+    },
+    "local_action_id": {
+      "type": "string"
+    },
+    "message_id": {
+      "type": "string"
+    },
+    "mime_sha256": {
+      "type": "string"
+    },
+    "mime_artifact_id": {
+      "type": "string"
+    },
+    "to": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cc": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bcc": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "subject": {
+      "type": "string"
+    },
+    "attachment_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "account_id": {
+      "type": "string"
+    },
+    "account_fingerprint": {
+      "type": "string"
+    },
+    "from_address": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "draft_id",
+    "version",
+    "canonical_digest",
+    "local_action_id",
+    "message_id",
+    "mime_sha256",
+    "mime_artifact_id",
+    "account_id",
+    "account_fingerprint",
+    "from_address"
+  ]
+}

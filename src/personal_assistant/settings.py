@@ -76,6 +76,35 @@ def normalize_team_domain(raw: str) -> str:
     return f"https://{label}{_CLOUDFLARE_ACCESS_SUFFIX}"
 
 
+def normalize_mail_recipients(values: tuple[str, ...]) -> tuple[str, ...]:
+    """Canonicalize the controlled test-recipient allowlist.
+
+    The list is intentionally required whenever sending is enabled: initial real
+    delivery is restricted to explicitly registered addresses.
+    """
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        if not isinstance(raw, str):
+            raise ConfigurationError("PA_MAIL_TEST_RECIPIENTS must contain strings")
+        address = raw.strip().lower()
+        if not address:
+            continue
+        if len(address) > 320 or "@" not in address or any(
+            character in address for character in " <>,;\t\r\n"
+        ):
+            raise ConfigurationError(
+                "PA_MAIL_TEST_RECIPIENTS contains an invalid address"
+            )
+        if address not in seen:
+            seen.add(address)
+            normalized.append(address)
+    if len(normalized) > 64:
+        raise ConfigurationError("PA_MAIL_TEST_RECIPIENTS has too many entries")
+    return tuple(normalized)
+
+
 def normalize_public_origin(raw: str) -> str:
     value = raw.strip()
     if not value:
@@ -219,6 +248,13 @@ def _env_float(name: str, default: float) -> float:
     return value
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+
+
 def _is_loopback(host: str) -> bool:
     if host.lower() == "localhost":
         return True
@@ -256,6 +292,9 @@ class Settings:
     model_local_model: str | None = None
     model_local_timeout_seconds: float = 120.0
     model_local_fallback_provider_id: str | None = None
+    mail_send_enabled: bool = False
+    mail_test_recipients: tuple[str, ...] = ()
+    mail_max_message_bytes: int = 2 * 1024 * 1024
 
     def __post_init__(self) -> None:
         # Every construction path (from_env, direct construction, replace)
@@ -339,6 +378,11 @@ class Settings:
                     field_name="PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID",
                 ),
             )
+        object.__setattr__(
+            self,
+            "mail_test_recipients",
+            normalize_mail_recipients(self.mail_test_recipients),
+        )
         self.validate()
 
     @classmethod
@@ -381,6 +425,17 @@ class Settings:
             model_local_timeout_seconds=_env_float("PA_MODEL_LOCAL_TIMEOUT_SECONDS", 120.0),
             model_local_fallback_provider_id=(
                 os.getenv("PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID") or None
+            ),
+            mail_send_enabled=_env_bool("PA_MAIL_SEND_ENABLED", False),
+            mail_test_recipients=normalize_mail_recipients(
+                tuple(
+                    item.strip()
+                    for item in os.getenv("PA_MAIL_TEST_RECIPIENTS", "").split(",")
+                    if item.strip()
+                )
+            ),
+            mail_max_message_bytes=_env_int(
+                "PA_MAIL_MAX_MESSAGE_BYTES", 2 * 1024 * 1024
             ),
         )
         return settings
@@ -498,3 +553,15 @@ class Settings:
             )
         if len({self.public_port, self.admin_port, self.health_port}) != 3:
             raise ConfigurationError("public, admin and health ports must be distinct")
+        if not 64 * 1024 <= self.mail_max_message_bytes <= 25 * 1024 * 1024:
+            raise ConfigurationError(
+                "PA_MAIL_MAX_MESSAGE_BYTES must be between 65536 and 26214400"
+            )
+        if self.mail_send_enabled and not self.mail_test_recipients:
+            raise ConfigurationError(
+                "PA_MAIL_SEND_ENABLED requires at least one PA_MAIL_TEST_RECIPIENTS address"
+            )
+        if normalize_mail_recipients(self.mail_test_recipients) != self.mail_test_recipients:
+            raise ConfigurationError(
+                "PA_MAIL_TEST_RECIPIENTS must be stored in normalized lower-case form"
+            )

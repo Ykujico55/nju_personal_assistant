@@ -1,0 +1,25 @@
+{
+  "type": "object",
+  "properties": {
+    "local_action_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "found": {
+      "type": "boolean"
+    },
+    "authoritative_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "local_action_id",
+    "state",
+    "found"
+  ]
+}

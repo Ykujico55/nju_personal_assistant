@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import ssl
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -21,15 +23,24 @@ from personal_assistant.core.extensions import (
     ExtensionRegistry,
     ExtensionSupervisorService,
 )
+from personal_assistant.core.extensions.artifact_access import ExtensionArtifactAccess
 from personal_assistant.core.extensions.config import ExtensionConfigStore
 from personal_assistant.core.extensions.data_access import ExtensionDataAccess
+from personal_assistant.core.extensions.descriptors import manifest_tool_descriptors
 from personal_assistant.core.extensions.lifecycle import (
     ExtensionDataStore,
     InstallCoordinator,
     LifecycleManager,
     LifecycleStore,
 )
+from personal_assistant.core.extensions.models import ExtensionState
 from personal_assistant.core.jobs import JobQueuePort, SideEffectOutboxPort
+from personal_assistant.core.mail import (
+    MailAccountRegistry,
+    MailDeliveryLedger,
+    MailPolicy,
+    MailTransportBroker,
+)
 from personal_assistant.core.models import (
     DisclosureConsentService,
     ModelProvider,
@@ -39,6 +50,7 @@ from personal_assistant.core.models import (
 from personal_assistant.core.secrets import SecretHandle, SecretStorePort
 from personal_assistant.core.tasks import TaskService
 from personal_assistant.core.tasks.service import EventStreamPort
+from personal_assistant.core.tools import ToolGateway, ToolPolicy, ToolRegistry
 from personal_assistant.infrastructure.database import (
     PostgresAdapterConfig,
     PostgresAdapters,
@@ -46,6 +58,9 @@ from personal_assistant.infrastructure.database import (
     PostgresExtensionOperationStore,
     PostgresVersionCatalog,
     build_postgres_adapters,
+)
+from personal_assistant.infrastructure.database.mail_ledger import (
+    PostgresMailDeliveryLedger,
 )
 from personal_assistant.infrastructure.extensions import (
     CompatibleVersionOperator,
@@ -57,14 +72,28 @@ from personal_assistant.infrastructure.extensions import (
     VenvArtifactInstaller,
     VersionCatalog,
 )
+from personal_assistant.infrastructure.extensions.artifact_access import (
+    FileExtensionArtifactAccess,
+)
 from personal_assistant.infrastructure.extensions.data import InMemoryExtensionDataStore
+from personal_assistant.infrastructure.filesystem import LocalArtifactBlobStore
+from personal_assistant.infrastructure.mail.broker import ConfiguredMailTransportBroker
+from personal_assistant.infrastructure.mail.executor import MailSendExecutor
+from personal_assistant.infrastructure.mail.host import MailHostCapability
+from personal_assistant.infrastructure.mail.owners import MailExecutionOwnerRegistry
+from personal_assistant.infrastructure.mail.registry import (
+    FileMailAccountRegistry,
+    InMemoryMailAccountRegistry,
+)
 from personal_assistant.infrastructure.memory import (
     InMemoryAuditWriter,
     InMemoryDisclosureConsentStore,
     InMemoryEventStream,
+    InMemoryExtensionArtifactAccess,
     InMemoryExtensionOperationStore,
     InMemoryJobQueue,
     InMemoryLifecycleStore,
+    InMemoryMailDeliveryLedger,
     InMemorySecretStore,
     InMemorySideEffectOutbox,
     InMemoryTaskRepository,
@@ -79,6 +108,7 @@ from personal_assistant.infrastructure.models import (
 )
 from personal_assistant.infrastructure.secrets import UnavailableSecretStore
 from personal_assistant.infrastructure.storage import NullStorageLifecycle, StorageLifecycle
+from personal_assistant.infrastructure.tools import CapabilityRoutingExecutor
 from personal_assistant.settings import Settings
 
 
@@ -102,12 +132,36 @@ class Container:
     extension_config_store: ExtensionConfigStore
     disclosures: DisclosureConsentService
     model_router: ModelRouter | None
+    mail_broker: MailTransportBroker
+    mail_ledger: MailDeliveryLedger
+    mail_host_capability: MailHostCapability
+    mail_accounts: MailAccountRegistry
+    mail_execution_owners: MailExecutionOwnerRegistry
+    extension_artifacts: ExtensionArtifactAccess
+    mail_send_executor: MailSendExecutor
+    tool_registry: ToolRegistry
+    tool_gateway: ToolGateway
+
+    async def refresh_tool_registry(self) -> None:
+        """Publish domain descriptors for every ENABLED extension record."""
+
+        records = await self.lifecycle_store.all()
+        descriptors = [
+            descriptor
+            for record in records
+            if record.state is ExtensionState.ENABLED and record.manifest is not None
+            for descriptor in manifest_tool_descriptors(record.manifest)
+        ]
+        self.tool_registry.publish(descriptors)
 
     async def aclose(self) -> None:
         """Release adapter-owned transports; storage keeps its own lifecycle."""
 
         if self.model_router is not None:
             await self.model_router.aclose()
+        await self.mail_broker.aclose()
+        with contextlib.suppress(Exception):
+            await self.mail_ledger.close()
 
 
 def _bundled_extensions_root() -> Path:
@@ -115,13 +169,16 @@ def _bundled_extensions_root() -> Path:
 
 
 def build_container(
-    settings: Settings | None = None, *, secret_store: SecretStorePort | None = None
+    settings: Settings | None = None,
+    *,
+    secret_store: SecretStorePort | None = None,
+    mail_ssl_context: ssl.SSLContext | None = None,
 ) -> Container:
     settings = settings or Settings.from_env()
     settings.validate()
     if settings.storage_backend == "postgres":
-        return _build_postgres_container(settings, secret_store)
-    return _build_memory_container(settings, secret_store)
+        return _build_postgres_container(settings, secret_store, mail_ssl_context)
+    return _build_memory_container(settings, secret_store, mail_ssl_context)
 
 
 def _build_model_providers(
@@ -196,6 +253,14 @@ def _staging_and_install_roots(settings: Settings) -> tuple[Path, Path]:
     return settings.extension_root / "staging", settings.extension_root / "installed"
 
 
+def _mail_policy(settings: Settings) -> MailPolicy:
+    return MailPolicy(
+        allow_send=settings.mail_send_enabled,
+        allowed_recipients=frozenset(settings.mail_test_recipients),
+        max_message_bytes=settings.mail_max_message_bytes,
+    )
+
+
 def _build_supervisor(
     settings: Settings,
     *,
@@ -206,13 +271,20 @@ def _build_supervisor(
     data_store: ExtensionDataStore,
     data_access: ExtensionDataAccess,
     config_store: ExtensionConfigStore,
+    mail_capability: MailHostCapability | None = None,
+    mail_send_available: bool = False,
+    artifact_access: ExtensionArtifactAccess | None = None,
 ) -> ExtensionSupervisorService:
     stager = LocalArtifactStager(_staging_and_install_roots(settings)[0])
     installer = VenvArtifactInstaller(
         install_root=_staging_and_install_roots(settings)[1], stager=stager
     )
     runtime = ProcessRuntimeSupervisor(
-        data_access=data_access, config_store=config_store
+        data_access=data_access,
+        config_store=config_store,
+        mail_capability=mail_capability,
+        mail_send_available=mail_send_available,
+        artifact_access=artifact_access,
     )
     coordinator = InstallCoordinator(stager, installer, ProcessContractVerifier(), store)
     manager = LifecycleManager(
@@ -234,7 +306,9 @@ def _build_supervisor(
 
 
 def _build_postgres_container(
-    settings: Settings, secret_store: SecretStorePort | None
+    settings: Settings,
+    secret_store: SecretStorePort | None,
+    mail_ssl_context: ssl.SSLContext | None = None,
 ) -> Container:
     adapters: PostgresAdapters = build_postgres_adapters(
         PostgresAdapterConfig.from_env(settings.database_url)
@@ -247,6 +321,50 @@ def _build_postgres_container(
         adapters.disclosure_consents, recipients=_remote_recipients(providers)
     )
     config_store = FileExtensionConfigStore(settings.extension_root / "config")
+    policy = _mail_policy(settings)
+    mail_accounts = FileMailAccountRegistry(
+        settings.extension_root / "mail" / "accounts.json"
+    )
+    mail_broker = ConfiguredMailTransportBroker(
+        credential_store,
+        mail_accounts,
+        policy=policy,
+        ssl_context=mail_ssl_context,
+        max_message_bytes=settings.mail_max_message_bytes,
+    )
+    ledger = PostgresMailDeliveryLedger(adapters.database)
+    mail_owners = MailExecutionOwnerRegistry()
+    mail_capability = MailHostCapability(
+        mail_broker, mail_accounts, ledger=ledger, owners=mail_owners
+    )
+    artifacts = FileExtensionArtifactAccess(
+        LocalArtifactBlobStore(settings.artifact_root),
+        settings.extension_root / "artifact-meta",
+    )
+    supervisor = _build_supervisor(
+        settings,
+        registry=registry,
+        store=adapters.lifecycle_store,
+        operations=operations,
+        version_catalog=PostgresVersionCatalog(adapters.database),
+        data_store=PostgresExtensionDataStore(adapters.database),
+        data_access=PostgresExtensionDataAccess(adapters.database),
+        config_store=config_store,
+        mail_capability=mail_capability,
+        mail_send_available=mail_broker.send_available,
+        artifact_access=artifacts,
+    )
+    approvals = ApprovalService(adapters.approval_repository)
+    mail_send = MailSendExecutor(
+        broker=mail_broker,
+        artifacts=artifacts,
+        invoker=supervisor,
+        ledger=ledger,
+        accounts=mail_accounts,
+        policy=policy,
+        owners=mail_owners,
+    )
+    tool_registry = ToolRegistry()
     return Container(
         settings=settings,
         tasks=TaskService(
@@ -256,18 +374,9 @@ def _build_postgres_container(
             events=adapters.event_stream,
             unit_of_work=adapters.database,
         ),
-        approvals=ApprovalService(adapters.approval_repository),
+        approvals=approvals,
         extension_registry=registry,
-        extension_supervisor=_build_supervisor(
-            settings,
-            registry=registry,
-            store=adapters.lifecycle_store,
-            operations=operations,
-            version_catalog=PostgresVersionCatalog(adapters.database),
-            data_store=PostgresExtensionDataStore(adapters.database),
-            data_access=PostgresExtensionDataAccess(adapters.database),
-            config_store=config_store,
-        ),
+        extension_supervisor=supervisor,
         bundled_extensions_root=_bundled_extensions_root(),
         jobs=adapters.job_queue,
         events=adapters.event_stream,
@@ -286,11 +395,30 @@ def _build_postgres_container(
             disclosures=disclosures,
             audit=adapters.audit_writer,
         ),
+        mail_broker=mail_broker,
+        mail_ledger=ledger,
+        mail_host_capability=mail_capability,
+        mail_accounts=mail_accounts,
+        mail_execution_owners=mail_owners,
+        extension_artifacts=artifacts,
+        mail_send_executor=mail_send,
+        tool_registry=tool_registry,
+        tool_gateway=ToolGateway(
+            registry=tool_registry,
+            policy=ToolPolicy(),
+            approvals=approvals,
+            executor=CapabilityRoutingExecutor(
+                extension_router=supervisor, mail_send=mail_send
+            ),
+            outbox=adapters.side_effect_outbox,
+        ),
     )
 
 
 def _build_memory_container(
-    settings: Settings, secret_store: SecretStorePort | None
+    settings: Settings,
+    secret_store: SecretStorePort | None,
+    mail_ssl_context: ssl.SSLContext | None = None,
 ) -> Container:
     queue = InMemoryJobQueue()
     audit = InMemoryAuditWriter()
@@ -306,6 +434,44 @@ def _build_memory_container(
         InMemoryDisclosureConsentStore(), recipients=_remote_recipients(providers)
     )
     config_store = FileExtensionConfigStore(settings.extension_root / "config")
+    policy = _mail_policy(settings)
+    mail_accounts = InMemoryMailAccountRegistry()
+    mail_broker = ConfiguredMailTransportBroker(
+        credential_store,
+        mail_accounts,
+        policy=policy,
+        ssl_context=mail_ssl_context,
+        max_message_bytes=settings.mail_max_message_bytes,
+    )
+    ledger = InMemoryMailDeliveryLedger()
+    mail_owners = MailExecutionOwnerRegistry()
+    mail_capability = MailHostCapability(
+        mail_broker, mail_accounts, ledger=ledger, owners=mail_owners
+    )
+    artifacts = InMemoryExtensionArtifactAccess()
+    supervisor = _build_supervisor(
+        settings,
+        registry=registry,
+        store=lifecycle_store,
+        operations=operations,
+        version_catalog=InMemoryVersionCatalog(),
+        data_store=InMemoryExtensionDataStore(),
+        data_access=UnavailableExtensionDataAccess(),
+        config_store=config_store,
+        mail_capability=mail_capability,
+        mail_send_available=mail_broker.send_available,
+        artifact_access=artifacts,
+    )
+    mail_send = MailSendExecutor(
+        broker=mail_broker,
+        artifacts=artifacts,
+        invoker=supervisor,
+        ledger=ledger,
+        accounts=mail_accounts,
+        policy=policy,
+        owners=mail_owners,
+    )
+    tool_registry = ToolRegistry()
     return Container(
         settings=settings,
         tasks=TaskService(
@@ -316,16 +482,7 @@ def _build_memory_container(
         ),
         approvals=approvals,
         extension_registry=registry,
-        extension_supervisor=_build_supervisor(
-            settings,
-            registry=registry,
-            store=lifecycle_store,
-            operations=operations,
-            version_catalog=InMemoryVersionCatalog(),
-            data_store=InMemoryExtensionDataStore(),
-            data_access=UnavailableExtensionDataAccess(),
-            config_store=config_store,
-        ),
+        extension_supervisor=supervisor,
         bundled_extensions_root=_bundled_extensions_root(),
         jobs=queue,
         events=events,
@@ -343,6 +500,23 @@ def _build_memory_container(
             providers=providers,
             disclosures=disclosures,
             audit=audit,
+        ),
+        mail_broker=mail_broker,
+        mail_ledger=ledger,
+        mail_host_capability=mail_capability,
+        mail_accounts=mail_accounts,
+        mail_execution_owners=mail_owners,
+        extension_artifacts=artifacts,
+        mail_send_executor=mail_send,
+        tool_registry=tool_registry,
+        tool_gateway=ToolGateway(
+            registry=tool_registry,
+            policy=ToolPolicy(),
+            approvals=approvals,
+            executor=CapabilityRoutingExecutor(
+                extension_router=supervisor, mail_send=mail_send
+            ),
+            outbox=InMemorySideEffectOutbox(approvals),
         ),
     )
 

@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "local_action_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128
+    },
+    "sent_folder": {
+      "type": "string",
+      "maxLength": 255
+    }
+  },
+  "required": [
+    "account_id",
+    "local_action_id"
+  ]
+}

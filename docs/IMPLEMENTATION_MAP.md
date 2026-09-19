@@ -28,6 +28,10 @@
 - `infrastructure/models/`：真实远端 OpenAI 兼容适配器与本地 Ollama 适配器（协议驱动 HTTP，无厂商 SDK；SecretHandle 经宿主 broker 解析，失败 fail closed；loopback 强制、总 deadline、响应上限、禁重定向、无静默重试；`trust_env=False` 不经过环境代理，类型化错误不链入 broker/httpx/JSON 异常，响应关闭抗重复取消；响应元数据不被信任（model_id 恒为配置值、usage 走适配器键白名单、非 2xx 只用固定 rejection_code 枚举），凭据限定可见 ASCII 且异常前清除敏感 frame locals，关闭失败优先级为取消 > 原始类型化错误 > 脱敏关闭错误；`complete()` 在首个 `await` 前捕获请求级 `RecipientIdentity`，出站 URL、payload model 与输出身份共用该快照，payload 构建失败也在脱敏边界内转为无链类型化错误）。
 - `infrastructure/database/disclosure_consents.py`：`model_disclosure_consents` + `model_disclosure_commands` 的真实 PostgreSQL 许可存储（迁移 `0005_f04_model_disclosure.sql`，F04 DONE）。
 - `core/platform|secrets|artifacts|audit/`：操作系统、凭据、受管制品与审计端口。
+- `core/mail/`：供应商无关的邮件端口（`MailTransportBroker`、`MailReadSession`、`MailAccountRecord`/`MailAccountRegistry`、`MailEnvelope`、`MailDeliveryReceipt`、`MailReconciliationResult`、`MailPolicy`、带 owner/心跳租约与绑定对账的 `PREPARED→EXECUTING→terminal` `MailDeliveryLedger`）；`infrastructure/mail/`：宿主所有的 `FileMailAccountRegistry`（严格 JSON boolean、重复 id 拒绝、generation 单调且删除后 revision 不复用、扩展只能引用 account_id；写者的完整 read-modify-write 在跨进程 `ExclusiveFileLock` 内、由 `run_blocking` 取消安全地移出事件循环执行）、真实 TLS IMAP 只读客户端（EXAMINE/BODY.PEEK）、从 TCP 连接即跟踪 socket 并可取消回收线程的显式阶段 SMTP 客户端（DATA 前/中/后分级、逐收件人结果；DNS 在发送线程前有界解析；DATA 提交在账户临界区内完成，`docmd("DATA")`+payload+最终回复全程持锁；账户变更抛类型化 `ACCOUNT_CHANGED`）、只接受注册表 account_id 且在凭据解析后复核、派发期间用活体 fail-closed 账户 guard（实时读注册表、锁内检查后进入 DATA，`SmtpSenderFactory`/`SmtpSenderPort` 类型化注入）在连接/认证/DATA 前检查的 `ConfiguredMailTransportBroker`、账本 owner 与心跳共用同一代次且租约 guard 以单调 deadline 为权威、锚定数据库领取/续租调用时刻（心跳调用按剩余租约限时、到期即拒绝派发、组合 guard 在全部锁内复核）、审批快照+账户 fingerprint 校验的执行器 `MailSendExecutor`（F06 DONE）。扩展没有可写入发送结果的工具：`smail.send_status` 只投影宿主权威状态。
+- `core/extensions/artifact_access.py` + `infrastructure/extensions/artifact_access.py`：通用 `artifact.read/artifact.write` 宿主能力，按扩展版本持久化所有权；`infrastructure/database/mail_ledger.py`：通用 `mail_delivery_actions` 传输台账（迁移 `0006`）。
+- `extensions/nju_smail`：smail 业务扩展（只读轮询、每分块推进的 UIDVALIDITY/UID 游标、Message-ID+内容哈希辅助去重、线程/联系人/附件来源、单事务版本化草稿、受控 SMTP 发送与 Sent 对账）；仅依赖公开 SDK，业务数据位于 `ext_nju_2e_smail`，不持有密码、不建立 IMAP/SMTP 连接。
+- `infrastructure/tools/capability_router.py` + `core/extensions/descriptors.py`：按 Manifest 工具级 `capabilities` 生成 `required_capabilities` 并把 `mail.send` 路由到宿主邮件执行器；`bootstrap.py` 构造 `Container.tool_registry`/`tool_gateway`，lifespan 启动时按持久 lifecycle 发布/刷新 ENABLED 工具；Admin API 仅回环提供邮件账户注册表 `GET/PUT /admin/v1/mail/accounts`。
 - `core/auth/`：传输无关的 `AccessIdentity`、`AccessTokenVerifier` 端口与通用异常；`infrastructure/auth/`：`JwksProvider` 与 Cloudflare 实现（`RS256` 白名单、`kid` 精确命中、issuer/audience/时间声明校验、有界缓存与受控轮换刷新、总 deadline、失败 fail closed；未知 `kid` 成功刷新确认不存在为 401、节流窗口内未检查为可重试 503；F03 DONE，三轮独立验收通过）。
 
 生产适配器只能放在 `infrastructure/`；禁止把 SQL、Win32、SMTP、Playwright 或模型 SDK 导入上述核心模块。
@@ -72,6 +76,9 @@
 - 扩展数据能力只允许单语句/受控迁移，拒绝核心表未限定引用、其他 `ext_*` Schema、catalog 与危险函数；迁移 checksum 漂移或路径越界即拒绝；宿主执行迁移前不导入扩展代码，凭据不进入 Worker 环境。
 - 个人知识扩展：授权根外的路径、越界符号链接/junction、`..` 与盘符路径全部拒绝；扫描/索引不修改源文件；内容哈希只在 owner 绑定候选完整构建并通过无副作用 CAS 后切换；失败或取消只能清理本 run 半成品并保持旧版本可查；移动后旧路径可建立独立新来源；向量只查询 identity 完全匹配的活动版本；长单行/大页/大批次有界处理；删除传播移除正文/分块/向量并保留无正文 tombstone；引用展示前复核源文件哈希，变化/删除一律 STALE/DELETED；无证据时返回未知/空结果。
 - 新扩展骨架可被静态 Manifest parser 接受，无需改核心。
+- smail 同步只发只读 IMAP 命令（EXAMINE/BODY.PEEK），协议测试断言服务器 flags/文件夹状态不变且命令日志无变更命令；重复扫描/Worker 重启/UIDVALIDITY 变化收敛为一条消息与一个事件；凭据失效进入 `NEEDS_USER_ACTION` 且有界退避。
+- 发送路径：无审批时 executor 与扩展调用为 0；执行器只接受宿主注册表的 account_id 与 fingerprint 并在物化前后与连接前多次复核，扩展无法提交端点或凭据句柄；`PREPARED/EXECUTING`（带 owner/租约）先于任何 SMTP 连接写入，发送后终结账本失败按 UNKNOWN 上报，崩溃遗留的过期 EXECUTING 由启动恢复扫描转为 UNKNOWN；编辑草稿任一字段后旧审批无法匹配新版本，同键重放返回原版本；实际发送的 MIME 字节与审批快照哈希一致；部分拒收保存逐收件人明细且不报整体成功；DATA 前失败为确定失败、DATA 中/后断线、连接/TLS 阶段超时或取消为 UNKNOWN 且不自动重发，Sent 只读对账在严格校验账户/Message-ID 后 CAS 收敛为 SUCCEEDED。
+- 同步游标按分块推进：后一块失败时下一轮从上一块末尾继续，不跳过邮件；复用 Message-ID 但正文不同属于新逻辑消息。
 
 ## 接力纪律
 

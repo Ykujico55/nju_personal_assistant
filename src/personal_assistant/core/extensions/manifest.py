@@ -57,6 +57,9 @@ class ManifestTool:
     risk: str
     input_schema: str
     output_schema: str
+    #: Host capabilities this tool must be granted before it can execute (for
+    #: example ``mail.send``).  The host executor routes on this declaration.
+    capabilities: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,7 +309,7 @@ def _parse_tools(root: Path, raw_tools: Any) -> tuple[ManifestTool, ...]:
     for index, item in enumerate(raw_tools):
         if not isinstance(item, dict):
             raise ManifestValidationError(f"tools[{index}] must be a table")
-        unknown = set(item) - {"id", "risk", "input_schema", "output_schema"}
+        unknown = set(item) - {"id", "risk", "input_schema", "output_schema", "capabilities"}
         if unknown:
             raise ManifestValidationError(f"unknown tools[{index}] keys: {sorted(unknown)}")
         tool_id = _required_string(item, "id", prefix=f"tools[{index}].")
@@ -319,7 +322,12 @@ def _parse_tools(root: Path, raw_tools: Any) -> tuple[ManifestTool, ...]:
         output_schema = _required_string(item, "output_schema", prefix=f"tools[{index}].")
         _require_safe_file(root, input_schema, f"tools[{index}].input_schema")
         _require_safe_file(root, output_schema, f"tools[{index}].output_schema")
-        tools.append(ManifestTool(tool_id, risk, input_schema, output_schema))
+        capabilities = _identifier_list(
+            item.get("capabilities", []), f"tools[{index}].capabilities"
+        )
+        tools.append(
+            ManifestTool(tool_id, risk, input_schema, output_schema, capabilities)
+        )
     return tuple(tools)
 
 

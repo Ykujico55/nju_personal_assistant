@@ -1,0 +1,59 @@
+manifest_version = "1"
+id = "nju.smail"
+name = "NJU smail"
+version = "0.1.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.14"
+entrypoint = "nju_smail.worker:create_extension"
+dependency_lock = "requirements.lock"
+config_schema = "schemas/config.json"
+state_schema_version = 1
+healthcheck = "system.health"
+
+event_sources = ["smail.poll_inbox"]
+context_providers = ["smail.thread_history"]
+workflows = ["smail.reply_flow"]
+schedules = ["smail.poll_every_5m"]
+forms = ["smail.account_settings"]
+migrations = ["smail.mail_schema"]
+
+[[tools]]
+id = "smail.search"
+risk = "READ"
+input_schema = "schemas/search-input.json"
+output_schema = "schemas/search-output.json"
+
+[[tools]]
+id = "smail.prepare_reply"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/reply-input.json"
+output_schema = "schemas/draft-output.json"
+
+[[tools]]
+id = "smail.sync"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/sync-input.json"
+output_schema = "schemas/sync-output.json"
+
+[[tools]]
+id = "smail.send"
+risk = "EXTERNAL_WRITE"
+input_schema = "schemas/send-input.json"
+output_schema = "schemas/send-output.json"
+capabilities = ["mail.send"]
+
+[[tools]]
+id = "smail.send_status"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/send-status-input.json"
+output_schema = "schemas/send-status-output.json"
+
+[[tools]]
+id = "smail.reconcile_send"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/reconcile-input.json"
+output_schema = "schemas/reconcile-output.json"
+
+[capabilities]
+required = ["extension.data.sql", "mail.read", "artifact.read", "artifact.write"]
+optional = ["mail.send"]

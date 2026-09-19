@@ -1,0 +1,95 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "draft_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "draft_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "canonical_digest": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "local_action_id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320
+    },
+    "from_address": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320
+    },
+    "to": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string"
+      }
+    },
+    "cc": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string"
+      }
+    },
+    "bcc": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string"
+      }
+    },
+    "subject": {
+      "type": "string",
+      "maxLength": 998
+    },
+    "mime_sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64
+    },
+    "attachment_hashes": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string"
+      }
+    },
+    "account_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "account_fingerprint": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "draft_id",
+    "draft_version",
+    "canonical_digest",
+    "local_action_id",
+    "message_id",
+    "from_address",
+    "to",
+    "subject",
+    "mime_sha256",
+    "account_id",
+    "account_fingerprint"
+  ]
+}

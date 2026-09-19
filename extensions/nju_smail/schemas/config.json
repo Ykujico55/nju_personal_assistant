@@ -1,0 +1,53 @@
+{
+  "type": "object",
+  "properties": {
+    "accounts": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9._-]+$"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "account_id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "folders": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255
+      }
+    },
+    "poll_interval_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 3600
+    },
+    "max_messages_per_sync": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 200
+    },
+    "max_message_bytes": {
+      "type": "integer",
+      "minimum": 65536,
+      "maximum": 8388608
+    }
+  },
+  "additionalProperties": false
+}

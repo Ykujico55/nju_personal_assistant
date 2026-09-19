@@ -110,6 +110,112 @@ class HostDataClient(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class MailAccountInfo:
+    """Non-secret account view resolved by the host registry.
+
+    Extensions never receive server endpoints or credential handle ids; they
+    reference the host-registered ``account_id``.  ``fingerprint`` is the
+    host-computed canonical binding digest used in send approvals.
+    """
+
+    account_id: str
+    address: str
+    display_name: str
+    read_enabled: bool
+    send_enabled: bool
+    fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class MailboxCapabilities:
+    imap_capabilities: tuple[str, ...]
+    auth_mechanisms: tuple[str, ...]
+    uidvalidity: int
+    exists: int
+
+
+@dataclass(frozen=True, slots=True)
+class MailFolderInfo:
+    name: str
+    delimiter: str | None
+    attributes: tuple[str, ...]
+    selectable: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class FetchedMail:
+    uid: int
+    message_id: str | None
+    subject: str | None
+    from_address: str | None
+    to_addresses: tuple[str, ...]
+    cc_addresses: tuple[str, ...]
+    sent_at: str | None
+    flags: tuple[str, ...]
+    size_bytes: int
+    raw: bytes
+    truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FetchedMailBatch:
+    uidvalidity: int
+    exists: int
+    messages: tuple[FetchedMail, ...]
+
+
+@runtime_checkable
+class HostMailClient(Protocol):
+    """Read-only mail capability; sending is never exposed to extensions."""
+
+    async def account(self, account_id: str) -> MailAccountInfo: ...
+
+    async def probe(self, account_id: str) -> MailboxCapabilities: ...
+
+    async def list_folders(self, account_id: str) -> tuple[MailFolderInfo, ...]: ...
+
+    async def fetch(
+        self,
+        account_id: str,
+        folder: str,
+        *,
+        uidvalidity: int | None,
+        start_uid: int,
+        limit: int = 100,
+    ) -> FetchedMailBatch: ...
+
+    async def delivery_status(
+        self, account_id: str, *, local_action_id: str
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def reconcile_sent(
+        self,
+        account_id: str,
+        *,
+        local_action_id: str,
+        message_id: str,
+        sent_folder: str = "Sent",
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class HostArtifactClient(Protocol):
+    """Host-owned content-addressed artifact store."""
+
+    async def put(
+        self, data: bytes, *, media_type: str, sensitivity: str = "PERSONAL"
+    ) -> ArtifactHandle: ...
+
+    async def read(self, artifact_id: str) -> bytes: ...
+
+    async def delete(self, artifact_id: str) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeContext:
     protocol_version: str
     extension_id: str
@@ -119,6 +225,8 @@ class RuntimeContext:
     non_secret_config: Mapping[str, JsonValue] = field(default_factory=dict)
     capability_handles: tuple[CapabilityHandle, ...] = ()
     host_data: HostDataClient | None = None
+    host_mail: HostMailClient | None = None
+    host_artifact: HostArtifactClient | None = None
 
 
 @dataclass(frozen=True, slots=True)

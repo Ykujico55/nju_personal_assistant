@@ -57,6 +57,15 @@ def create_app(
         # startup instead of silently falling back to in-memory state.
         await container.storage.startup()
         try:
+            # Publish tool descriptors for persisted ENABLED extensions so the
+            # production gateway always reflects the durable lifecycle state.
+            await container.refresh_tool_registry()
+            # A dispatch interrupted by a crash has no live owner: lift expired
+            # EXECUTING leases to UNKNOWN so only read-only reconciliation can
+            # resolve them (never an automatic resend).
+            await container.mail_ledger.recover_stale_executions(
+                active_owners=container.mail_execution_owners.active()
+            )
             yield
         finally:
             # Closing the verifier must never prevent storage from closing.

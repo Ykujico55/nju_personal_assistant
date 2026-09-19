@@ -186,7 +186,12 @@ class ExtensionDispatcher:
         if runtime.protocol_version != protocol_version:
             raise WorkerDispatchError(-32005, "runtime protocol version mismatch")
         if self._host_broker is not None:
-            runtime = replace(runtime, host_data=self._host_broker)
+            runtime = replace(
+                runtime,
+                host_data=self._host_broker,
+                host_mail=self._host_broker.mail,
+                host_artifact=self._host_broker.artifact,
+            )
         extension = self._factory()
         if not isinstance(extension, Extension):
             raise WorkerDispatchError(-32006, "entrypoint does not implement Extension")

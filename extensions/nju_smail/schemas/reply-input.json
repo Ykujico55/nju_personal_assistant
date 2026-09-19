@@ -1,0 +1,114 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "draft_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "thread_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "to": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 320
+      }
+    },
+    "cc": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 320
+      }
+    },
+    "bcc": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 320
+      }
+    },
+    "subject": {
+      "type": "string",
+      "maxLength": 998
+    },
+    "body_text": {
+      "type": "string",
+      "maxLength": 262144
+    },
+    "body_html": {
+      "type": "string",
+      "maxLength": 524288
+    },
+    "in_reply_to": {
+      "type": "string",
+      "maxLength": 320
+    },
+    "references": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "maxLength": 320
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "properties": {
+          "filename": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "media_type": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "sha256": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          },
+          "artifact_id": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "source_attachment_id": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "account_id",
+    "to",
+    "subject",
+    "body_text"
+  ]
+}

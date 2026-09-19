@@ -52,6 +52,7 @@ def manifest_to_dict(manifest: ExtensionManifest) -> dict[str, Any]:
                 "risk": tool.risk,
                 "input_schema": tool.input_schema,
                 "output_schema": tool.output_schema,
+                "capabilities": list(tool.capabilities),
             }
             for tool in manifest.tools
         ],
@@ -73,6 +74,7 @@ def manifest_from_dict(data: dict[str, Any]) -> ExtensionManifest:
             risk=item["risk"],
             input_schema=item["input_schema"],
             output_schema=item["output_schema"],
+            capabilities=tuple(item.get("capabilities") or ()),
         )
         for item in data.get("tools", [])
     )

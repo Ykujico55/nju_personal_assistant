@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01 + F02 + F03 + F04 + F05 completed baseline / contract v1.5（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节，F05 增补见第 14 节）
+版本：F01 + F02 + F03 + F04 + F05 completed baseline + F06 in progress / contract v1.6（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节，F05 增补见第 14 节，F06 增补见第 15 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -643,3 +643,60 @@ F05 交付 `personal.knowledge` 扩展与它需要的三个通用宿主能力：
 - OS 级文件监听（Windows `ReadDirectoryChangesW`/watchdog 属 F09）：`EventSource.poll` 是轮询式增量检测，正确性由 reconciliation 保证。
 - 未创建 HNSW/IVFFlat 向量索引：pgvector 无法为无维度约束列建索引，当前为精确检索；固定单一本地模型后可另加维度特定索引。
 - 真实远程 embedding 与语义向量质量验收、PWA Schema 表单渲染、永久 purge（保持 501）、smail/ehall/Web Push（F06+）。
+
+## 15. F06 实施后的契约补充（contract v1.6，IN_PROGRESS，等待独立验收）
+
+F06 交付 `nju.smail` 扩展与它需要的通用宿主邮件能力：只读 IMAP 同步、版本化草稿、受 Tool Gateway + R2 审批 + SideEffect Outbox 约束的 SMTP 单封发送与 Sent 只读对账。核心与通用宿主模块没有出现 `nju.smail`/NJU 分支、业务路由或业务表；`0001`–`0005` 未改动；扩展业务数据全部位于 `ext_nju_2e_smail` Schema。六轮独立审计提出的 21 个 P1 与 18 个 P2（凭据重定向、分块游标跳过、SMTP 取消后线程继续、台账先发送后记录、Message-ID 覆盖正文、草稿指针非原子、对账未绑定、崩溃遗留 EXECUTING、连接阶段取消、账户换绑 TOCTOU、凭据解析期间换绑、租约过期误判、伪造发送结果、DNS 无界、草稿取消清理、注册表弱类型/重复 ID、指纹未绑定 thread_id、心跳 owner 不一致、复核后换绑、删除重建复用 generation、非终态投影报错、Admin PUT 陈旧 fingerprint、文档残留旧工具、跨进程 TOCTOU、跨进程 monitor/心跳 fail-open、真实 sender 未保持 ACCOUNT_CHANGED 语义、心跳挂起绕过本地租约、锁等待期间不复核组合 guard、静态检查未通过、注册表异步写阻塞事件循环、本地 guard 未绑定数据库领取时刻、取消注册表写入后后台线程仍提交等）均已修复并补反例。第四、五轮按用户要求未由实现者执行测试；第六轮及补充修复由实现者运行静态验收命令（`./scripts/test.ps1` 742 passed、103 skipped，Ruff/Mypy 192 files 通过；未运行 PostgreSQL），证据见 `docs/NEXT_STEPS.md` F06 章节。
+
+### 15.1 新增公共宿主端口与类型
+
+- `core/mail/ports.py`：`MailAccountRecord`（非秘密账户元数据 + `SecretHandle` id + 独立 `read_enabled`/`send_enabled` + `tls_mode`，提供 canonical `fingerprint()`）、`MailAccountNotFoundError`、`MailAccountRegistry`（宿主所有的账户真相源）、`MailAccountBinding`（宿主内部值对象，扩展不可构造）、`MailCapabilities`/`MailFolder`/`MailFetchedMessage`/`MailFetchResult`、`MailEnvelope`/`MailDeliveryRequest`、`MailRecipientResult`/`MailDeliveryReceipt`/`MailReconciliationResult`、`MailPolicy`、`MailDeliveryRecord`（含 `owner_id`/`lease_expires_at`）；`MailDeliveryStatus` 是显式状态机 `PREPARED -> EXECUTING -> SUCCEEDED|PARTIAL|FAILED|UNKNOWN`（`terminal` 属性）。`MailDeliveryLedger` 定义 `prepare`、`begin_execution(local_action_id, envelope_digest, owner_id, lease_seconds)`（CAS PREPARED→EXECUTING 并领取有界租约；第二个调用者拿到活跃 EXECUTING 时不得烧毁首个调用）、`heartbeat(local_action_id, owner_id, lease_seconds)`（发送期间续租；返回 False 表示 owner 失去该行，发送器必须中止）、`finalize`、`reconcile(local_action_id, account_id, message_id, status, ...)`（账户与 Message-ID 属于 CAS 守卫）、`recover_stale_executions(active_owners=...)`（仅把租约过期且 owner 不在活跃本机代次中的 EXECUTING 原子转为 UNKNOWN；宿主启动与对账前都会安全扫描）、`get`、`close`；冲突与非法转换分别抛 `MailLedgerConflictError`/`MailLedgerStateError`。类型与供应商/服务器无关。
+- `infrastructure/mail/registry.py`：`FileMailAccountRegistry`（严格 JSON、≤32 账户、**手工文件重复 id 拒绝**、flush+fsync+原子替换；`read_enabled`/`send_enabled` 必须是真实 JSON boolean，字符串/数字/null 一律拒绝；每次管理端写入对既有账户递增 `generation`，并持久化 **revision tombstone**，删除后重建不会复用旧 generation/指纹）与 `InMemoryMailAccountRegistry`；`verify(lease)` 在 generation 或 fingerprint 变化、账户删除后返回 False。`dispatch_guard(lease)` 返回活体、fail-closed 的 `MailAccountDispatchGuard`：每次 `valid`/`reason` 都实时读注册表（无轮询缓存），读/解析失败即视为不可确认（失效，`reason="ACCOUNT_CHANGED"`）；`begin_critical_section` 获取与写者相同的锁并复读绑定（文件注册表使用跨进程 `ExclusiveFileLock`，路径 `<registry>.lock`；内存注册表使用专用进程内锁），持锁直到 DATA 提交结束，因此“复核后换绑”在跨进程下也不再是 check-then-act。写者（`upsert`/`replace_all`/`delete`）的完整 read-modify-write 在受控工作线程内执行并保持同一跨进程锁覆盖整个操作；等待线程使用项目既有取消安全模式 `run_blocking`（取消时继续 shield 等待、消费线程终态后才重抛 `CancelledError`，重复取消也不中断回收），因此 Admin 事件循环既不会被文件锁等待或文件 I/O 阻塞，也不会在调用方已观察到取消后仍有后台换绑/凭据句柄/generation 写入落地。这是宿主账户的唯一写入口；扩展配置只能提交 `account_id`。
+- `core/extensions/artifact_access.py` + 实现：`host.artifact.put/read/delete`，按扩展版本持久化所有权，跨扩展访问 fail closed。
+- `infrastructure/mail/imap_client.py`：`TlsImapReadSession` 只使用 `CAPABILITY`、`LOGIN`/`AUTHENTICATE PLAIN`（从 probe 选择）、`LIST`、`EXAMINE`/`SELECT (readonly)`、`UID SEARCH`、`UID FETCH BODY.PEEK`；证书与主机名验证来自注入 `SSLContext`（默认系统信任库）；单一 deadline 覆盖整次操作，超时/取消关闭 socket；错误类型化且不回显服务器文本或密码。
+- `infrastructure/mail/smtp_client.py`：`TlsSmtpSender` 显式 `MAIL FROM`/`RCPT TO`/`DATA` 阶段机；DATA 前失败 `FAILED`，payload 写入/等待最终响应期间断线 `UNKNOWN`，显式非 2xx `FAILED`，250 时逐收件人 `SUCCEEDED`/`PARTIAL`。DNS 解析在启动发送线程之前由事件循环在同一个总 deadline 内完成：超时或取消时调用方绝不继续发送，但 `loop.getaddrinfo` 使用默认执行器，卡住的系统解析线程无法被 Python 强制终止，可能比调用更晚结束（这是有意如实记录的限制，不是“零线程残留”保证）。随后 `_TrackedSmtp` 在 connect/TLS 握手之前注册 socket；`abort_requested`（来自超时/取消）与发送租约/账户派发 `guard` 在连接后、认证前/后、DATA 前均被检查：超时或取消会关闭 socket 并等待线程退出后才返回/重抛（重复取消也会先回收再抛出），连接/TLS 阶段取消同样可达；线程已完成时其真实 receipt 优先于超时分类，`done` 永不被归类为 `FAILED`。DATA 临界区：提交前调用 `guard.begin_critical_section()`，失败时按 `guard.reason` 抛类型化 `MailError(ACCOUNT_CHANGED)` 或按租约丢失返回 FAILED；`docmd("DATA")`、payload 发送与最终回复全程持锁，`finally` 释放。因此未开始 DATA 的换绑会中止发送，已经开始 DATA 的换绑必须等待提交完成；发送器保留 guard 失效原因，账户变更以 `MAIL_ACCOUNT_CHANGED` 抛出，租约丢失仍返回 FAILED/UNKNOWN 回执。
+- `infrastructure/mail/broker.py`：`ConfiguredMailTransportBroker` 只接受宿主注册表的 `account_id`，解析记录、解析 `SecretHandle`，并在凭据 `await` 返回后、创建任何 socket 之前用注册表 generation/fingerprint **原子复核**账户（`MAIL_ACCOUNT_CHANGED`）。此后每次派发还会通过 `accounts.dispatch_guard(record)` 创建活体 `MailAccountDispatchGuard`：SMTP 在建连接、认证前/后与 DATA 前实时检查组合 guard（`CompositeMailGuard` 汇聚租约 guard 与账户 guard），DATA 提交在账户临界区内完成。组合 guard 先取得账户锁，再用单一总 monotonic deadline 取得其余临界区，并在全部锁内复核所有 guard，因此等待账户锁期间失效的租约既不会进入 DATA、也不会泄漏账户锁；账户/端点/开关变更（含另一进程的写入）要么在 DATA 前以 `MAIL_ACCOUNT_CHANGED` 中止，要么必须等待已经开始的提交完成。SMTP 构造经类型化 `SmtpSenderFactory`/`SmtpSenderPort` 端口注入，生产默认 `TlsSmtpSender`。凭据后端失败（含 F09 前 fail-closed）返回 `MAIL_CREDENTIAL_UNAVAILABLE` 且 `needs_user_action=true`。
+- `infrastructure/mail/host.py`：只读 `host.mail.account/probe/folders/fetch/delivery_status/reconcile_sent`。`delivery_status` 只按 `account_id + local_action_id` 返回宿主账本的权威状态/逐收件人结果（扩展据此投影，不能提交状态）。`account` 只返回 `{account_id,address,display_name,read_enabled,send_enabled,fingerprint}`，不含端点或句柄；所有方法只接受 `account_id` 并从注册表解析。`reconcile_sent` 先做一次 owner 感知的租约恢复扫描，再读取宿主账本并严格校验 `record.account_id == account_id`、`record.message_id == message_id` 且 `record.status == UNKNOWN`，不合法的动作抛 `MAIL_ACTION_UNKNOWN`/`MAIL_ACTION_BINDING_MISMATCH` 或返回 `UNAVAILABLE(MAIL_ACTION_NOT_UNKNOWN)` 且不查询邮箱；唯一命中后必须由 ledger CAS 真正把 `UNKNOWN` 提升为 `SUCCEEDED`（`server_code=SENT_RECONCILED`）才返回 `MATCHED`，CAS 失败或返回其它终态一律 `UNAVAILABLE`。
+- `infrastructure/mail/executor.py`：`MailSendExecutor` 只执行声明 `mail.send` 能力的工具；只接受 `account_id` + `account_fingerprint`，与宿主注册表 fingerprint 精确比对；物化当前草稿后校验 MIME 哈希、解析收件人/主题/Message-ID 与附件哈希。账户在物化前、物化 await 返回后、以及建立 SMTP 连接前各复核一次（fingerprint 与 `send_enabled`），期间禁用/换绑/删除账户会在 SMTP 前确定失败且不写入 EXECUTING。随后在 `_begin` 之前生成唯一 owner 代次，并把**同一个值**用于账本领取、本机活跃登记、心跳与注销（否则心跳无法续租自己领取的行）→ `prepare` → `begin_execution`（含 owner 与有界租约；建立连接前必须成功落 EXECUTING）→ 启动心跳任务续租并在丢失租约时使发送 guard 失效 → `broker.send(account_id, request, guard=...)` → `finalize` CAS。心跳任务持有的 `_LeaseGuard` 以单调 deadline 为权威，且 deadline **锚定数据库领取/续租调用时刻**（`claim_started` 在 `_begin` 前取得、`heartbeat` 续租锚定调用起点）：`valid` 实时按 deadline 计算，`renew` 只在未过期时推进，`invalidate`/`renew` 由线程锁串行化；每次 `ledger.heartbeat` 调用由 `asyncio.timeout_at` 以剩余租约为界，因此心跳挂起（永久不返回）或心跳间隔大于租约都会让 guard 在 deadline 到期即失效（`reason="EXECUTION_LEASE_LOST"`）。若领取后的复核工作已耗尽租期，执行器在创建 guard 后立即检测到无效并抛 `OutcomeUnknownError`（绝不开 SMTP，`EXECUTING` 行留给恢复/对账）；测试可用构造参数 `lease_seconds`/`heartbeat_interval_seconds` 注入有界租约。发送结束（含取消）会回收心跳任务并注销本机 owner 代次。终结账本失败时向 Gateway 抛 `OutcomeUnknownError`，绝不返回成功；已终态动作幂等重放返回与工具输出 Schema 相同形状的结果，绝不二次派发；崩溃遗留的 `EXECUTING` 由宿主启动恢复扫描转为 `UNKNOWN` 后仍可由 Sent 对账收敛。
+- `core/extensions/descriptors.py` 与 Manifest 工具级 `capabilities`：`ManifestTool.capabilities` 映射为领域 `ToolDescriptor.required_capabilities`；`infrastructure/tools/capability_router.py` 的 `CapabilityRoutingExecutor` 按该声明把 `mail.send` 路由到宿主执行器，其余调用路由到拥有者 Worker；`bootstrap.py` 用真实组合根构造 `Container.tool_registry`/`tool_gateway`，public/admin lifespan 在启动时按持久 lifecycle 调用 `refresh_tool_registry()`。
+- 迁移 `0006_f06_mail_transport.sql`：通用宿主传输台账 `mail_delivery_actions(local_action_id PK, account_id, message_id, status, envelope_digest, mime_sha256, recipient_results jsonb, server_code, diagnostic_code, created_at, updated_at)`，状态约束为上述六态，另含消息索引与未决状态部分索引；不含正文、凭据或扩展 ID。SHA-256 为 `dbc5001bdd16981f2a17f36abe4ef3fcdd36c63c3461477f1a61e1ecb6f32a01`（第二轮审计修复增加 `owner_id`/`lease_expires_at` 与租约索引）。
+
+### 15.2 SDK 新增接口（向后兼容）
+
+- `personal_assistant_sdk`：`MailAccountInfo`（无端点、无句柄）、`MailboxCapabilities`、`MailFolderInfo`、`FetchedMail`、`FetchedMailBatch`、`HostMailClient`、`HostArtifactClient`；`RuntimeContext` 新增 `host_mail`/`host_artifact`。
+- 全双工宿主方法：`host.mail.account`、`host.mail.probe`、`host.mail.folders`、`host.mail.fetch`、`host.mail.reconcile_sent`、`host.artifact.put/read/delete`。发送（SMTP）**没有**宿主方法。
+- 能力门：`ProcessRuntimeSupervisor` 只在 Manifest 声明且能力可用时注册 handler；`required` 能力不可用时 enable 失败并落 `REQUIRED_CAPABILITY_UNAVAILABLE`。
+
+### 15.3 nju.smail Manifest 槽位与风险
+
+- 槽位：`EventSource: smail.poll_inbox`、`ContextProvider: smail.thread_history`、`ToolProvider: smail.search`(READ)/`smail.prepare_reply`(INTERNAL_WRITE)/`smail.sync`(INTERNAL_WRITE)/`smail.send`(EXTERNAL_WRITE)/`smail.send_status`(INTERNAL_WRITE，只读宿主状态并做 CAS 投影)/`smail.reconcile_send`(INTERNAL_WRITE)、`WorkflowProvider: smail.reply_flow`、`ScheduleProvider: smail.poll_every_5m`（300 秒、`coalesce`）、`FormSchemaProvider: smail.account_settings`、`MigrationProvider: smail.mail_schema`。`smail.record_send_result` 已删除，扩展无法伪造发送结果。
+- `smail.send` 额外声明工具级 `capabilities = ["mail.send"]`，因此生产 Gateway 会把它路由到宿主执行器；`smail.prepare_reply` 永不发送，风险等级不因本任务改变。
+
+### 15.4 IMAP 同步、游标与去重语义
+
+- 只读保证：保留 `EXAMINE`/`SELECT (readonly)` 与 `BODY.PEEK`，客户端不存在 `STORE`/`EXPUNGE`/`COPY`/`MOVE`/`APPEND`/`IDLE`；协议测试断言命令日志无变更命令、服务器 flags/文件夹不变。
+- 主去重：位置表主键 `(account_id, folder_name, uidvalidity, uid)`；逻辑身份 `dedupe_key` 同时绑定 `Message-ID` 与 `canonical_content_hash`（缺失 Message-ID 时仅内容哈希）。复用/伪造 Message-ID 但正文不同的邮件是新逻辑消息，不会丢失正文；重复扫描、Worker 重启与 UIDVALIDITY 重置仍收敛为一条消息、一个事件。
+- 分块游标：每批按 ≤25 条分块提交，事务只把游标推进到**当前分块的最大 UID**；后一块失败时下一轮从上一块末尾继续，绝不跳过未提交邮件。消息、位置、线程、联系人、附件、事件与游标在同一宿主事务提交。
+- 退避与用户动作：认证/凭据类错误进入 `NEEDS_USER_ACTION`（后续轮询跳过探测）；瞬时错误指数退避 60→3600 秒；`force` 才允许显式重试。
+- 邮件正文是不可信数据：`ContextProvider` 证据标记 `sensitivity=PERSONAL`、`trust=EXTERNAL_MESSAGE`；正文不能改变工具/计划/策略或触发发送。
+
+### 15.5 草稿版本、审批绑定与发送结果
+
+- `mail_draft_versions` 绑定 `account_fingerprint`、`from_address`、**`thread_id`**、`revision_request_id`、To/Cc/Bcc、Subject、Body、附件清单（文件名、媒体类型、SHA-256、大小）与 `canonical_digest`。草稿行确保语句是 `ON CONFLICT DO NOTHING`（stale CAS 不触碰 `updated_at`），版本插入与当前指针 CAS 在**同一条 data-modifying CTE** 中完成（`FOR UPDATE` 锁草稿行）：CAS 不匹配或请求已存在时 SQL 本身零修改，不可能留下引用已删除 Artifact 的孤立版本，指针不会回退；`(draft_id, revision_request_id)` 唯一；同一请求键换到另一线程即使正文相同也必须冲突。
+- 幂等与再次编辑：`prepare_reply` 用 `InvocationContext.idempotency_key` 作为 `revision_request_id`；同键同内容重放返回原版本（不产生新 Artifact/动作 ID/Message-ID），同键异内容抛 `SMAL_IDEMPOTENCY_CONFLICT`。新的编辑请求（新请求 ID 或显式 draft_id）即使正文完全相同或 A→B→A，也产生新版本、新 `local_action_id`、新 Message-ID 与新 MIME 制品；数据库失败或取消会用抗重复取消的 shielded 清理删除刚创建的 MIME Artifact（无孤儿制品）。发送审批绑定账户 fingerprint，宿主注册表端点/端口/句柄/开关任一变化都会使旧审批失效。
+- 审批与发送：`smail.send` 参数包含 account_id/fingerprint、draft_id/version、canonical 摘要、local_action_id、Message-ID、From/To/Cc/Bcc、Subject、MIME 哈希与附件哈希；执行器在 SMTP 前逐项校验，编辑草稿后旧版本无法匹配当前版本（`SMAL_DRAFT_CHANGED`）。
+- 幂等与结果：Outbox `(tool_id, idempotency_key)` 与台账 `local_action_id` 双重保证最多一次派发；`SUCCEEDED`/`PARTIAL`/`FAILED`/`UNKNOWN` 与逐收件人 `ACCEPTED/REJECTED/UNKNOWN` 持久化；`PARTIAL` 绝不上报整体成功；`UNKNOWN` 不自动重试，只由 `smail.reconcile_send` 只读 Sent 对账或用户裁决收敛，命中时宿主台账 CAS 提升为 `SUCCEEDED`。**扩展没有可写入发送结果的公开工具**：`smail.send_status` 只能读取 `host.mail.delivery_status` 并把宿主状态投影到本地 `mail_send_actions`（SQL CAS 仅允许 `PREPARED/UNKNOWN → 宿主终态`，第一个终态不可覆盖）；宿主返回 `PREPARED/EXECUTING` 时只回报宿主状态、不做终态投影；伪造或并发终态写入不可能成功。
+- 初始真实发送仅允许 `PA_MAIL_TEST_RECIPIENTS` 中登记的受控地址。
+
+### 15.6 配置、注册表与管理接口
+
+- 新增 `PA_MAIL_SEND_ENABLED`（默认 false）、`PA_MAIL_TEST_RECIPIENTS`（发送开启时必填、规范化/去重/≤64）、`PA_MAIL_MAX_MESSAGE_BYTES`（65536–26214400）。所有构造路径规范化并校验。
+- 宿主账户注册经 Local Admin（仅回环 8001）：`GET/PUT /admin/v1/mail/accounts`，仅保存非秘密元数据与 `SecretHandle` id；扩展 Manifest 的 `config_schema` 只接受 `{account_id, display_name?}`，宿主拒绝任何扩展提交的端点/句柄字段。
+- 客户端专用密码只存在于宿主凭据后端（F09 前生产 fail closed）；配置、数据库、日志、RPC、异常、测试 fixture 与 Git 均不含密码。扩展 Worker 不建立 IMAP/SMTP 连接；venv/Worker 仍只是依赖与崩溃隔离。
+
+### 15.7 有意未实现与剩余风险
+
+- 真实 smail 只读/发送 E2E 未执行：缺少用户账号、SecretHandle 与受控测试地址；当前证据为协议级模拟、真实 TLS/socket、真实 PostgreSQL 与真实 Worker/组合根测试。
+- Windows Credential Manager 与其余生产凭据后端属 F09；当前生产凭据不可用时 fail closed。
+- Sent 文件夹名称按供应商配置（默认 `Sent`）；真实服务器 capability probe 结果需在真实只读验收中确认。
+- 收信附件转发仅支持受控 Artifact 引用；`host.mail.account` 只暴露非秘密元数据，普通生产收件人发送需用户显式登记。

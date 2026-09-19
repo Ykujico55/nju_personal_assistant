@@ -62,13 +62,14 @@ RECIPIENTS = {REMOTE_IDENTITY.provider_id: REMOTE_IDENTITY}
 def build_service(store: object) -> DisclosureConsentService:
     return DisclosureConsentService(store, recipients=RECIPIENTS)  # type: ignore[arg-type]
 
-MIGRATION_NAMES = (
+F04_MIGRATION_NAMES = (
     "0001_core.sql",
     "0002_f01_persistence.sql",
     "0003_f02_operations.sql",
     "0004_f02_operation_request_scope.sql",
     "0005_f04_model_disclosure.sql",
 )
+MIGRATION_NAMES = (*F04_MIGRATION_NAMES, "0006_f06_mail_transport.sql")
 
 
 def _dsn(url: str) -> str:
@@ -194,10 +195,10 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(_file_checksum(f"{row['version']}.sql"), row["checksum"])
         self.assertEqual((), await adapters.startup())
 
-    async def test_upgrade_from_0004_adds_only_0005_and_keeps_old_checksums(self) -> None:
+    async def test_upgrade_from_0004_adds_only_later_migrations_and_keeps_checksums(self) -> None:
         legacy = Path(tempfile.mkdtemp(prefix="pa_f04_legacy_"))
         self._temp_dirs.append(legacy)
-        for name in MIGRATION_NAMES[:-1]:
+        for name in F04_MIGRATION_NAMES[:-1]:
             shutil.copy(MIGRATIONS_DIR / name, legacy)
         first = self._adapters_for(self._db_name, legacy)
         applied = await first.startup()
@@ -207,16 +208,18 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
         second = self._adapters_for(self._db_name)
         applied = await second.startup()
         self._adapters.append(second)
-        self.assertEqual(("0005_f04_model_disclosure",), applied)
+        self.assertEqual(
+            ("0005_f04_model_disclosure", "0006_f06_mail_transport"), applied
+        )
         rows = await self._fetch(
             "SELECT version, checksum FROM schema_migrations ORDER BY version"
         )
         by_version = {row["version"]: row["checksum"] for row in rows}
-        for name in MIGRATION_NAMES[:-1]:
+        for name in F04_MIGRATION_NAMES:
             self.assertEqual(_file_checksum(name), by_version[name[:-4]], name)
         self.assertEqual(
-            _file_checksum("0005_f04_model_disclosure.sql"),
-            by_version["0005_f04_model_disclosure"],
+            _file_checksum("0006_f06_mail_transport.sql"),
+            by_version["0006_f06_mail_transport"],
         )
 
     async def test_0005_checksum_drift_is_rejected(self) -> None:

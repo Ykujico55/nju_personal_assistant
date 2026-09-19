@@ -2,7 +2,7 @@
 
 本清单把详细设计拆成较小、可独立验收的工作包。状态只允许 `TODO / NEXT / IN_PROGRESS / DONE / BLOCKED`。后续模型一次领取一个任务，完成后在本文件写入测试命令和结果。
 
-简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01–F05 已通过最终复验并标记 `DONE`；F06 是唯一 `NEXT`，尚未开始；F07+ 保持 `TODO`，不得提前开始。
+简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01–F06 已通过最终复验并标记 `DONE`；F07 是唯一 `NEXT`，F08+ 保持 `TODO`，不得提前开始。
 
 ## 基架状态
 
@@ -14,7 +14,8 @@
 | F03 | DONE | Cloudflare Access JWT 验证、JWKS 缓存/轮换、public/Admin/health 边界回归 | 三轮独立验收通过；前两轮 6+2 项缺陷均修复并补反例；F03 目标集合 124 passed；`./scripts/test.ps1` 269 passed、28 skipped；PostgreSQL 28 passed；Ruff/Mypy/`pip check`/`git diff --check`、手工轮换复现与 wheel 内容核验通过 |
 | F04 | DONE | 真实本地/远程模型适配器、canonical 披露许可（持久 + 内存）、迁移 0005、`PA_MODEL_*` 配置、public 披露接口 | 两轮自我审查 16 项与第三至七轮验收修复后目标集合 161 passed；`./scripts/test.ps1` 409 passed、37 skipped；`./scripts/test-postgres.ps1` 37 passed（F01 24 + F02 4 + F04 9）；Ruff/Mypy（150 files）/`pip check`/`git diff --check` 通过；wheel 含模型模块、许可模块与 0005 迁移；独立验收通过 |
 | F05 | DONE | 个人知识扩展：授权目录扫描、Markdown/TXT/PDF 抽取、版本化索引、PostgreSQL FTS + pgvector 混合检索、可验证引用、删除传播；通用宿主数据能力与扩展配置通道 | 完整独立审计和修复后自审计通过；全量 597 passed、81 skipped；PostgreSQL/真实 Worker 81 passed；其余证据见下方 F05 章节 |
-| F06 | NEXT | smail 扩展：IMAP 读取、草稿、R2 SMTP 发送与对账 | 尚未开始，只允许下一位 Agent 领取本项 |
+| F06 | DONE | smail 扩展：IMAP 只读同步、版本化草稿、R2 SMTP 发送与对账；宿主账户注册表、通用邮件端口与传输台账、生产 Gateway 路由 | 六轮独立审计及补充复验通过；`./scripts/test.ps1` 742 passed、103 skipped，Ruff/Mypy 192 files 通过；`./scripts/test-postgres.ps1` 103 passed（真实 PostgreSQL 与 Worker）；`pip check`/`git diff --check`/wheel 内容核验通过。真实 smail 账号 E2E 未执行 |
+| F07 | NEXT | ehall 扩展：用户亲自完成 SSO/验证码/扫码，有头浏览器填写一个低风险事务至提交前预览 | 尚未开始；必须先冻结浏览器/Desktop Companion 边界，并保留最终提交的独立审批与回执 |
 
 F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基架；后续任务应替换端口适配器或新增业务扩展。当前任务进入 `QUEUED` 后不会被假 Worker 消费，这是有意的 fail-closed 行为。
 
@@ -215,19 +216,113 @@ F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基�
 
 剩余风险：本机进程创建延迟会影响 F02 既有的亚秒级 RPC 计时测试（与 F05 代码无关，环境负载敏感）；`plainto_tsquery('simple')` 对无空格中文长句只能整句匹配（黄金查询集使用词边界清晰的内容）；向量维度未约束时无法建 ANN 索引，规模上限依赖精确检索。
 
-### F06 — smail 扩展（NEXT，未开始）
+### F06 — smail 扩展（DONE — 独立验收通过）
 
-范围：IMAP SSL 轮询、UIDVALIDITY/UID 去重、线程历史、草稿、受控 SMTP SSL 发送及对账。
+范围：IMAP TLS 只读轮询、UIDVALIDITY/UID 游标与 Message-ID/内容哈希辅助去重、线程/联系人/附件来源、版本化草稿、受控 SMTP TLS 单封发送及 Sent 只读对账。
 
-能力边界：读取与发送能力分离；客户端专用密码仅进系统凭据库。
+能力边界：读取与发送能力分离；客户端专用密码仅经 `SecretHandle` 由宿主邮件代理使用；扩展不建立 IMAP/SMTP 连接。
 
-验收：五分钟轮询；重扫不重复处理；并发发送同一幂等键最多一封；手机编辑使旧审批失效；UNKNOWN 不自动重发。
+#### 架构缺口清单（实现前检查，2026-09-18）
 
-失败红线：未确认最终 MIME 发送；记录密码；不确定结果自动重试。
+1. **无通用邮件宿主端口**：核心只有模型/知识能力。F06 新增 `core/mail/ports.py`（`MailTransportBroker`、`MailAccountBinding`、`MailReadSession`、`MailEnvelope`、`MailRecipientResult`、`MailDeliveryReceipt`、`MailReconciliationResult`、`MailPolicy`、`MailDeliveryLedger`），实现位于 `infrastructure/mail/`，核心无任何 `nju.smail`/NJU 分支。
+2. **扩展无法发起宿主能力请求（只读方向）**：F05 已有全双工 `host.data.*`。F06 在同一通道新增只读 `host.mail.probe/folders/fetch/reconcile_sent` 与 `host.artifact.put/read/delete`；SMTP 发送不暴露给扩展，只能经 Tool Gateway executor。
+3. **草稿是 Artifact 但扩展无制品能力**：新增通用 `artifact.read/artifact.write` 宿主能力（`core/extensions/artifact_access.py` + `FileExtensionArtifactAccess`/`InMemoryExtensionArtifactAccess`），按扩展版本持久化所有权，跨扩展读取 fail closed。
+4. **无宿主传输台账**：UNKNOWN 与部分拒收需要跨重启证据。新增迁移 `0006_f06_mail_transport.sql` 的通用 `mail_delivery_actions`（无正文、无凭据、无扩展 ID）。
+5. **发送执行边界**：新增 `MailSendExecutor`（`infrastructure/mail/executor.py`）：只有声明 `mail.send` 能力的工具可被它执行；先令扩展物化“当前草稿版本”的精确 MIME 字节，校验哈希、Message-ID、收件人/主题/附件哈希与审批快照一致后才调用 Broker；任何不一致在 SMTP 前确定失败。
+6. **IMAP/SMTP 客户端**：`infrastructure/mail/imap_client.py` 使用 `ssl.create_default_context()`（证书+主机名验证）、`EXAMINE`/`SELECT (readonly)`、`BODY.PEEK`，禁用 `STORE/EXPUNGE/COPY/MOVE/APPEND/IDLE`；`smtp_client.py` 显式区分 DATA 前/中/后断线并保存逐收件人结果。
 
-禁区：默认自动回复；绕过统一 Tool Gateway；fixture 使用真实邮件。
+#### 交付与证据（2026-09-18，等待独立验收，未标 DONE）
 
-### F07 — ehall 扩展（TODO）
+- **扩展制品**：`extensions/nju_smail`（Manifest、12 个 JSON Schema、扩展自有迁移 `migrations/0001_mail.sql`、`src/nju_smail/*`）。Manifest 槽位：`EventSource: smail.poll_inbox`、`ContextProvider: smail.thread_history`、`WorkflowProvider: smail.reply_flow`、`ScheduleProvider: smail.poll_every_5m`（300 秒，`coalesce`）、`FormSchemaProvider: smail.account_settings`、`MigrationProvider: smail.mail_schema`；工具风险：`smail.search` READ、`smail.prepare_reply`/`smail.sync`/`smail.send_status`/`smail.reconcile_send` INTERNAL_WRITE、`smail.send` EXTERNAL_WRITE；`smail.record_send_result` 不存在，扩展无法写入发送结果。能力：required `extension.data.sql`/`mail.read`/`artifact.read`/`artifact.write`，optional `mail.send`。
+- **主去重与辅助去重**：`mail_message_locations` 主键 `(account, folder, uidvalidity, uid)`；逻辑身份 `dedupe_key` 取规范化 `Message-ID`，缺失时退回 `canonical_content_hash`（含规范化主题/发件人/收件人/正文/附件哈希；截断消息计入大小）；邮件、位置、线程、联系人、附件、事件与新游标在同一宿主事务提交，重复扫描与 Worker 重启收敛为一条消息/一个事件。
+- **UIDVALIDITY 变化**：检测到新 UIDVALIDITY 时先把游标归零并重新从 0 拉取；旧位置保留可追溯，同一 Message-ID/内容不会重复产生事件或草稿候选。
+- **凭据失效**：认证/凭据错误进入 `NEEDS_USER_ACTION`（不再自动高频重试）；瞬时错误按 60 秒起、上限 3600 秒的指数退避写入 `mail_sync_state.backoff_until`；手动 `force` 可显式重试。
+- **草稿与审批**：`mail_draft_versions` 每次编辑生成新版本、新 canonical 摘要、新稳定本地动作 ID 与 Message-ID；`smail.send` 在发送前要求“请求版本 == 当前版本”且摘要/哈希与审批参数一致，手机编辑任一字段后旧审批无法物化旧版以外的内容；实际发送的是被审批的精确 MIME 字节（含附件哈希），`mail_delivery_actions` 记录逐收件人成功/失败明细。
+- **UNKNOWN 与对账**：DATA 期间/之后断线记为 `UNKNOWN`（绝不自动重发）；`smail.reconcile_send` 只读核对 Sent 文件夹：唯一命中转 `SENT_CONFIRMED`，未找到保持 `UNKNOWN`，多条命中转 `NEEDS_USER_ACTION`。
+- **Prompt Injection**：邮件正文只作为不可信数据（`trust=EXTERNAL_MESSAGE`）进入检索/上下文；同步注入邮件不注册能力、不改变策略、不产生发送动作（`test_postgres_f06` 断言 `mail_send_actions` 为 0）。
+- **公共契约变化**：`core/mail/ports.py`（v1.6 第 15 节）、`core/extensions/artifact_access.py`、SDK `MailAccountSpec`/`MailboxCapabilities`/`MailFolderInfo`/`FetchedMail`/`FetchedMailBatch`/`HostMailClient`/`HostArtifactClient` 与 `RuntimeContext.host_mail`/`host_artifact`、`PA_MAIL_SEND_ENABLED`/`PA_MAIL_TEST_RECIPIENTS`/`PA_MAIL_MAX_MESSAGE_BYTES`。
+- **迁移**：核心新增 `0006_f06_mail_transport.sql`（SHA-256 见契约 15.6，通用 `mail_delivery_actions`）；`0001`–`0005` 逐字节未改（契约测试锁定）；扩展迁移 `extensions/nju_smail/migrations/0001_mail.sql`（SHA-256 见契约 15.6）由宿主在 `ext_nju_2e_smail` Schema 内执行并登记。
+- **测试覆盖**：`tests/unit/test_mail_mime_f06.py`（边界 MIME/文件名穿越/深层 multipart/截断）、`tests/unit/test_smail_sync_f06.py`（UID/Message-ID/内容去重、UIDVALIDITY、线程）、`tests/unit/test_smail_drafts_f06.py`（版本化草稿、快照篡改、部分结果、对账）、`tests/unit/test_mail_send_gateway_f06.py`（无审批 0 派发、旧审批+新内容 0 派发、部分拒收不报成功、UNKNOWN 不重试、同键异 payload 冲突、allowlist、凭据失败转用户动作）、`tests/integration/test_mail_protocol_f06.py`（真实 TLS/socket 模拟 IMAP/SMTP：只读且状态不变、UIDVALIDITY、认证/TLS/凭据失败、逐收件人部分拒收、DATA 三阶段断线、Sent 对账 MATCHED/NOT_FOUND/AMBIGUOUS）、`tests/integration/test_postgres_f06.py`（重复同步/重启/UIDVALIDITY 幂等、NEEDS_USER_ACTION 不退避重试、草稿/发送/回执/对账跨重连恢复）、`tests/integration/test_smail_worker_real.py`（独立 zip 制品 + 真实 venv/Worker + 真实邮件协议 + 真实 PostgreSQL 的 install→enable→sync→draft→disable→recover→uninstall）。
+- **最终命令证据（2026-09-18，第三轮审计修复后测量；第四轮改动未执行）**：F06 目标集合（无数据库时 125 passed、22 skipped；配置 `PA_TEST_DATABASE_URL` 后 147 passed，含真实 PostgreSQL 与真实 Worker）——`tests/unit/test_mail_mime_f06.py`、`tests/unit/test_smail_sync_f06.py`、`tests/unit/test_smail_drafts_f06.py`、`tests/unit/test_mail_send_gateway_f06.py`、`tests/unit/test_settings_f06.py`、`tests/unit/test_mail_registry_f06.py`、`tests/unit/test_mail_ledger_f06.py`、`tests/integration/test_mail_protocol_f06.py`、`tests/api/test_admin_mail_accounts.py`、`tests/contract/test_f06_contract_consistency.py`、`tests/integration/test_postgres_f06.py`、`tests/integration/test_smail_worker_real.py`。`./scripts/test.ps1` → 722 passed、103 skipped、Ruff `All checks passed!`、Mypy `Success: no issues found in 191 source files`。`./scripts/test-postgres.ps1` → 103 passed（F01 24 + F02 4 + F04 9 + F05 41 + Worker 3 + F06 PostgreSQL 21 + smail 组合根 1；PostgreSQL 17.11 + pgvector，全部为临时 `*_test` 数据库）。`python -m pip check` → `No broken requirements found.`；`git diff --check` 干净（仅 autocrlf 提示）。框架 wheel 解包核验：189 个条目，含 `core/mail`、`infrastructure/mail`、制品能力、`mail_ledger.py` 与 0006 迁移，不含任何 `nju_smail` 条目；扩展以独立 zip 制品在真实组合根（`build_container`）中完成 install → enable → refresh_tool_registry → sync → prepare_reply → R2 审批 → 生产 ToolGateway 发送（SMTP 服务器收到与审批哈希一致的精确 MIME 字节）→ 宿主台账 SUCCEEDED → 停用 → 恢复 → 再同步 → 卸载 烟测（`test_smail_worker_real.py`）。核心迁移 `0001`–`0005` SHA-256 未变（契约测试与 `test_f06_contract_consistency.py` 双重锁定）；新增 `0006_f06_mail_transport.sql` SHA-256 `dbc5001bdd16981f2a17f36abe4ef3fcdd36c63c3461477f1a61e1ecb6f32a01`，扩展迁移 `0001_mail.sql` SHA-256 `6320af7791bd2805e36c70f7fa731417935e7bfd6ad875b95a6d42d179469d8c`（审计修复更新了六态状态机 + 租约列与草稿请求幂等列）。
+- **每项安全反例对应的测试**：重复 UID/同内容不同 UID/缺失重复 Message-ID/UIDVALIDITY 重置 → `test_smail_sync_f06.py`；事务批与游标原子性、重启幂等、注入邮件不产生发送动作 → `test_postgres_f06.py`；畸形 MIME/深层 multipart/超大与压缩附件炸弹/文件名穿越 → `test_mail_mime_f06.py`；TLS 证书、认证失败、限流/慢速滴流、取消 → `test_mail_protocol_f06.py::test_untrusted_certificate_fails_closed`/`test_wrong_password_is_a_typed_user_action_error`/`test_unsupported_auth_mechanism_is_needs_user_action`/`test_slow_trickle_respects_the_total_deadline`/`test_cancellation_closes_the_session`；凭据撤销 fail closed → `test_revoked_credential_fails_closed`；只读不改状态 → `test_probe_lists_folders_and_reads_without_mutating_state`/`test_reconciliation_never_deletes_or_moves`；草稿编辑使旧审批失效 → `test_smail_drafts_f06.py::test_edited_draft_makes_the_old_version_unusable`、`test_mail_send_gateway_f06.py::test_modified_payload_with_old_approval_is_rejected`；无审批 0 派发 → `test_no_approval_never_reaches_the_transport`；同键异 payload 冲突 → `test_same_idempotency_key_with_different_payload_conflicts`；DATA 三阶段 → `test_disconnect_before_data_is_a_definitive_failure`/`test_disconnect_during_data_is_unknown`/`test_disconnect_after_data_is_unknown`；部分拒收 → `test_partial_recipient_rejection_keeps_full_detail`、`test_partial_delivery_is_never_reported_as_success`；UNKNOWN 不重发与对账收敛 → `test_unknown_outcome_is_not_retryable_and_not_retried`、`test_not_found_reconciliation_keeps_unknown_and_never_resends`、`test_matched_reconciliation_converges_to_confirmed`、`test_sent_reconciliation_matched_not_found_and_ambiguous`；审批快照与实际 MIME 一致 → `test_approved_send_transmits_the_exact_artifact_bytes`、`test_stale_draft_version_never_reaches_the_transport`；凭据不进入异常 → `test_wrong_password_is_a_typed_user_action_error`。
+- **真实外部验收未执行（必须如实声明）**：当前没有用户提供的 smail 账号、SecretHandle 或受控收件地址，因此未连接真实邮箱、未执行真实只读 IMAP E2E、未发送任何真实邮件。协议级模拟服务器、真实 TLS/socket、真实 PostgreSQL 与真实 Worker 测试不能替代真实 smail E2E。Windows Credential Manager 属 F09；生产凭据后端不可用时宿主 fail closed（`UnavailableSecretStore`），绝不回退明文。
+- **剩余依赖**：F09 真实凭据后端；用户登记的受控测试地址与显式 `PA_MAIL_SEND_ENABLED`；真实服务器的 capability probe 结果（认证机制/速率/文件夹命名）需在真实只读验收时确认；`Sent` 文件夹名称可能因供应商不同需配置。
+
+
+#### 第一轮独立审计修复（2026-09-18，6×P1 + 2×P2，均先补反例）
+
+1. **P1 凭据重定向（confused deputy）**：新增宿主所有 `MailAccountRegistry`（`MailAccountRecord` + `FileMailAccountRegistry`/`InMemoryMailAccountRegistry`，严格 JSON、原子写）与 Local Admin `GET/PUT /admin/v1/mail/accounts`。扩展与工具参数只能提交 `account_id`；mail broker 从注册表解析端点与 `SecretHandle` 并自行构造 binding；`host.mail.account` 只返回非秘密视图（无端点/句柄）；`MailSendExecutor` 校验宿主计算的 `account_fingerprint`。反例：`test_account_not_registered_never_reaches_materialization`、`test_changed_account_fingerprint_is_rejected`、`test_host_owns_the_account_registry`（契约）。
+2. **P1 分块同步跳过邮件**：游标改为只推进到当前分块的最大 UID，后块失败不会越过未提交 UID。反例：`test_failed_second_chunk_does_not_advance_past_it`、`test_first_chunk_failure_keeps_the_previous_cursor`。
+3. **P1 SMTP 超时/取消后线程继续**：`TlsSmtpSender` 跟踪活动连接与阶段，超时/取消先关闭 socket 并等待线程退出（重复取消同样先回收再重抛），之后按阶段返回 `FAILED`/`UNKNOWN`。反例：`test_slow_trickle_respects_the_total_deadline`、`test_cancellation_closes_the_session`、`test_smtp_timeout_during_data_is_unknown_and_thread_stops`、`test_repeated_cancellation_still_reaps_the_thread`。
+4. **P1 台账先发送后记录**：迁移 `0006` 改为六态 `PREPARED→EXECUTING→terminal` 单语句 CAS；执行器在建立 SMTP 连接前必须落 `PREPARED/EXECUTING`，发送后 `finalize` 失败向 Gateway 抛 `UNKNOWN`；终态禁止回退，`EXECUTING` 中断按 `UNKNOWN` 不重发。反例：`test_state_machine_never_regresses_and_is_idempotent`、`test_same_action_with_different_envelope_conflicts_atomically`、`test_concurrent_prepare_allows_exactly_one_digest`、`test_ledger_finalize_failure_is_unknown_not_success`、`test_interrupted_execution_never_resends`。
+5. **P1 相同 Message-ID 覆盖正文**：逻辑身份改为同时绑定 Message-ID 与规范化内容哈希；相同 Message-ID 不同正文成为新消息并产生新事件。反例：`test_reused_message_id_with_new_body_is_a_new_logical_message`、`test_message_id_dedupe_binds_identity_and_content`。
+6. **P1 草稿版本指针非原子**：草稿行、版本分配、版本插入与 `current_version` CAS 合并为单个宿主事务；每次编辑使用独立 revision nonce，相同正文/A→B→A 都产生新版本、新动作 ID 与 Message-ID；失败或取消删除刚创建的 MIME Artifact。反例：`test_identical_content_re_edit_is_still_a_new_version_and_action`、`test_revision_a_b_a_still_allocates_fresh_actions`、`test_failed_insert_removes_the_new_artifact`。
+7. **P2 宿主台账与扩展对账分裂**：`MailHostCapability.reconcile_sent` 在唯一命中时通过 ledger CAS 把持久 `UNKNOWN` 提升为 `SUCCEEDED`（`SENT_RECONCILED`），失败返回 `UNAVAILABLE`；`PostgresMailDeliveryLedger` 全部转换为带状态守卫的单条 SQL。反例：`test_reconciliation_lifts_unknown_but_not_other_terminals`、`test_matched_reconciliation_updates_the_host_ledger`。
+8. **P2 生产执行链未接通**：新增 Manifest 工具级 `capabilities` → `ToolDescriptor.required_capabilities` 桥（`core/extensions/descriptors.py`）、通用 `CapabilityRoutingExecutor` 与组合根 `Container.tool_registry`/`tool_gateway`/`refresh_tool_registry()`；public/admin lifespan 启动时发布持久 lifecycle 的 ENABLED 工具；`lifecycle_store` 的 manifest 序列化补齐工具 capabilities（修复安装后丢失路由声明）。真实组合根反例：`test_smail_worker_real.py::test_production_gateway_install_sync_draft_send_uninstall`（install→enable→sync→draft→R2 approval→SMTPSend→ledger→recover→uninstall，全部经 `build_container` 产物）。
+
+
+
+#### 第二轮独立审计修复（2026-09-18，4×P1 + 3×P2，均先补反例）
+
+1. **P1 Sent 对账未绑定宿主账本**：`host.mail.reconcile_sent` 现在先读账本，要求 `account_id`、`message_id` 严格匹配且状态为 `UNKNOWN`，否则 `MAIL_ACTION_UNKNOWN`/`MAIL_ACTION_BINDING_MISMATCH`/`UNAVAILABLE(MAIL_ACTION_NOT_UNKNOWN)` 且不查询邮箱；命中后必须由 `reconcile(account_id, message_id, ...)` 的 CAS 真正返回 `SUCCEEDED` 才向扩展报 `MATCHED`。反例：`test_wrong_account_or_message_binding_is_rejected`、`test_terminal_rows_are_not_reported_as_matched`、`test_unknown_local_action_is_rejected`、`test_reconciliation_requires_matching_account_and_message`（PostgreSQL 与内存两套）。
+2. **P1 崩溃遗留 EXECUTING 永久卡死**：迁移 0006 增加 `owner_id`/`lease_expires_at`；`begin_execution` 领取有界租约并拒绝烧毁活跃 lease；`recover_stale_executions()` 在 public/admin 启动时把租约过期的 EXECUTING 原子转 `UNKNOWN`，之后可经 Sent 对账收敛，全程零重发。反例：`test_recovery_sweeps_only_expired_executions`、`test_second_begin_never_burns_a_live_lease`（PostgreSQL `LedgerGuardTests` 与内存 `test_mail_ledger_f06.py` 各一套）、`test_sent_reconciliation_matched_not_found_and_ambiguous`。
+3. **P1 连接/TLS 阶段取消仍可能发送**：`_TrackedSmtp` 在 DNS/TCP 后、TLS 握手前注册原始 socket，`abort_requested` 在连接后、认证前/后、DATA 前检查；超时/取消关闭全部已注册 socket 并等待线程退出；线程已完成时真实 receipt 优先，`done` 不再被归为 `FAILED`。反例：`test_timeout_during_tls_handshake_fails_closed_and_reaps`、`test_cancellation_during_tls_handshake_closes_and_reaps`、`test_completed_send_wins_over_deadline_classification`。
+4. **P1 账户换绑 TOCTOU**：执行器在物化前、物化 await 后、建立连接前三次复核注册表 fingerprint 与 `send_enabled`；物化期间禁用/换绑/删除账户会在 SMTP 前确定失败且不写 EXECUTING。反例：`test_account_disabled_during_materialization_blocks_dispatch`、`test_credential_rebind_during_materialization_blocks_dispatch`。
+5. **P2 草稿 CAS 失败仍提交版本**：版本插入与指针 CAS 合并为单条 data-modifying CTE（`FOR UPDATE` + `NOT EXISTS`），CAS 不匹配时 SQL 零修改，不再产生孤儿版本。反例：`test_stale_cas_leaves_no_orphan_version`、`test_duplicate_revision_request_does_not_create_a_version`。
+6. **P2 草稿准备非幂等**：`revision_request_id` 取 `InvocationContext.idempotency_key` 并加唯一索引；同键同内容重放返回原版本，同键异内容冲突；新建草稿在无显式 draft_id 时按请求 ID 派生稳定 ID。反例：`test_prepare_reply_replay_and_conflict`、`test_same_request_replay_returns_the_original_version`、`test_same_request_with_different_content_conflicts`。
+7. **P2 文件注册表弱类型**：`read_enabled`/`send_enabled` 必须是真实 JSON boolean，字符串/数字/null 一律拒绝；`display_name`/`tls_mode` 也做类型与长度校验。反例：`tests/unit/test_mail_registry_f06.py::test_non_boolean_flags_are_rejected`。
+
+
+
+#### 第三轮独立审计修复（2026-09-18，3×P1 + 5×P2，均先补反例）
+
+1. **P1 凭据解析期间换绑**：注册表记录新增 `generation`，每次管理端写入递增；`verify(lease)` 复核 generation+fingerprint。Broker 只接受 `account_id`，在凭据 `await` 返回后、创建 socket 前原子复核，换绑/禁用/删除即 `MAIL_ACCOUNT_CHANGED`。反例：`test_rebind_during_credential_resolution_blocks_dispatch`（阻塞 `resolve_for_broker`，零 SMTP 连接）、`test_admin_edit_bumps_generation_and_invalidates_lease`。
+2. **P1 租约过期不等于 owner 死亡**：发送期间心跳续租（`heartbeat` CAS owner+EXECUTING）；丢失租约使发送 guard 失效并在下一命令边界中止；恢复扫描接受 `active_owners` 且只在租约过期且 owner 非活跃本机代次时转 `UNKNOWN`；宿主启动与每次 Sent 对账前都做安全扫描，finalize 故障留下的 EXECUTING 可收敛。反例：`test_heartbeat_renews_only_the_owner`、`test_active_owner_is_never_swept`、`test_recovery_sweeps_only_expired_executions`、`test_second_begin_never_burns_a_live_lease`、`test_lost_lease_guard_aborts_before_data`。
+3. **P1 扩展可伪造发送结果**：删除公开 `smail.record_send_result`；新增只读 `host.mail.delivery_status` 与 `smail.send_status`，投影 SQL 只允许 `PREPARED/UNKNOWN → 宿主状态` 且第一个终态不可覆盖。反例：`test_no_public_tool_can_forge_a_send_result`（契约）、`test_projection_mirrors_host_status_and_first_terminal_wins`、`test_projection_only_accepts_host_reported_status`（PostgreSQL）。
+4. **P2 草稿取消清理不抗重复取消**：`_delete_artifact_shielded` 在二次取消下仍等待删除完成再重抛。反例：`test_repeated_cancellation_still_deletes_the_artifact`。
+5. **P2 DNS 阶段无界**：DNS 解析移到发送线程之前并由同一总 deadline 约束，调用方绝不继续发送；但 `loop.getaddrinfo` 的阻塞系统解析线程无法被强制终止，可能比调用更晚结束，文档已如实修正（不再声称零线程残留）。guard 在 `_check_abort` 中生效。反例：`test_dns_stall_respects_deadline`、`test_dns_stall_cancellation_returns_without_thread`、`test_lost_lease_guard_aborts_before_data`。
+6. **P2 手工账户文件重复 ID**：`_read_locked` 校验唯一性，重复 ID 直接拒绝。反例：`test_manual_file_with_duplicate_ids_is_rejected`。
+7. **P2 草稿 CAS 非零修改**：草稿确保语句改为 `ON CONFLICT DO NOTHING`，stale CAS 不再触碰 `updated_at`。反例：`test_stale_cas_leaves_no_orphan_version`（PG，断言指针与版本数不变）。
+8. **P2 幂等指纹未绑定 thread_id**：`canonical_digest` 纳入 `thread_id`；同键同正文换线程必须冲突。反例：`test_same_request_same_body_different_thread_conflicts`。
+
+#### 第四轮审计修复（2026-09-18，3×P1 + 4×P2；反例已补，按用户要求本轮未自行执行测试）
+
+1. **P1 心跳 owner 与账本 owner 不一致**：执行器在 `_begin` 之前生成唯一 owner 代次，并把同一个值用于账本领取、本机活跃登记、心跳与注销。反例：`OwnerWiringTests::test_executor_uses_one_owner_for_claim_registry_and_heartbeat`。
+2. **P1 复核与建连之间 TOCTOU**：新增 `MailAccountDispatchGuard`，同进程写入经注册表 `subscribe` 立即失效，跨进程写入由 ≤2 秒 monitor 复核；SMTP 在连接、认证前/后与 DATA 前检查组合 guard（broker 增加可注入 `smtp_factory` 以便确定性反例）。反例：`test_rebind_after_reverify_invalidates_dispatch_guard`。
+3. **P1 删除再重建使旧 generation 复活**：注册表持久化 revision tombstone，`_bump` 以历史最高 revision 为下界，删除后重建不会复用旧 generation/指纹。反例：`test_delete_then_recreate_does_not_reuse_generation`、`test_memory_registry_aba_is_monotonic`。
+4. **P2 DNS 线程无法强制终止**：保留有界等待并在超时/取消时绝不继续发送，但删除“零线程残留”表述、如实记录系统解析线程可能更晚结束（代码注释与契约同步）。反例保持 `test_dns_stall_respects_deadline`、`test_dns_stall_cancellation_returns_without_thread`。
+5. **P2 `send_status` 对 PREPARED/EXECUTING 报错**：宿主返回非终态时只回报宿主状态、不做终态投影。反例：`test_host_non_terminal_status_is_reported_without_projection`。
+6. **P2 Admin PUT 返回陈旧 fingerprint**：写入后重新读取注册表并返回实际 generation/fingerprint。反例：`test_second_put_returns_stored_generation_and_fingerprint`。
+7. **P2 文档残留已删除工具**：`TODO.md`/`NEXT_STEPS.md`/契约中的 `smail.record_send_result` 已清理为 `smail.send_status`，并明确该旧工具不存在。
+
+**注意（如实声明）**：本轮按用户明确要求未自行运行任何测试/静态检查；上面新增的反例尚未由实现者执行。此前一次全量测量为 `./scripts/test.ps1` 722 passed、103 skipped，`./scripts/test-postgres.ps1` 103 passed，Ruff/Mypy（191 files）、`pip check`、`git diff --check` 通过；第四轮改动后的数字需由独立复验重新测量。
+
+#### 第五轮独立复验修复（2026-09-18，2×P1 + 1×P2；反例已补，按用户要求本轮未自行执行测试）
+
+1. **P1 跨进程 TOCTOU 仍存在**：删除“≤2 秒 monitor + 轮询”这一非正确性边界；`MailAccountDispatchGuard` 改为活体读注册表，读/解析失败即 fail closed；`FileMailAccountRegistry` 写者在跨进程 `ExclusiveFileLock`（`<registry>.lock`）内完成 read-modify-write，SMTP 在 DATA 提交前获取同一把锁并复读绑定，`docmd("DATA")` + payload + 最终回复全程持锁。语义为“修改先完成 → 发送以类型化 `MAIL_ACCOUNT_CHANGED` 中止”；“DATA 已开始 → 修改等待提交完成”。反例：`test_cross_process_registry_rebind_aborts_before_data`（两个 `FileMailAccountRegistry` 实例 + 真实 `TlsSmtpSender` + 受控 SMTP，在 RCPT 窗口换绑，0 封邮件）、`test_cross_process_writer_waits_while_data_is_in_flight`（DATA 期间写者阻塞，提交成功后账号才换绑）、`test_rebind_after_reverify_aborts_before_data`、`test_dispatch_guard_reads_live_and_fails_closed`、`test_memory_dispatch_guard_reads_live_state`。
+2. **P1 monitor/心跳读失败 fail-open**：删除 broker 轮询 monitor 与 `subscribe`；心跳循环改为维护本地 `valid_until`（续租成功才推进；数据库异常只在未过期前容忍；到期或 `heartbeat` 返回 False 立即失效 guard）。反例：`HeartbeatDeadlineTests::test_continuous_heartbeat_failures_expire_the_local_lease`、`test_transient_heartbeat_failures_keep_the_lease_until_renewal`。
+3. **P2 反例未验证真实错误语义**：删除 `_GuardSpySender` 伪反例，改用真实 `TlsSmtpSender` 与受控 SMTP；真实 sender 在账户 guard 失效时抛出类型化 `MailError(ACCOUNT_CHANGED)`（租约丢失仍返回 FAILED/UNKNOWN 回执）。测试支持新增 `SmtpState.rcpt_delay_seconds`/`data_delay_seconds`/`rcpt_seen`/`data_seen` 用于确定性开窗。
+
+**注意（第五轮，如实声明）**：本轮同样未由实现者运行任何测试/静态检查；审计方在第四轮修复后测得 F06 非数据库/Worker 目标集 131 passed、`./scripts/test.ps1` 728 passed、103 skipped，Ruff/Mypy（191 files）通过；第五轮改动后的数字需由独立复验重新测量（含真实 PostgreSQL 与真实 Worker 集合）。
+
+#### 第六轮独立复验修复（2026-09-18，2×P1 + 2×P2；反例已补，实现者已运行静态验收命令）
+
+1. **P1 心跳挂起时本地租约永不过期**：`_LeaseGuard` 改为单调 deadline 权威（`valid` 实时计算、`renew` 只在未过期时推进、`invalidate`/`renew` 由线程锁串行化）；每次 `ledger.heartbeat` 调用由 `asyncio.timeout_at` 以剩余租约为界。反例：`test_hung_heartbeat_cannot_outlive_the_local_lease`、`test_heartbeat_interval_larger_than_lease_fails_closed`，另有既有连续失败/瞬断容忍两条。
+2. **P1 组合 guard 在锁等待期间丢失租约仍进入 DATA**：`CompositeMailGuard` 先取得账户锁，再以单一总 monotonic deadline 取得其余临界区，并在全部锁内复核所有 guard；失败时释放已持有的锁。反例：`CompositeGuardTests::test_lease_lost_while_waiting_for_the_account_lock_blocks_data`（单元）与 `test_lease_lost_while_waiting_for_the_account_lock_never_sends`（真实 `TlsSmtpSender` + 受控 SMTP，断言 FAILED 且 0 封邮件）。
+3. **P2 强制静态检查未通过**：`file_lock.py` 修正 `__exit__` 签名与平台锁导入（`importlib`，避免 Windows 类型检查解析 `fcntl`）；`registry.py` 合并三处嵌套 `with`；`broker.py` 用类型化 `SmtpSenderFactory`/`SmtpSenderPort` Protocol 取代 `object`。`./scripts/test.ps1` → 739 passed、103 skipped、Ruff `All checks passed!`、Mypy `Success: no issues found in 192 source files`。
+4. **P2 注册表异步写阻塞事件循环**：`FileMailAccountRegistry` 的 `upsert`/`replace_all`/`delete` 完整 read-modify-write 移入受控工作线程（`asyncio.to_thread`），同一跨进程锁覆盖整个操作，Admin 事件循环不再被文件锁等待或文件 I/O 阻塞。反例：`test_file_registry_writes_run_off_the_event_loop`。
+
+**注意（第六轮历史记录）**：该轮实现者当时只运行了静态验收命令；之后的独立复验已补跑 `./scripts/test-postgres.ps1` 与真实 Worker 集合，最终结果见本节末尾。
+
+#### 第六轮复现补充修复（2026-09-18，1×P1 + 1×P2；实现者已运行静态验收）
+
+- **P1 本地 guard 在 `_begin()` 后重启完整租期**：guard 的 deadline 现在锚定数据库领取时刻——`claim_started` 在 `_begin` 调用前取得并传入 `_LeaseGuard(started_at=...)`，心跳续租同样锚定 `heartbeat` 调用起点；若领取后的复核工作已耗尽租期，执行器在创建 guard 后立即拒绝派发（抛 `OutcomeUnknownError`，绝不开 SMTP，`EXECUTING` 行留给恢复/对账）。反例：`test_guard_deadline_is_anchored_to_the_claim_origin`、`test_post_claim_delay_never_dispatches_with_an_expired_lease`（慢复核超过租期：Gateway 结果 `OUTCOME_UNKNOWN`、broker 0 次调用、账本保持 `EXECUTING`）。注：独立审计的该 P1 复现快照为该修复提交之前（审计记录 `./scripts/test.ps1` 739 passed，修复后为 742）。
+- **P2 取消注册表写入后后台线程仍提交**：`FileMailAccountRegistry` 的写操作改用项目既有取消安全模式 `run_blocking`（取消时继续 shield 等待工作线程、消费终态后才重抛 `CancelledError`，重复取消不中断回收），调用方不再可能在后台换绑落地前观察到取消。反例：`test_cancelled_write_waits_for_the_background_commit`（持锁阻塞写线程→取消→任务保持未完成→释放锁→提交完成后才抛 `CancelledError`，落盘状态证明无取消后写入窗口）。
+- 最终独立验收：`./scripts/test.ps1` → 742 passed、103 skipped、Ruff `All checks passed!`、Mypy 192 files 通过；`./scripts/test-postgres.ps1` → 103 passed（真实 PostgreSQL、personal_knowledge Worker 与 smail 组合根 Worker）；`pip check`、`git diff --check` 与 wheel 内容核验通过，测试后无残留 Python Worker。
+
+- **F06 已通过独立验收并标记 `DONE`；F07 提升为唯一 `NEXT`。**
+
+### F07 — ehall 扩展（NEXT）
 
 范围：有头 Playwright + Desktop Companion；用户亲自完成 SSO/验证码/扫码；只读枚举后选择一个低风险事项；填写至提交前预览。
 

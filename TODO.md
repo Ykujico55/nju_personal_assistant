@@ -45,9 +45,13 @@
   - 证据：`./scripts/test.ps1` → 597 passed、81 skipped，Ruff/Mypy（166 files）通过；`./scripts/test-postgres.ps1` → 81 passed（PostgreSQL 17.11 + pgvector，含真实 Worker）；`pip check`/`git diff --check` 干净。扩展迁移 `0001_knowledge_index.sql` SHA-256 为 `0f8758f97cce7206ac0b5cd4aa159f1b7b43de79cf1fa77a811a67f8aecd759d`；`0001`–`0005` 核心迁移未改。详见 `docs/NEXT_STEPS.md`。
   - 未实现（有意）：宿主自动执行 MigrationProvider（当前由扩展经数据能力触发）、OS 级文件监听（F09）、向量 ANN 索引（无维度约束列）、真实远程 embedding、PWA 表单渲染（F08）、永久 purge（501）。
 
-- [ ] **F06 — smail 扩展（NEXT，未开始）**：只允许下一位 Agent 领取本项；能力边界、验收条件与失败红线见 `docs/NEXT_STEPS.md`。
+- [x] **F06 — smail 扩展（DONE — 六轮独立审计及补充复验通过）**：已交付 `extensions/nju_smail`（`smail.poll_inbox`/`smail.thread_history`/`smail.search` READ/`smail.prepare_reply` INTERNAL_WRITE/`smail.sync`/`smail.send` EXTERNAL_WRITE/`smail.send_status`/`smail.reconcile_send`/`smail.reply_flow`/`smail.poll_every_5m`/`smail.account_settings`/扩展自有迁移）与通用宿主邮件能力：`core/mail` 端口（`MailTransportBroker`/`MailAccountBinding`/`MailReadSession`/`MailEnvelope`/`MailRecipientResult`/`MailDeliveryReceipt`/`MailReconciliationResult`/`MailPolicy`/`MailDeliveryLedger`）、SDK `host.mail.*` 只读客户端与 `host.artifact.*` 能力、真实 TLS IMAP 只读客户端（`EXAMINE`/`BODY.PEEK`，可证明不改变服务端状态）、真实 TLS SMTP 状态机（DATA 前/中/后断线分级、逐收件人结果）、`MailSendExecutor`（Tool Gateway + R2 审批 + Outbox + 扩展按当前草稿版本物化精确 MIME 字节）、迁移 `0006_f06_mail_transport.sql`（通用 `mail_delivery_actions` 传输台账）。读取与发送能力独立声明/配置/授权；扩展不持有密码、不建 SMTP/IMAP 连接；无审批时 executor 调用为 0；编辑草稿后旧审批绑定失效；UNKNOWN 不自动重发并由 Sent 只读对账收敛；账户换绑在跨进程 `ExclusiveFileLock` + 活体 fail-closed guard 下不再有 check-then-act（DATA 前换绑中止、DATA 已开始则等待提交），租约 guard 以单调 deadline 为权威并锚定数据库领取/续租时刻（心跳挂起、间隔大于租约或领取后慢复核均在到期即拒绝派发），组合 guard 在全部锁内复核，注册表写操作经 `run_blocking` 取消安全执行（调用方观察到取消前提交必已落地），真实 sender 抛类型化 `ACCOUNT_CHANGED`。
+  - 最终独立验收证据：`./scripts/test.ps1` → 742 passed、103 skipped、Ruff `All checks passed!`、Mypy `Success: no issues found in 192 source files`；`./scripts/test-postgres.ps1` → 103 passed（真实 PostgreSQL、personal_knowledge Worker 与 smail 生产组合根 Worker）；`pip check` 与 `git diff --check` 通过；测试后无残留 Python Worker；框架 wheel 190 个条目，包含 F06 邮件模块与 `0006_f06_mail_transport.sql`，且不包含 `nju_smail` 扩展源码。核心新增迁移 SHA-256 为 `dbc5001bdd16981f2a17f36abe4ef3fcdd36c63c3461477f1a61e1ecb6f32a01`；扩展迁移 SHA-256 为 `6320af7791bd2805e36c70f7fa731417935e7bfd6ad875b95a6d42d179469d8c`；`0001`–`0005` 未改。
+  - 真实外部验收未执行：没有用户提供的 smail 账号、SecretHandle 与受控收件地址，因此未连接真实邮箱、未发送真实邮件；协议级模拟服务器与真实 TLS/socket/PostgreSQL/Worker 测试不能替代真实 smail E2E。Windows Credential Manager 仍属 F09，扩展与宿主均保留通用 SecretHandle 端口并在生产后端不可用时 fail closed。
 
-F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02 已完成并通过六轮独立审计；F03 已完成并通过三轮独立审计；F04 已通过独立验收；F05 已通过完整独立审计及修复后自审计；F06 为唯一 `NEXT`，尚未开始。
+- [ ] **F07 — ehall 扩展（NEXT）**：有头 Playwright + Desktop Companion；用户亲自完成 SSO/验证码/扫码；首版只支持一个经确认的低风险事务，并在最终提交前展示完整预览。详细范围与红线见 `docs/NEXT_STEPS.md`。
+
+F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02–F06 均已完成独立验收；F07 是唯一 `NEXT`，F08+ 尚未开始。
 
 ## 每次交接必须留下
 

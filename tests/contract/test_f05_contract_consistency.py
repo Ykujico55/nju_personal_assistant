@@ -134,13 +134,16 @@ class MigrationHistoryContract(unittest.TestCase):
             digest = hashlib.sha256((ROOT / "migrations" / name).read_bytes()).hexdigest()
             self.assertEqual(expected, digest, f"{name} was modified")
 
-    def test_no_new_core_migration_was_required_for_f05(self) -> None:
+    def test_f05_required_no_new_core_migration_beyond_the_frozen_baseline(self) -> None:
+        # F06 added the generic host mail-transport ledger (0006).  F05 itself
+        # still required no core migration; the frozen 0001-0005 files above
+        # must remain byte-identical.
         extra = [
             path.name
             for path in sorted((ROOT / "migrations").glob("*.sql"))
             if path.name not in FROZEN_MIGRATIONS
         ]
-        self.assertEqual([], extra)
+        self.assertEqual(["0006_f06_mail_transport.sql"], extra)
 
     def test_f05_migration_lives_inside_the_extension(self) -> None:
         files = sorted((EXTENSION / "migrations").glob("[0-9][0-9][0-9][0-9]_*.sql"))
