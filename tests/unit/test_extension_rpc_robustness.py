@@ -171,9 +171,15 @@ class RpcRobustnessTests(unittest.IsolatedAsyncioTestCase):
         *,
         environment: dict[str, str] | None = None,
         max_frame_bytes: int = 4096,
+        max_outbound_frame_bytes: int | None = None,
     ) -> JsonRpcProcessClient:
         module = f"worker_{name}"
         (self.tmp / f"{module}.py").write_text(script, encoding="utf-8")
+        outbound = (
+            max_outbound_frame_bytes
+            if max_outbound_frame_bytes is not None
+            else 1024 * 1024
+        )
         return JsonRpcProcessClient(
             WorkerSpec(
                 module=module,
@@ -182,6 +188,7 @@ class RpcRobustnessTests(unittest.IsolatedAsyncioTestCase):
                 environment=environment or {},
             ),
             max_frame_bytes=max_frame_bytes,
+            max_outbound_frame_bytes=outbound,
         )
 
     async def test_worker_environment_never_inherits_host_secrets(self) -> None:
@@ -220,7 +227,10 @@ class RpcRobustnessTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_write_to_an_exiting_worker_is_a_typed_error(self) -> None:
         client = self._client(
-            "exitwrite", EXIT_WHILE_WRITING, max_frame_bytes=8 * 1024 * 1024
+            "exitwrite",
+            EXIT_WHILE_WRITING,
+            max_frame_bytes=8 * 1024 * 1024,
+            max_outbound_frame_bytes=8 * 1024 * 1024,
         )
         await client.start()
         await client.call("system.ping", {}, timeout_seconds=5)
@@ -290,7 +300,10 @@ class RpcRobustnessTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancellation_during_write_stops_the_worker(self) -> None:
         client = self._client(
-            "stallwrite", STALL_AFTER_ONE, max_frame_bytes=8 * 1024 * 1024
+            "stallwrite",
+            STALL_AFTER_ONE,
+            max_frame_bytes=8 * 1024 * 1024,
+            max_outbound_frame_bytes=8 * 1024 * 1024,
         )
         await client.start()
         await client.call("system.ping", {}, timeout_seconds=5)
@@ -363,6 +376,79 @@ class RpcRobustnessTests(unittest.IsolatedAsyncioTestCase):
         await client.start()
         self.assertTrue(client.running)
         await client.close()
+
+    async def test_oversized_host_result_never_breaks_the_worker_stream(self) -> None:
+        # Regression: the host used to write frames up to its own 4 MiB read
+        # limit while the worker only accepts 1 MiB; the worker answered an
+        # id-less -32700 and the host misreported it as an id mismatch.
+        (self.tmp / "worker_hostframe.py").write_text(HOSTCALL_OVERSIZE, encoding="utf-8")
+        client = JsonRpcProcessClient(
+            WorkerSpec(
+                module="worker_hostframe",
+                python_executable=sys.executable,
+                cwd=str(self.tmp),
+                host_handler=_huge_host_handler,
+            ),
+            max_frame_bytes=4 * 1024 * 1024,
+        )
+        await client.start()
+        result = await client.call("tool.invoke", {}, timeout_seconds=10)
+        self.assertEqual("DATA_RESULT_TOO_LARGE", result["code"])
+        self.assertLess(result["bytes"], 4096)
+        # The stream is still correlated and usable: the worker handled a
+        # second request after refusing the oversized response.
+        self.assertEqual({"ok": True}, await client.call("tool.invoke", {}, timeout_seconds=10))
+        self.assertTrue(client.running)
+        await client.close()
+
+    async def test_idless_worker_protocol_error_is_not_an_id_mismatch(self) -> None:
+        client = self._client("idless", IDLESS_PROTOCOL_ERROR)
+        await client.start()
+        with self.assertRaises(RpcCallError) as captured:
+            await client.call("system.health", {}, timeout_seconds=5)
+        self.assertEqual(-32700, captured.exception.code)
+        self.assertIn("host frame", str(captured.exception))
+        self.assertNotIn("id mismatch", str(captured.exception))
+        await client.close()
+
+
+def _huge_host_result() -> dict[str, object]:
+    return {"blob": "x" * 1_500_000}
+
+
+async def _huge_host_handler(method: str, params: object) -> dict[str, object]:
+    del method, params
+    return _huge_host_result()
+
+
+HOSTCALL_OVERSIZE = """
+import json, sys
+request = json.loads(sys.stdin.buffer.readline())
+sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": "hostcall_1",
+    "method": "host.data.execute", "params": {}}) + "\\n")
+sys.stdout.flush()
+response = json.loads(sys.stdin.buffer.readline())
+error = response.get("error") or {}
+code = (error.get("data") or {}).get("code")
+sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": request["id"],
+    "result": {"code": code, "bytes": len(response)}}) + "\\n")
+sys.stdout.flush()
+follow_up = json.loads(sys.stdin.buffer.readline())
+sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": follow_up["id"],
+    "result": {"ok": True}}) + "\\n")
+sys.stdout.flush()
+while sys.stdin.buffer.readline():
+    pass
+"""
+
+IDLESS_PROTOCOL_ERROR = """
+import json, sys, time
+sys.stdin.buffer.readline()
+sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": None,
+    "error": {"code": -32700, "message": "invalid JSON-RPC frame"}}) + "\\n")
+sys.stdout.flush()
+time.sleep(60)
+"""
 
 
 if __name__ == "__main__":

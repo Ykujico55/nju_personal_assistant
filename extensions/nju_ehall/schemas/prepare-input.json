@@ -1,0 +1,20 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "transaction_id": {
+      "type": "string"
+    },
+    "values": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "session_id",
+    "transaction_id",
+    "values"
+  ],
+  "additionalProperties": false
+}

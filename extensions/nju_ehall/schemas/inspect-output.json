@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "transaction_id": {
+      "type": "string"
+    },
+    "page_fingerprint": {
+      "type": "string"
+    },
+    "risk": {
+      "type": "string"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "materials": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "session_id",
+    "transaction_id",
+    "page_fingerprint",
+    "risk",
+    "fields"
+  ],
+  "additionalProperties": true
+}

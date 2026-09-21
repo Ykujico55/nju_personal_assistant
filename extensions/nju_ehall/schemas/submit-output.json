@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string"
+    },
+    "reference": {
+      "type": "string"
+    },
+    "receipt": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "state"
+  ],
+  "additionalProperties": true
+}

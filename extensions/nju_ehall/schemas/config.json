@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "browser_origin": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 255
+    },
+    "allowed_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 16
+    }
+  },
+  "required": [
+    "browser_origin"
+  ],
+  "additionalProperties": false
+}

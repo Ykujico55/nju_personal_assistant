@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "app_path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "app_path"
+  ],
+  "additionalProperties": false
+}

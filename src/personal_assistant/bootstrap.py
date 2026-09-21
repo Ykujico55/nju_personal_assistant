@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import ssl
 from dataclasses import dataclass
 from functools import lru_cache
@@ -18,6 +19,12 @@ from personal_assistant.core.agent.checkpoint import (
 )
 from personal_assistant.core.approvals import ApprovalService, InMemoryApprovalRepository
 from personal_assistant.core.audit import AuditWriterPort
+from personal_assistant.core.browser import (
+    BrowserAdapterStore,
+    BrowserSessionBroker,
+    BrowserSessionStore,
+    DesktopBrowserPort,
+)
 from personal_assistant.core.extensions import (
     ExtensionOperationStore,
     ExtensionRegistry,
@@ -51,6 +58,9 @@ from personal_assistant.core.secrets import SecretHandle, SecretStorePort
 from personal_assistant.core.tasks import TaskService
 from personal_assistant.core.tasks.service import EventStreamPort
 from personal_assistant.core.tools import ToolGateway, ToolPolicy, ToolRegistry
+from personal_assistant.infrastructure.browser.companion_client import LoopbackCompanionClient
+from personal_assistant.infrastructure.browser.executor import BrowserActionExecutor
+from personal_assistant.infrastructure.browser.host import BrowserHostCapability
 from personal_assistant.infrastructure.database import (
     PostgresAdapterConfig,
     PostgresAdapters,
@@ -58,6 +68,10 @@ from personal_assistant.infrastructure.database import (
     PostgresExtensionOperationStore,
     PostgresVersionCatalog,
     build_postgres_adapters,
+)
+from personal_assistant.infrastructure.database.browser_store import (
+    PostgresBrowserAdapterStore,
+    PostgresBrowserSessionStore,
 )
 from personal_assistant.infrastructure.database.mail_ledger import (
     PostgresMailDeliveryLedger,
@@ -87,6 +101,8 @@ from personal_assistant.infrastructure.mail.registry import (
 )
 from personal_assistant.infrastructure.memory import (
     InMemoryAuditWriter,
+    InMemoryBrowserAdapterStore,
+    InMemoryBrowserSessionStore,
     InMemoryDisclosureConsentStore,
     InMemoryEventStream,
     InMemoryExtensionArtifactAccess,
@@ -109,7 +125,7 @@ from personal_assistant.infrastructure.models import (
 from personal_assistant.infrastructure.secrets import UnavailableSecretStore
 from personal_assistant.infrastructure.storage import NullStorageLifecycle, StorageLifecycle
 from personal_assistant.infrastructure.tools import CapabilityRoutingExecutor
-from personal_assistant.settings import Settings
+from personal_assistant.settings import ConfigurationError, Settings
 
 
 @dataclass(slots=True)
@@ -139,6 +155,12 @@ class Container:
     mail_execution_owners: MailExecutionOwnerRegistry
     extension_artifacts: ExtensionArtifactAccess
     mail_send_executor: MailSendExecutor
+    browser_companion: DesktopBrowserPort | None
+    browser_sessions: BrowserSessionStore
+    browser_adapters: BrowserAdapterStore
+    browser_broker: BrowserSessionBroker | None
+    browser_host_capability: BrowserHostCapability | None
+    browser_executor: BrowserActionExecutor | None
     tool_registry: ToolRegistry
     tool_gateway: ToolGateway
 
@@ -160,6 +182,8 @@ class Container:
         if self.model_router is not None:
             await self.model_router.aclose()
         await self.mail_broker.aclose()
+        if self.browser_broker is not None:
+            await self.browser_broker.aclose()
         with contextlib.suppress(Exception):
             await self.mail_ledger.close()
 
@@ -173,12 +197,48 @@ def build_container(
     *,
     secret_store: SecretStorePort | None = None,
     mail_ssl_context: ssl.SSLContext | None = None,
+    browser_companion: DesktopBrowserPort | None = None,
 ) -> Container:
     settings = settings or Settings.from_env()
     settings.validate()
     if settings.storage_backend == "postgres":
-        return _build_postgres_container(settings, secret_store, mail_ssl_context)
-    return _build_memory_container(settings, secret_store, mail_ssl_context)
+        return _build_postgres_container(
+            settings, secret_store, mail_ssl_context, browser_companion
+        )
+    return _build_memory_container(settings, secret_store, mail_ssl_context, browser_companion)
+
+
+def _default_browser_companion(settings: Settings) -> DesktopBrowserPort | None:
+    """Build the loopback companion client; half-configuration fails closed."""
+
+    if not settings.browser_companion_url:
+        return None
+    capability = os.getenv("PA_BROWSER_COMPANION_CAPABILITY", "").strip()
+    if not capability:
+        raise ConfigurationError(
+            "PA_BROWSER_COMPANION_CAPABILITY is required when PA_BROWSER_COMPANION_URL is set"
+        )
+    return LoopbackCompanionClient(
+        base_url=settings.browser_companion_url, root_capability=capability
+    )
+
+
+def _build_browser_broker(
+    settings: Settings,
+    *,
+    companion: DesktopBrowserPort | None,
+    sessions: BrowserSessionStore,
+    adapters: BrowserAdapterStore,
+) -> BrowserSessionBroker | None:
+    if companion is None:
+        return None
+    return BrowserSessionBroker(
+        companion=companion,
+        sessions=sessions,
+        adapters=adapters,
+        allowed_origins=frozenset(settings.browser_allowed_origins),
+        submit_enabled=settings.browser_submit_enabled,
+    )
 
 
 def _build_model_providers(
@@ -274,6 +334,7 @@ def _build_supervisor(
     mail_capability: MailHostCapability | None = None,
     mail_send_available: bool = False,
     artifact_access: ExtensionArtifactAccess | None = None,
+    browser_capability: BrowserHostCapability | None = None,
 ) -> ExtensionSupervisorService:
     stager = LocalArtifactStager(_staging_and_install_roots(settings)[0])
     installer = VenvArtifactInstaller(
@@ -285,6 +346,7 @@ def _build_supervisor(
         mail_capability=mail_capability,
         mail_send_available=mail_send_available,
         artifact_access=artifact_access,
+        browser_capability=browser_capability,
     )
     coordinator = InstallCoordinator(stager, installer, ProcessContractVerifier(), store)
     manager = LifecycleManager(
@@ -309,6 +371,7 @@ def _build_postgres_container(
     settings: Settings,
     secret_store: SecretStorePort | None,
     mail_ssl_context: ssl.SSLContext | None = None,
+    browser_companion: DesktopBrowserPort | None = None,
 ) -> Container:
     adapters: PostgresAdapters = build_postgres_adapters(
         PostgresAdapterConfig.from_env(settings.database_url)
@@ -341,6 +404,25 @@ def _build_postgres_container(
         LocalArtifactBlobStore(settings.artifact_root),
         settings.extension_root / "artifact-meta",
     )
+    browser_sessions = PostgresBrowserSessionStore(adapters.database)
+    browser_adapters = PostgresBrowserAdapterStore(adapters.database)
+    companion = (
+        browser_companion
+        if browser_companion is not None
+        else _default_browser_companion(settings)
+    )
+    browser_broker = _build_browser_broker(
+        settings,
+        companion=companion,
+        sessions=browser_sessions,
+        adapters=browser_adapters,
+    )
+    browser_capability = (
+        BrowserHostCapability(browser_broker) if browser_broker is not None else None
+    )
+    browser_actions = (
+        BrowserActionExecutor(broker=browser_broker) if browser_broker is not None else None
+    )
     supervisor = _build_supervisor(
         settings,
         registry=registry,
@@ -353,6 +435,7 @@ def _build_postgres_container(
         mail_capability=mail_capability,
         mail_send_available=mail_broker.send_available,
         artifact_access=artifacts,
+        browser_capability=browser_capability,
     )
     approvals = ApprovalService(adapters.approval_repository)
     mail_send = MailSendExecutor(
@@ -402,13 +485,21 @@ def _build_postgres_container(
         mail_execution_owners=mail_owners,
         extension_artifacts=artifacts,
         mail_send_executor=mail_send,
+        browser_companion=companion,
+        browser_sessions=browser_sessions,
+        browser_adapters=browser_adapters,
+        browser_broker=browser_broker,
+        browser_host_capability=browser_capability,
+        browser_executor=browser_actions,
         tool_registry=tool_registry,
         tool_gateway=ToolGateway(
             registry=tool_registry,
             policy=ToolPolicy(),
             approvals=approvals,
             executor=CapabilityRoutingExecutor(
-                extension_router=supervisor, mail_send=mail_send
+                extension_router=supervisor,
+                mail_send=mail_send,
+                browser_actions=browser_actions,
             ),
             outbox=adapters.side_effect_outbox,
         ),
@@ -419,6 +510,7 @@ def _build_memory_container(
     settings: Settings,
     secret_store: SecretStorePort | None,
     mail_ssl_context: ssl.SSLContext | None = None,
+    browser_companion: DesktopBrowserPort | None = None,
 ) -> Container:
     queue = InMemoryJobQueue()
     audit = InMemoryAuditWriter()
@@ -449,6 +541,25 @@ def _build_memory_container(
         mail_broker, mail_accounts, ledger=ledger, owners=mail_owners
     )
     artifacts = InMemoryExtensionArtifactAccess()
+    browser_sessions = InMemoryBrowserSessionStore()
+    browser_adapters = InMemoryBrowserAdapterStore()
+    companion = (
+        browser_companion
+        if browser_companion is not None
+        else _default_browser_companion(settings)
+    )
+    browser_broker = _build_browser_broker(
+        settings,
+        companion=companion,
+        sessions=browser_sessions,
+        adapters=browser_adapters,
+    )
+    browser_capability = (
+        BrowserHostCapability(browser_broker) if browser_broker is not None else None
+    )
+    browser_actions = (
+        BrowserActionExecutor(broker=browser_broker) if browser_broker is not None else None
+    )
     supervisor = _build_supervisor(
         settings,
         registry=registry,
@@ -461,6 +572,7 @@ def _build_memory_container(
         mail_capability=mail_capability,
         mail_send_available=mail_broker.send_available,
         artifact_access=artifacts,
+        browser_capability=browser_capability,
     )
     mail_send = MailSendExecutor(
         broker=mail_broker,
@@ -508,13 +620,21 @@ def _build_memory_container(
         mail_execution_owners=mail_owners,
         extension_artifacts=artifacts,
         mail_send_executor=mail_send,
+        browser_companion=companion,
+        browser_sessions=browser_sessions,
+        browser_adapters=browser_adapters,
+        browser_broker=browser_broker,
+        browser_host_capability=browser_capability,
+        browser_executor=browser_actions,
         tool_registry=tool_registry,
         tool_gateway=ToolGateway(
             registry=tool_registry,
             policy=ToolPolicy(),
             approvals=approvals,
             executor=CapabilityRoutingExecutor(
-                extension_router=supervisor, mail_send=mail_send
+                extension_router=supervisor,
+                mail_send=mail_send,
+                browser_actions=browser_actions,
             ),
             outbox=InMemorySideEffectOutbox(approvals),
         ),

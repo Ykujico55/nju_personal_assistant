@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "canonical_payload_hash": {
+      "type": "string"
+    },
+    "nonce": {
+      "type": "string"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "session_id",
+    "canonical_payload_hash",
+    "nonce",
+    "fields"
+  ],
+  "additionalProperties": true
+}

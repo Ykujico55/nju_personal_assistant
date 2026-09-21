@@ -64,6 +64,10 @@ _SAFE_ENVIRONMENT_KEYS = frozenset(
 # A worker-initiated request handler: ``handler(method, params) -> result``.
 HostRequestHandler = Callable[[str, Mapping[str, Any]], Awaitable[Any]]
 
+#: Hard input budget of a worker: frames the host sends must stay inside this
+#: limit, while the host may read larger (up to ~4 MiB) worker output.
+WORKER_INPUT_FRAME_BYTES = 1024 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerSpec:
@@ -89,9 +93,11 @@ class JsonRpcProcessClient:
         spec: WorkerSpec,
         *,
         max_frame_bytes: int = 4 * 1024 * 1024,
+        max_outbound_frame_bytes: int = WORKER_INPUT_FRAME_BYTES,
     ) -> None:
         self._spec = spec
         self._max_frame_bytes = max_frame_bytes
+        self._max_outbound_frame_bytes = max_outbound_frame_bytes
         self._process: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
         self._stderr_task: asyncio.Task[None] | None = None
@@ -237,8 +243,10 @@ class JsonRpcProcessClient:
         assert process.stdin is not None
         request = RpcRequest(id=f"call_{uuid.uuid4().hex}", method=method, params=params)
         encoded_request = encode_frame(request)
-        if len(encoded_request) > self._max_frame_bytes:
-            raise RpcCallError(-32600, "extension request exceeded maximum frame size")
+        if len(encoded_request) > self._max_outbound_frame_bytes:
+            raise RpcCallError(
+                -32600, "extension request exceeded the worker input frame limit"
+            )
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
         self._pending[request.id] = future
@@ -311,8 +319,17 @@ class JsonRpcProcessClient:
                 if isinstance(message, RpcRequest):
                     await self._handle_host_request(message)
                     continue
-                future = self._pending.pop(message.id or "", None)
-                if message.id is None or future is None:
+                if message.id is None:
+                    # The worker answers a host frame it could not decode with an
+                    # id-less protocol error; that is a host-side framing bug.
+                    await self._fail(
+                        RpcCallError(
+                            -32700, "extension rejected a host frame as invalid JSON-RPC"
+                        )
+                    )
+                    return
+                future = self._pending.pop(message.id, None)
+                if future is None:
                     await self._fail(
                         RpcCallError(-32093, "extension response id mismatch")
                     )
@@ -370,7 +387,7 @@ class JsonRpcProcessClient:
                     ),
                 )
         encoded = encode_frame(response)
-        if len(encoded) > self._max_frame_bytes:
+        if len(encoded) > self._max_outbound_frame_bytes:
             encoded = encode_frame(
                 RpcResponse(
                     id=request.id,

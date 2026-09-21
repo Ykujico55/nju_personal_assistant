@@ -396,7 +396,13 @@ def _failure_status(exc: HostCapabilityError) -> str:
 
 def _safe_code(exc: HostCapabilityError) -> str:
     code = getattr(exc, "code", "")
-    if isinstance(code, str) and code.startswith("MAIL_") and len(code) <= 64:
+    if (
+        isinstance(code, str)
+        and 0 < len(code) <= 64
+        and all(ch.isupper() or ch.isdigit() or ch == "_" for ch in code)
+    ):
+        # Preserve host capability codes (for example DATA_RESULT_TOO_LARGE) so
+        # the report never masks the real cause as MAIL_UNAVAILABLE.
         return code
     return "MAIL_UNAVAILABLE"
 

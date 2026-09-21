@@ -1,0 +1,27 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "plan": {
+      "type": "object"
+    },
+    "preview": {
+      "type": "object"
+    },
+    "missing": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "session_id",
+    "plan",
+    "preview",
+    "missing"
+  ],
+  "additionalProperties": true
+}

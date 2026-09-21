@@ -2,7 +2,8 @@
 
 Certificates and hostnames are verified with the system trust store by default;
 tests may inject a restricted SSLContext.  Only read commands are used:
-``CAPABILITY``, ``LOGIN``/``AUTHENTICATE``, ``LIST``, ``SELECT ... (readonly)``,
+``CAPABILITY``, ``LOGIN``/``AUTHENTICATE``, ``ID`` (when advertised; QQ Exmail
+rejects ``SELECT`` without client identification), ``LIST``, ``SELECT ... (readonly)``,
 ``UID SEARCH`` and ``UID FETCH`` with ``BODY.PEEK``.  ``STORE``, ``EXPUNGE``,
 ``COPY``, ``MOVE``, ``APPEND`` and ``IDLE`` are never issued, so synchronization
 cannot alter server-side read/move/delete state.
@@ -150,10 +151,32 @@ class TlsImapReadSession:
                 MailErrorCode.UNAVAILABLE, "the IMAP server is unreachable"
             ) from exc
         self._connection = connection
-        self._authenticate(connection)
+        capabilities = self._authenticate(connection)
+        if "ID" in capabilities:
+            self._send_client_id(connection)
         return connection
 
-    def _authenticate(self, connection: imaplib.IMAP4_SSL) -> None:
+    def _send_client_id(self, connection: imaplib.IMAP4_SSL) -> None:
+        """Identify this client (RFC 2971) before any mailbox access.
+
+        The payload contains no secrets and no user data; it only prevents
+        providers such as QQ Exmail from refusing the read-only ``SELECT``.
+        """
+
+        payload = (
+            '("name" "personal-assistant" "version" "0.1" '
+            '"vendor" "personal-assistant-framework")'
+        )
+        try:
+            typ, _data = connection.xatom("ID", payload)
+        except imaplib.IMAP4.error as exc:
+            raise MailError(MailErrorCode.PROTOCOL_ERROR, "ID failed") from exc
+        except (ssl.SSLError, OSError) as exc:
+            raise MailError(MailErrorCode.UNAVAILABLE, "the IMAP session failed") from exc
+        if typ != "OK":
+            raise MailError(MailErrorCode.PROTOCOL_ERROR, "ID failed")
+
+    def _authenticate(self, connection: imaplib.IMAP4_SSL) -> set[str]:
         capabilities = self._capabilities(connection)
         auth_mechanisms = sorted(
             item[5:] for item in capabilities if item.startswith("AUTH=")
@@ -162,13 +185,13 @@ class TlsImapReadSession:
             if "PLAIN" in auth_mechanisms:
                 credentials = f"\0{self._account.address}\0{self._password}".encode()
                 connection.authenticate("PLAIN", lambda _challenge: credentials)
-                return
-            if auth_mechanisms and "LOGINDISABLED" in capabilities:
+            elif auth_mechanisms and "LOGINDISABLED" in capabilities:
                 raise MailError(
                     MailErrorCode.AUTH_UNSUPPORTED,
                     "the server does not offer a supported authentication mechanism",
                 )
-            connection.login(self._account.address, self._password)
+            else:
+                connection.login(self._account.address, self._password)
         except MailError:
             raise
         except imaplib.IMAP4.error as exc:
@@ -177,6 +200,7 @@ class TlsImapReadSession:
             ) from exc
         except (ssl.SSLError, OSError) as exc:
             raise MailError(MailErrorCode.UNAVAILABLE, "the IMAP session failed") from exc
+        return capabilities
 
     def _capabilities(self, connection: imaplib.IMAP4_SSL) -> set[str]:
         try:
@@ -196,7 +220,7 @@ class TlsImapReadSession:
     def _select_readonly(
         self, connection: imaplib.IMAP4_SSL, folder: str
     ) -> tuple[int, int]:
-        quoted = '"' + folder.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        quoted = _quoted_mailbox(folder)
         try:
             typ, data = connection.select(quoted, readonly=True)
         except imaplib.IMAP4.error as exc:
@@ -240,15 +264,34 @@ class TlsImapReadSession:
 
     def _list_folders_sync(self) -> tuple[MailFolder, ...]:
         connection = self._ensure_connection()
+        folders: dict[str, MailFolder] = {}
+        self._collect_listing(connection, None, folders)
+        containers = [
+            item
+            for item in folders.values()
+            if any(attribute.lower() == "\\haschildren" for attribute in item.attributes)
+        ]
+        for container in containers[:32]:
+            self._collect_listing(connection, container.name, folders)
+        return tuple(folders.values())
+
+    def _collect_listing(
+        self,
+        connection: imaplib.IMAP4_SSL,
+        reference: str | None,
+        folders: dict[str, MailFolder],
+    ) -> None:
         try:
-            typ, data = connection.list()
+            if reference is None:
+                typ, data = connection.list()
+            else:
+                typ, data = connection.list(_quoted_mailbox(reference), "*")
         except imaplib.IMAP4.error as exc:
             raise MailError(MailErrorCode.PROTOCOL_ERROR, "LIST failed") from exc
         except (ssl.SSLError, OSError) as exc:
             raise MailError(MailErrorCode.UNAVAILABLE, "the IMAP session failed") from exc
         if typ != "OK":
             raise MailError(MailErrorCode.PROTOCOL_ERROR, "LIST failed")
-        folders: list[MailFolder] = []
         for item in data:
             if not isinstance(item, bytes):
                 continue
@@ -259,22 +302,21 @@ class TlsImapReadSession:
             delimiter = (
                 None
                 if delimiter_raw.upper() == "NIL"
-                else delimiter_raw[1:-1].replace('\\\\', "\\")
+                else delimiter_raw[1:-1].replace("\\\\", "\\")
             )
             name = _decode_mailbox_name(parsed.group("name"))
-            if not name:
+            if not name or name in folders:
                 continue
             attributes = parsed.group("attrs").split()
-            selectable = "\\Noselect" not in attributes
-            folders.append(
-                MailFolder(
-                    name=name,
-                    delimiter=delimiter,
-                    attributes=tuple(attributes),
-                    selectable=selectable,
-                )
+            selectable = not any(
+                attribute.lower() == "\\noselect" for attribute in attributes
             )
-        return tuple(folders)
+            folders[name] = MailFolder(
+                name=name,
+                delimiter=delimiter,
+                attributes=tuple(attributes),
+                selectable=selectable,
+            )
 
     def _metadata_sync(
         self, connection: imaplib.IMAP4_SSL, uid: str
@@ -462,6 +504,10 @@ def _classify_imap_error(exc: imaplib.IMAP4.error) -> MailError:
     ):
         return MailError(MailErrorCode.AUTH_FAILED, "the mail server rejected the credentials")
     return MailError(MailErrorCode.PROTOCOL_ERROR, "the IMAP command was rejected")
+
+
+def _quoted_mailbox(name: str) -> str:
+    return '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def _decode_mailbox_name(value: str) -> str:

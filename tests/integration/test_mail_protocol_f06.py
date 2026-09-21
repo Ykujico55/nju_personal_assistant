@@ -188,6 +188,70 @@ class MailProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(("\\Seen",), self.imap_state.folders["INBOX"][0].flags)
         self.assertEqual(("\\Seen",), self.imap_state.folders["INBOX"][1].flags)
 
+    async def test_child_folders_of_a_container_are_discovered(self) -> None:
+        # QQ Exmail keeps newsletters under a NoSelect container whose children
+        # are only returned by a referenced LIST; missing them hides real mail.
+        self.imap_state.no_select_folders = ("Other Folders",)
+        self.imap_state.child_folders = {"Other Folders": ("Other Folders/News",)}
+        self.imap_state.folders["Other Folders/News"] = [
+            ImapMessage(uid=1, raw=b"Subject: news\r\n\r\nbody", flags=())
+        ]
+        self.imap_state.uidvalidity["Other Folders/News"] = 21
+        account = self.account()
+        session = await self.broker().read_session(account.account_id)
+        try:
+            folders = await session.list_folders()
+            batch = await session.fetch(
+                "Other Folders/News", uidvalidity=21, start_uid=0, limit=5
+            )
+        finally:
+            await session.close()
+        names = {item.name for item in folders}
+        self.assertIn("Other Folders/News", names)
+        self.assertEqual([1], [item.uid for item in batch.messages])
+        referenced = [
+            item for item in self.imap_state.commands if 'LIST "Other Folders" *' in item
+        ]
+        self.assertTrue(referenced)
+
+    async def test_no_select_attribute_is_case_insensitive(self) -> None:
+        # QQ Exmail advertises container mailboxes with a mixed-case NoSelect
+        # attribute; such folders must never be reported as selectable.
+        self.imap_state.no_select_folders = ("Other Folders",)
+        account = self.account()
+        session = await self.broker().read_session(account.account_id)
+        try:
+            folders = await session.list_folders()
+        finally:
+            await session.close()
+        by_name = {item.name: item for item in folders}
+        self.assertIn("Other Folders", by_name)
+        self.assertFalse(by_name["Other Folders"].selectable)
+        self.assertTrue(by_name["INBOX"].selectable)
+
+    async def test_client_identifies_itself_when_the_server_requires_id(self) -> None:
+        # Regression against real QQ Exmail behaviour: SELECT without a prior
+        # RFC 2971 ID command is refused with "Unsafe Login" and the connection
+        # drops.  The client must identify itself first when ID is advertised.
+        self.imap_state.capabilities = ("IMAP4rev1", "AUTH=PLAIN", "UIDPLUS", "ID")
+        self.imap_state.require_id = True
+        account = self.account()
+        session = await self.broker().read_session(account.account_id)
+        try:
+            capabilities = await session.probe()
+        finally:
+            await session.close()
+        self.assertEqual(11, capabilities.uidvalidity)
+        self.assertEqual(1, len(self.imap_state.identifications))
+        commands = self.imap_state.commands
+        id_index = next(index for index, item in enumerate(commands) if " ID " in f" {item} ")
+        select_index = next(
+            index
+            for index, item in enumerate(commands)
+            if " SELECT " in f" {item} " or " EXAMINE " in f" {item} "
+        )
+        self.assertLess(id_index, select_index)
+
     async def test_uidvalidity_change_is_reported_for_safe_rebuild(self) -> None:
         account = self.account()
         self.imap_state.uidvalidity["INBOX"] = 12

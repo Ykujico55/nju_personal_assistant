@@ -205,11 +205,15 @@ class VenvArtifactInstaller:
         await self._run(argv, timeout=self._venv_timeout)
 
     async def _venv_purelib(self, venv: Path) -> Path:
+        # The child must speak a fixed encoding: with a pipe on Windows, text
+        # stdout uses the ANSI code page (e.g. cp936), and decoding it as UTF-8
+        # corrupts non-ASCII install paths.
         stdout = await self._run_capture(
             [
                 str(venv_python(venv)),
                 "-c",
-                "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+                "import sys, sysconfig; "
+                "sys.stdout.buffer.write(sysconfig.get_paths()['purelib'].encode('utf-8'))",
             ],
             timeout=self._venv_timeout,
         )

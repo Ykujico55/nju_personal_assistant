@@ -1,0 +1,74 @@
+{
+  "adapter_id": "nju.ehall.transcript",
+  "adapter_version": "1.0.0",
+  "display_name": "研究生成绩单打印",
+  "declared_risk": "EXTERNAL_WRITE",
+  "allowed_paths": [
+    "/apps/transcript"
+  ],
+  "login_paths": [
+    "/sso/login"
+  ],
+  "discovery_path": "/portal",
+  "tracking_path": "/apps/transcript/status",
+  "tracking_query": "回执号",
+  "receipt_locator": "text:回执号",
+  "receipt_pattern": "NJU-[0-9]{4}-[0-9]{4}",
+  "allowed_page_fingerprints": [
+    "1ad9029f4ed7e83224a464cf0559874731e8805eb6bca4f5c6b8aa3cd51a102b"
+  ],
+  "consequences": "提交后生成成绩单打印申请；材料不实将影响办理结果。",
+  "transaction_ids": [
+    "transcript.apply"
+  ],
+  "fields": [
+    {
+      "field_id": "reason",
+      "label": "申请理由",
+      "kind": "text",
+      "required": true,
+      "max_length": 200,
+      "locator": "ctl:0:0",
+      "source": "USER_INPUT"
+    },
+    {
+      "field_id": "phone",
+      "label": "联系电话",
+      "kind": "text",
+      "required": true,
+      "max_length": 20,
+      "pattern": "1[0-9]{10}",
+      "locator": "ctl:0:1",
+      "source": "USER_INPUT"
+    },
+    {
+      "field_id": "delivery",
+      "label": "领取方式",
+      "kind": "select",
+      "required": true,
+      "locator": "ctl:1:0",
+      "source": "USER_INPUT"
+    }
+  ],
+  "actions": [
+    {
+      "action_id": "transcript.submit",
+      "locator": "act:0",
+      "label": "提交申请",
+      "kind": "submit",
+      "risk": "EXTERNAL_WRITE",
+      "final": true,
+      "method": "POST",
+      "target_path": "/apps/transcript/submit"
+    },
+    {
+      "action_id": "transcript.open",
+      "locator": "act:1",
+      "label": "研究生成绩单打印",
+      "kind": "navigate",
+      "risk": "INTERNAL_WRITE",
+      "transaction_id": "transcript.apply",
+      "navigates_to_path": "/apps/transcript"
+    }
+  ]
+}

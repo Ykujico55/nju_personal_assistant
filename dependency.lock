@@ -26,7 +26,9 @@ mypy_extensions==1.1.0
 packaging==26.3
 pathspec==1.1.1
 pgvector==0.5.0
+playwright==1.62.0
 pluggy==1.6.0
+pyee==13.0.1
 pycparser==3.0
 pydantic==2.13.5
 pydantic_core==2.46.5

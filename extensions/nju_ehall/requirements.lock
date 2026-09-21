@@ -1,0 +1,2 @@
+# No third-party runtime dependencies: the extension only imports
+# personal_assistant_sdk and the Python standard library.

@@ -19,6 +19,7 @@ from .models import (
     FetchedMail,
     FetchedMailBatch,
     HostArtifactClient,
+    HostBrowserClient,
     HostMailClient,
     JsonValue,
     MailAccountInfo,
@@ -39,6 +40,37 @@ HOST_MAIL_DELIVERY_STATUS = "host.mail.delivery_status"
 HOST_ARTIFACT_PUT = "host.artifact.put"
 HOST_ARTIFACT_READ = "host.artifact.read"
 HOST_ARTIFACT_DELETE = "host.artifact.delete"
+HOST_BROWSER_SESSION = "host.browser.session"
+HOST_BROWSER_STATUS = "host.browser.status"
+HOST_BROWSER_REGISTER_ADAPTER = "host.browser.register_adapter"
+HOST_BROWSER_ADAPTERS = "host.browser.adapters"
+HOST_BROWSER_SNAPSHOT = "host.browser.snapshot"
+HOST_BROWSER_FIND_TEXT = "host.browser.find_text"
+HOST_BROWSER_NAVIGATE = "host.browser.navigate"
+HOST_BROWSER_CLASSIFY_LABELS = "host.browser.classify_labels"
+HOST_BROWSER_RECORD_DISCOVERY = "host.browser.record_discovery"
+HOST_BROWSER_RECORD_PREPARATION = "host.browser.record_preparation"
+HOST_BROWSER_RECONCILE = "host.browser.reconcile"
+HOST_BROWSER_CLOSE = "host.browser.close"
+HOST_BROWSER_CANCEL = "host.browser.cancel"
+
+HOST_BROWSER_METHODS = frozenset(
+    {
+        HOST_BROWSER_SESSION,
+        HOST_BROWSER_STATUS,
+        HOST_BROWSER_REGISTER_ADAPTER,
+        HOST_BROWSER_ADAPTERS,
+        HOST_BROWSER_SNAPSHOT,
+        HOST_BROWSER_FIND_TEXT,
+        HOST_BROWSER_NAVIGATE,
+        HOST_BROWSER_CLASSIFY_LABELS,
+        HOST_BROWSER_RECORD_DISCOVERY,
+        HOST_BROWSER_RECORD_PREPARATION,
+        HOST_BROWSER_RECONCILE,
+        HOST_BROWSER_CLOSE,
+        HOST_BROWSER_CANCEL,
+    }
+)
 
 DEFAULT_TIMEOUT_SECONDS = 60.0
 MAX_TIMEOUT_SECONDS = 900.0
@@ -203,6 +235,10 @@ class HostBroker:
     @property
     def artifact(self) -> HostArtifactClientImpl:
         return HostArtifactClientImpl(self)
+
+    @property
+    def browser(self) -> HostBrowserClientImpl:
+        return HostBrowserClientImpl(self)
 
 
 class HostMailClientImpl:
@@ -382,6 +418,175 @@ def _folder(value: Any) -> MailFolderInfo:
     )
 
 
+class HostBrowserClientImpl:
+    """Read-only supervised browser client over the host channel."""
+
+    def __init__(self, broker: HostBroker) -> None:
+        self._broker = broker
+
+    async def session(self, *, task_id: str, purpose: str) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_SESSION,
+            {"task_id": task_id, "purpose": purpose},
+            timeout_seconds=120.0,
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "session must be an object")
+        return result
+
+    async def status(self, session_id: str) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_STATUS, {"session_id": session_id}, timeout_seconds=60.0
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "status must be an object")
+        return result
+
+    async def register_adapter(
+        self, descriptor: Mapping[str, JsonValue]
+    ) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_REGISTER_ADAPTER, {"descriptor": dict(descriptor)}, timeout_seconds=60.0
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "adapter must be an object")
+        return result
+
+    async def adapters(self) -> tuple[Mapping[str, JsonValue], ...]:
+        result = await self._broker.request(
+            HOST_BROWSER_ADAPTERS, {}, timeout_seconds=60.0
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "adapter list must be an object")
+        items = result.get("adapters")
+        if not isinstance(items, Sequence):
+            return ()
+        return tuple(item for item in items if isinstance(item, Mapping))
+
+    async def snapshot(
+        self, session_id: str, *, adapter_id: str = "", transaction_id: str = ""
+    ) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_SNAPSHOT,
+            {
+                "session_id": session_id,
+                "adapter_id": adapter_id,
+                "transaction_id": transaction_id,
+            },
+            timeout_seconds=120.0,
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "snapshot must be an object")
+        return result
+
+    async def find_text(self, session_id: str, query: str) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_FIND_TEXT,
+            {"session_id": session_id, "query": query},
+            timeout_seconds=60.0,
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "text search must be an object")
+        return result
+
+    async def navigate(
+        self, session_id: str, *, adapter_id: str, transaction_id: str, url: str
+    ) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_NAVIGATE,
+            {
+                "session_id": session_id,
+                "adapter_id": adapter_id,
+                "transaction_id": transaction_id,
+                "url": url,
+            },
+            timeout_seconds=120.0,
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "navigation must be an object")
+        return result
+
+    async def classify_labels(
+        self, labels: Sequence[str], *, forbidden_terms: Sequence[str] = ()
+    ) -> tuple[Mapping[str, JsonValue], ...]:
+        result = await self._broker.request(
+            HOST_BROWSER_CLASSIFY_LABELS,
+            {"labels": list(labels), "forbidden_terms": list(forbidden_terms)},
+            timeout_seconds=60.0,
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "classification must be an object")
+        items = result.get("labels")
+        if not isinstance(items, Sequence):
+            return ()
+        return tuple(item for item in items if isinstance(item, Mapping))
+
+    async def record_discovery(
+        self, session_id: str, *, app_count: int
+    ) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_RECORD_DISCOVERY,
+            {"session_id": session_id, "app_count": app_count},
+            timeout_seconds=60.0,
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "record must be an object")
+        return result
+
+    async def record_preparation(
+        self,
+        session_id: str,
+        *,
+        adapter_id: str,
+        adapter_version: str,
+        app_id: str,
+        transaction_id: str,
+        page_fingerprint: str,
+        planned_fields: int,
+    ) -> Mapping[str, JsonValue]:
+        result = await self._broker.request(
+            HOST_BROWSER_RECORD_PREPARATION,
+            {
+                "session_id": session_id,
+                "adapter_id": adapter_id,
+                "adapter_version": adapter_version,
+                "app_id": app_id,
+                "transaction_id": transaction_id,
+                "page_fingerprint": page_fingerprint,
+                "planned_fields": planned_fields,
+            },
+            timeout_seconds=60.0,
+        )
+        if not isinstance(result, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "record must be an object")
+        return result
+
+    async def reconcile(self, session_id: str) -> Mapping[str, JsonValue]:
+        """Read-only tracking reconciliation; the host issues any proof."""
+
+        response = await self._broker.request(
+            HOST_BROWSER_RECONCILE,
+            {"session_id": session_id},
+            timeout_seconds=120.0,
+        )
+        if not isinstance(response, Mapping):
+            raise HostCapabilityError("BROWSER_PROTOCOL_ERROR", "record must be an object")
+        return response
+
+    async def close(self, session_id: str) -> None:
+        await self._broker.request(
+            HOST_BROWSER_CLOSE, {"session_id": session_id}, timeout_seconds=60.0
+        )
+
+    async def cancel(self, session_id: str) -> None:
+        await self._broker.request(
+            HOST_BROWSER_CANCEL, {"session_id": session_id}, timeout_seconds=60.0
+        )
+
+    async def aclose(self) -> None:
+        return None
+
+
 def _message(value: Any) -> FetchedMail:
     import base64
 
@@ -425,6 +630,20 @@ __all__ = [
     "HOST_ARTIFACT_DELETE",
     "HOST_ARTIFACT_PUT",
     "HOST_ARTIFACT_READ",
+    "HOST_BROWSER_ADAPTERS",
+    "HOST_BROWSER_CANCEL",
+    "HOST_BROWSER_CLASSIFY_LABELS",
+    "HOST_BROWSER_CLOSE",
+    "HOST_BROWSER_FIND_TEXT",
+    "HOST_BROWSER_METHODS",
+    "HOST_BROWSER_NAVIGATE",
+    "HOST_BROWSER_RECORD_DISCOVERY",
+    "HOST_BROWSER_RECORD_PREPARATION",
+    "HOST_BROWSER_RECONCILE",
+    "HOST_BROWSER_REGISTER_ADAPTER",
+    "HOST_BROWSER_SESSION",
+    "HOST_BROWSER_SNAPSHOT",
+    "HOST_BROWSER_STATUS",
     "HOST_DATA_EXECUTE",
     "HOST_DATA_MIGRATE",
     "HOST_DATA_TRANSACTION",
@@ -438,6 +657,8 @@ __all__ = [
     "HostArtifactClient",
     "HostArtifactClientImpl",
     "HostBroker",
+    "HostBrowserClient",
+    "HostBrowserClientImpl",
     "HostCapabilityError",
     "HostMailClient",
     "HostMailClientImpl",

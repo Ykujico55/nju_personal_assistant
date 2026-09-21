@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "preview_hash": {
+      "type": "string"
+    },
+    "preview_nonce": {
+      "type": "string"
+    },
+    "action_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "preview_hash",
+    "preview_nonce",
+    "action_id"
+  ],
+  "additionalProperties": false
+}

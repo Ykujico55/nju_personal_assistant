@@ -191,6 +191,7 @@ class ExtensionDispatcher:
                 host_data=self._host_broker,
                 host_mail=self._host_broker.mail,
                 host_artifact=self._host_broker.artifact,
+                host_browser=self._host_broker.browser,
             )
         extension = self._factory()
         if not isinstance(extension, Extension):

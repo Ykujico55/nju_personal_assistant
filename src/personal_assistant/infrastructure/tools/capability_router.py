@@ -20,6 +20,10 @@ from personal_assistant.core.tools.gateway import (
     UserActionRequiredError,
 )
 from personal_assistant.domain.models import ToolDescriptor
+from personal_assistant.infrastructure.browser.executor import (
+    BROWSER_ACTION_CAPABILITIES,
+    BrowserActionExecutor,
+)
 from personal_assistant.infrastructure.mail.executor import (
     MAIL_SEND_CAPABILITY,
     ExtensionToolInvoker,
@@ -33,9 +37,11 @@ class CapabilityRoutingExecutor(ToolExecutor):
         *,
         extension_router: ExtensionToolInvoker,
         mail_send: MailSendExecutor | None = None,
+        browser_actions: BrowserActionExecutor | None = None,
     ) -> None:
         self._extension_router = extension_router
         self._mail_send = mail_send
+        self._browser_actions = browser_actions
 
     async def execute(
         self,
@@ -49,6 +55,12 @@ class CapabilityRoutingExecutor(ToolExecutor):
                     "the mail send capability is not configured on this host"
                 )
             return await self._mail_send.execute(descriptor, arguments, context)
+        if descriptor.required_capabilities & BROWSER_ACTION_CAPABILITIES:
+            if self._browser_actions is None:
+                raise DefinitiveToolFailure(
+                    "the supervised browser capability is not configured on this host"
+                )
+            return await self._browser_actions.execute(descriptor, arguments, context)
         return await self._invoke_extension(descriptor, arguments, context)
 
     async def _invoke_extension(

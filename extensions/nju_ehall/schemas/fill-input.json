@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "adapter_id": {
+      "type": "string"
+    },
+    "adapter_version": {
+      "type": "string"
+    },
+    "transaction_id": {
+      "type": "string"
+    },
+    "app_id": {
+      "type": "string"
+    },
+    "expected_origin": {
+      "type": "string"
+    },
+    "expected_page_fingerprint": {
+      "type": "string"
+    },
+    "consequences": {
+      "type": "string"
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "session_id",
+    "adapter_id",
+    "adapter_version",
+    "transaction_id",
+    "expected_origin",
+    "expected_page_fingerprint",
+    "fields"
+  ],
+  "additionalProperties": false
+}

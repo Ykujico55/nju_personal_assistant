@@ -215,6 +215,67 @@ class HostArtifactClient(Protocol):
     async def aclose(self) -> None: ...
 
 
+@runtime_checkable
+class HostBrowserClient(Protocol):
+    """Read-only supervised-browser capability.
+
+    The host owns the visible Desktop Companion session, the origin allow-list
+    and the page policy.  An extension can create a supervised session, read
+    bounded structured snapshots and record workflow state, but it can never
+    receive cookies, credentials, verification codes, screenshots or raw HTML,
+    and it cannot type into the page or click: filling and submission are host
+    executor actions that require an R2 approval.
+    """
+
+    async def session(self, *, task_id: str, purpose: str) -> Mapping[str, JsonValue]: ...
+
+    async def status(self, session_id: str) -> Mapping[str, JsonValue]: ...
+
+    async def register_adapter(
+        self, descriptor: Mapping[str, JsonValue]
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def adapters(self) -> tuple[Mapping[str, JsonValue], ...]: ...
+
+    async def snapshot(
+        self, session_id: str, *, adapter_id: str = "", transaction_id: str = ""
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def find_text(self, session_id: str, query: str) -> Mapping[str, JsonValue]: ...
+
+    async def navigate(
+        self, session_id: str, *, adapter_id: str, transaction_id: str, url: str
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def classify_labels(
+        self, labels: Sequence[str], *, forbidden_terms: Sequence[str] = ()
+    ) -> tuple[Mapping[str, JsonValue], ...]: ...
+
+    async def record_discovery(
+        self, session_id: str, *, app_count: int
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def record_preparation(
+        self,
+        session_id: str,
+        *,
+        adapter_id: str,
+        adapter_version: str,
+        app_id: str,
+        transaction_id: str,
+        page_fingerprint: str,
+        planned_fields: int,
+    ) -> Mapping[str, JsonValue]: ...
+
+    async def reconcile(self, session_id: str) -> Mapping[str, JsonValue]: ...
+
+    async def close(self, session_id: str) -> None: ...
+
+    async def cancel(self, session_id: str) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeContext:
     protocol_version: str
@@ -227,6 +288,7 @@ class RuntimeContext:
     host_data: HostDataClient | None = None
     host_mail: HostMailClient | None = None
     host_artifact: HostArtifactClient | None = None
+    host_browser: HostBrowserClient | None = None
 
 
 @dataclass(frozen=True, slots=True)

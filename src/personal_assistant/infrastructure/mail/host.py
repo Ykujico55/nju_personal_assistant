@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,6 +47,10 @@ HOST_MAIL_METHODS = frozenset(
 )
 
 MAX_FETCH_LIMIT = 500
+#: The worker accepts at most 1 MiB per inbound frame.  Raw MIME bytes are
+#: base64-encoded in the response, so a fetch batch must stay comfortably
+#: below that budget; the extension polls again for the remaining messages.
+MAX_FETCH_RAW_BYTES = 512 * 1024
 
 
 class MailCapabilityError(ExtensionOperationError):
@@ -179,10 +183,14 @@ class MailHostCapability:
                     )
                 finally:
                     await session.close()
+                messages, raw_budget_exhausted = _bounded_message_views(
+                    fetch_result.messages
+                )
                 return {
                     "uidvalidity": fetch_result.uidvalidity,
                     "exists": fetch_result.exists,
-                    "messages": [_message_view(item) for item in fetch_result.messages],
+                    "messages": messages,
+                    "batch_limited": raw_budget_exhausted,
                 }
             local_action_id = _text(params.get("local_action_id"))
             message_id = _text(params.get("message_id"))
@@ -298,22 +306,59 @@ def _account_id(params: Mapping[str, Any]) -> str:
     return value.strip()
 
 
-def _message_view(item: Any) -> Mapping[str, Any]:
+def _bounded_message_views(
+    items: Sequence[Any],
+) -> tuple[list[Mapping[str, Any]], bool]:
+    """Render a fetch batch that fits the worker frame budget.
+
+    Messages are added in UID order until the raw-byte budget is reached; a
+    single message larger than the remaining budget is truncated and marked
+    ``truncated`` (the IMAP client already uses the same flag for oversize
+    messages).  ``batch_limited`` tells the caller more messages remain under
+    the same cursor, so a short batch is never mistaken for an empty mailbox.
+    """
+
+    views: list[Mapping[str, Any]] = []
+    remaining = MAX_FETCH_RAW_BYTES
+    limited = False
+    for item in items:
+        if remaining <= 0:
+            limited = True
+            break
+        view, used = _message_view(item, max_raw_bytes=remaining)
+        views.append(view)
+        remaining -= used
+    if remaining <= 0 and len(views) < len(items):
+        limited = True
+    return views, limited
+
+
+def _message_view(
+    item: Any, *, max_raw_bytes: int = MAX_FETCH_RAW_BYTES
+) -> tuple[Mapping[str, Any], int]:
     import base64
 
-    return {
-        "uid": item.uid,
-        "message_id": item.message_id,
-        "subject": item.subject,
-        "from_address": item.from_address,
-        "to_addresses": list(item.to_addresses),
-        "cc_addresses": list(item.cc_addresses),
-        "sent_at": item.sent_at,
-        "flags": list(item.flags),
-        "size_bytes": item.size_bytes,
-        "raw_base64": base64.b64encode(item.raw).decode("ascii"),
-        "truncated": item.truncated,
-    }
+    raw = item.raw
+    truncated = bool(item.truncated)
+    if len(raw) > max_raw_bytes:
+        raw = raw[:max_raw_bytes]
+        truncated = True
+    return (
+        {
+            "uid": item.uid,
+            "message_id": item.message_id,
+            "subject": item.subject,
+            "from_address": item.from_address,
+            "to_addresses": list(item.to_addresses),
+            "cc_addresses": list(item.cc_addresses),
+            "sent_at": item.sent_at,
+            "flags": list(item.flags),
+            "size_bytes": item.size_bytes,
+            "raw_base64": base64.b64encode(raw).decode("ascii"),
+            "truncated": truncated,
+        },
+        len(raw),
+    )
 
 
 def _text(value: Any, *, allow_empty: bool = False) -> str:

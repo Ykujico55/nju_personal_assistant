@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01 + F02 + F03 + F04 + F05 completed baseline + F06 in progress / contract v1.6（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节，F05 增补见第 14 节，F06 增补见第 15 节）
+版本：F01 + F02 + F03 + F04 + F05 completed baseline + F06 in progress / contract v1.6（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节，F05 增补见第 14 节，F06 增补见第 15 节）；F07 实现完成、等待独立验收 / contract v1.7（F07 增补见第 16 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -644,7 +644,7 @@ F05 交付 `personal.knowledge` 扩展与它需要的三个通用宿主能力：
 - 未创建 HNSW/IVFFlat 向量索引：pgvector 无法为无维度约束列建索引，当前为精确检索；固定单一本地模型后可另加维度特定索引。
 - 真实远程 embedding 与语义向量质量验收、PWA Schema 表单渲染、永久 purge（保持 501）、smail/ehall/Web Push（F06+）。
 
-## 15. F06 实施后的契约补充（contract v1.6，IN_PROGRESS，等待独立验收）
+## 15. F06 实施后的契约补充（contract v1.6，DONE，独立验收与最终复验通过）
 
 F06 交付 `nju.smail` 扩展与它需要的通用宿主邮件能力：只读 IMAP 同步、版本化草稿、受 Tool Gateway + R2 审批 + SideEffect Outbox 约束的 SMTP 单封发送与 Sent 只读对账。核心与通用宿主模块没有出现 `nju.smail`/NJU 分支、业务路由或业务表；`0001`–`0005` 未改动；扩展业务数据全部位于 `ext_nju_2e_smail` Schema。六轮独立审计提出的 21 个 P1 与 18 个 P2（凭据重定向、分块游标跳过、SMTP 取消后线程继续、台账先发送后记录、Message-ID 覆盖正文、草稿指针非原子、对账未绑定、崩溃遗留 EXECUTING、连接阶段取消、账户换绑 TOCTOU、凭据解析期间换绑、租约过期误判、伪造发送结果、DNS 无界、草稿取消清理、注册表弱类型/重复 ID、指纹未绑定 thread_id、心跳 owner 不一致、复核后换绑、删除重建复用 generation、非终态投影报错、Admin PUT 陈旧 fingerprint、文档残留旧工具、跨进程 TOCTOU、跨进程 monitor/心跳 fail-open、真实 sender 未保持 ACCOUNT_CHANGED 语义、心跳挂起绕过本地租约、锁等待期间不复核组合 guard、静态检查未通过、注册表异步写阻塞事件循环、本地 guard 未绑定数据库领取时刻、取消注册表写入后后台线程仍提交等）均已修复并补反例。第四、五轮按用户要求未由实现者执行测试；第六轮及补充修复由实现者运行静态验收命令（`./scripts/test.ps1` 742 passed、103 skipped，Ruff/Mypy 192 files 通过；未运行 PostgreSQL），证据见 `docs/NEXT_STEPS.md` F06 章节。
 
@@ -700,3 +700,141 @@ F06 交付 `nju.smail` 扩展与它需要的通用宿主邮件能力：只读 IM
 - Windows Credential Manager 与其余生产凭据后端属 F09；当前生产凭据不可用时 fail closed。
 - Sent 文件夹名称按供应商配置（默认 `Sent`）；真实服务器 capability probe 结果需在真实只读验收中确认。
 - 收信附件转发仅支持受控 Artifact 引用；`host.mail.account` 只暴露非秘密元数据，普通生产收件人发送需用户显式登记。
+
+### 15.8 真实邮箱互操作修复（2026-09-19，受控只读验收）
+
+- **宿主出站帧限制**：新增 `WORKER_INPUT_FRAME_BYTES = 1 MiB` 与 `JsonRpcProcessClient(max_outbound_frame_bytes=...)`（默认 1 MiB）。`call()` 在写入前对超限请求抛 `-32600`；`_handle_host_request` 对超限的宿主能力结果改写为小的 `-32101 DATA_RESULT_TOO_LARGE` 错误帧（流保持可用，Worker 报错后仍可继续调用）；Worker 因无法解码宿主帧而回的 `id=None -32700` 现在报 “extension rejected a host frame as invalid JSON-RPC”，不再误报为 id mismatch。
+- **非 ASCII 安装路径**：`VenvArtifactInstaller` 的 purelib 探测改为要求子进程显式写 UTF-8 字节，修复中文路径下按本地代码页解码导致的 `INSTALL_FAILED`；`.pth` 仍为 UTF-8（CPython site 以 UTF-8 优先读取）。
+- **RFC 2971 `ID`**：真实 IMAP 客户端只在服务器 CAPABILITY 声明 `ID` 时、认证成功后发送固定客户端标识（不含秘密与用户数据），随后才做只读 `SELECT`；这是 QQ Exmail 拒绝 “Unsafe Login” 的互操作要求。
+- **`host.mail.fetch` 帧预算**：宿主按 `MAX_FETCH_RAW_BYTES = 512 KiB` 原始字节预算分批返回；单封超预算时截断并标记 `truncated`，并返回 `batch_limited=true` 表示同一游标下仍有邮件；扩展保留真实宿主错误码（`_safe_code` 不再把 `DATA_RESULT_TOO_LARGE` 等伪装为 `MAIL_UNAVAILABLE`），并按 `last_uid` 继续轮询剩余批次。
+- **受控真实只读验收**：真实 `imap.exmail.qq.com:993` 同步 15 封邮件/15 个事件（INBOX 13 + Sent Messages 2），第二次同步 0 新，`mail_send_actions=0`；服务器侧 `EXAMINE INBOX OK 13` 与容器三种 LIST 探测确认该账号 IMAP 可见邮件即这些；客户端专用密码仅存在于该次进程内存（F09 前不持久化）。`\NoSelect` 属性按大小写不敏感处理，带 `\HasChildren` 的容器会再执行一次只读引用 LIST 枚举子文件夹。回归测试：`tests/integration/test_extension_non_ascii_install_path.py`、`tests/unit/test_extension_rpc_robustness.py`、`tests/integration/test_mail_protocol_f06.py`、`tests/unit/test_mail_host_fetch_budget_f06.py`、`tests/unit/test_smail_sync_f06.py`。
+
+## 16. F07 实施后的契约补充（contract v1.11，IN_PROGRESS，等待独立验收）
+
+F07 交付通用的受监督浏览器基架（`core/browser` + `infrastructure/browser` + 核心迁移 `0007`）与业务扩展 `nju.ehall`。核心没有出现任何校园事务 ID、页面选择器或 NJU 分支；Playwright 只出现在 `infrastructure/browser/driver.py`；扩展只依赖公开 SDK；`0001`–`0006` 逐字节未改。本节与 `tests/contract/test_f07_contract_consistency.py` 共同冻结边界。
+
+### 16.1 新增核心类型与端口（`core/browser`）
+
+- `errors.py`：`BrowserError`、`BrowserPolicyError(reason)`、`NavigationDeniedError`、`ProhibitedTransactionError`（R3 永久阻断）、`PageDriftError`、`PreviewExpiredError`、`BrowserLimitError`、`BrowserSessionStateError`、`BrowserUnavailableError`、`UnknownBrowserOutcomeError`。错误消息不得包含 URL query、cookie、验证码、截图或原始 HTML。
+- `models.py`：`BrowserSessionState` 与显式转换表 `allowed_browser_transitions`/`ensure_browser_transition`；`FieldValueSource`/`FieldValidation`；`PageField`/`PageAction`/`PageLink`/`PageSnapshot`（携带 bounded 结构、fingerprint、risk signals、text digest；不含原始正文）；`FieldChange`、`AttachmentPreview`、`FillPlan`、`SubmissionOutcome`、`TransactionPreview`、`canonical_preview_sha256`、`BrowserLimits`。硬上限：每任务 1 会话、每路径 3 次重导航、快照 ≤1 MiB、字段 ≤128、附件 ≤20、单附件 ≤8 MiB、命令 deadline 30 秒、预览 TTL 5 分钟。
+- `policy.py`：`normalize_origin`（仅 https，禁止 userinfo/path/query/fragment）、`evaluate_navigation`（精确 origin 成员、路径模式、控制字符/反斜杠/编码 traversal、开放重定向拒绝：重定向参数的目标必须落在用户 allow-list 的 https origin 内，非 https/非白名单/userinfo/反斜杠仍拒绝）、`PROHIBITED_TERM_CATALOG` 与 `scan_text_for_prohibited_terms`/`classify_labels`（只返回命中词，不复制上下文）、`assess_risk`/`escalate_risk`/`risk_rank`（页面证据只能提高风险；未知事务/未知页面版本直接 `PROHIBITED`）。
+- `fingerprint.py`：`page_structure_document`（控件/标题/链接/表单的有界规范化，值不参与；表单含 `action`/`method`/`id`/`name`，因此加载期的 action 改写会被版本检查发现）与 `compute_page_fingerprint`（canonical SHA-256）。
+- `ports.py`：`AdapterFieldSpec`/`AdapterActionSpec`/`TransactionAdapterDescriptor`/`validate_adapter_descriptor`（origin 必须在用户 allow-list 内、禁止 R3 事务/动作、字段 locator 必须是 `ctl:<group>:<index>`、动作 locator 必须是 `act:<index>`、receipt locator 是 `text:`/`ctl:`/`act:` 参考、唯一 final action 必须声明非 GET 的 `method` 与规范化且在 allow-list 内的 `target_origin` 及静态 `target_path`、1–8 个人工核验的 `allowed_page_fingerprints`（64 位小写十六进制）、可选 `receipt_pattern`）、`BrowserAdapterRecord`、`BrowserSessionRecord`（状态机、preview JSON/hash/nonce、outcome/receipt/diagnostic、`owner_id`、`visited_paths`、版本 CAS）、`CompanionSessionStatus`、`CompanionClickResult`、`DesktopBrowserPort`、`BrowserSessionStore`、`BrowserAdapterStore`。
+- `session.py`：`BrowserSessionBroker` 拥有完整状态机与策略执行；`register_adapter` 只接受已验证的扩展描述符；`navigate` 按路径计重导航（首个访问不计），`snapshot` 对无适配器的页面读取不做"未知事务"判定；交易路径上的快照强制匹配适配器 `allowed_page_fingerprints`（不匹配即 `UNKNOWN_PAGE_VERSION`/R3 并 `SAFETY_PAUSED`），正文读取不完整（`scan_incomplete`）即 `PAGE_TEXT_SCAN_INCOMPLETE` 安全暂停；`execute_fill` 在写入前复核 origin/fingerprint/旧值/字段集合/必填/模式/选项/风险，所有拒绝路径 0 次页面写入；重复 fill 与存储预览不一致时安全暂停；`execute_submit` 要求 `PA_BROWSER_SUBMIT_ENABLED=true`、未过期且精确匹配的 preview hash/nonce、适配器 final action 与预览中的提交目标（method/origin/path）一致，点击前落 `EXECUTING`，异常/未知一律 `UNKNOWN`；`reconcile` 由宿主执行只读跟踪查询并签发证明（只允许 `UNKNOWN → SUCCEEDED|(保持 UNKNOWN)`，绝不点击，调用方不能声明结果）；过期会话在读取时释放并允许同任务新建；`recover_stale_sessions` 只做 `EXECUTING → UNKNOWN`。
+- `host.browser.*`（`infrastructure/browser/host.py` 暴露给 Worker 的只读能力）：`session`/`status`/`register_adapter`/`adapters`/`snapshot`/`navigate`/`find_text`/`classify_labels`/`record_discovery`/`record_preparation`/`reconcile`/`close`/`cancel`。不存在任何"填写/点击/提交"宿主方法；`find_text` 只返回命中的有界摘录；`reconcile` 由宿主查询跟踪页并签发绑定会话/事务/适配器版本的证明，扩展只能转述宿主结论。
+
+### 16.2 Desktop Companion 与会话 capability
+
+- Companion 是独立进程，只运行在当前登录用户桌面会话中，只绑定 `127.0.0.1`；host 与 Companion 只通过回环 HTTP 通信。
+- 浏览器强制 `headless=False`；`infrastructure/browser/driver.py` 是唯一导入 Playwright 的模块。driver 不使用 `page.evaluate`、不导出 cookie/storage state、不截图、不建立 profile 备份；每个请求按精确 origin allow-list 拦截，非白名单请求 abort 并计数；fill 阶段阻断全部非 GET/HEAD/OPTIONS，因此填写不可能触发服务器保存。
+- capability 至少 256 bit（`secrets.token_urlsafe(32)`），绑定会话与用途、TTL ≤1 小时（默认 10 分钟）、可撤销、默认只存内存，进程重启即失效。根 capability 只用于建会话/诊断/撤销；会话 capability 由 host 内存保存，绝不进入扩展、RPC、数据库、日志或 Git。
+- Companion 不接收/保存密码、验证码、二维码、cookie 或 storage state；登录/验证码/扫码/动态验证只由用户在可见浏览器中完成，宿主在等待期间进入 `WAITING_USER` 且不占用后台执行 lease。
+
+### 16.3 事务 Adapter 与结构化预览
+
+- 每个 Adapter 声明：adapter ID/版本、扩展版本、官方 origin、允许路径（含登录/发现/跟踪路径）、事务 ID 列表、风险等级、字段规范（ID/label/kind/required/max_length/pattern/结构性 locator/来源）、动作白名单（唯一 final action）与回执定位符；扩展只能在用户 allow-list 之内注册 adapter。
+- 页面版本由观察到的结构 fingerprint 绑定；adapter 在流程中把 fingerprint 作为计划的 `expected_page_fingerprint` 传回，任何结构漂移都在写入前 `BROWSER_PAGE_DRIFT` 并进入 `SAFETY_PAUSED`。
+- 权威预览由宿主在 `fill_form` 内生成：origin、app/transaction、adapter/extension ID 与版本、page fingerprint、每个字段的旧值/新值/来源/置信度/验证状态/证据哈希、缺失与未知字段、附件名称/大小/SHA-256、风险等级、后果、canonical payload hash、nonce、生成与 5 分钟过期时间。预览包含上限内字段，不含认证秘密、cookie、二维码原图或原始 HTML；字段/附件顺序不影响 hash，任一值/来源/证据/附件哈希/页面版本/事务/版本变化都改变 hash；nonce 与时间戳不参与 hash。
+
+### 16.4 风险、R2 审批与 UNKNOWN
+
+- 只读导航/读取与本地材料准备分别为 R0/R1；页面填写、下一步、暂存只要可能触发服务器保存就按 R2 处理（本项目把 fill 固定为 R2，并由驱动层额外阻断全部写请求，纵深防御）。
+- 最终提交只在低风险、页面版本已知、风险复核通过且用户在执行当时明确授权时执行；必须经 Tool Gateway、一次性 R2 审批与 SideEffect Outbox，审批绑定 origin、事务、Adapter 版本、页面 fingerprint、完整字段、附件哈希、扩展版本、任务、工具与 nonce；payload/字段/附件/页面版本/扩展版本任一变化使旧审批失效。`browser.submit` 默认由 `PA_BROWSER_SUBMIT_ENABLED=false` 关闭。
+- R3 永久禁止：退课/退学、撤回/撤销、支付/缴费/退费、选课变更、法律声明/承诺/权利放弃、未知事务、未知页面版本、新出现的高风险语义。用户点击与 Manifest 都不能降级；页面文字只能提高风险。
+- 提交结果不明一律 `UNKNOWN`：不自动重试、不自动再次点击；只允许只读流程跟踪（`ehall.reconcile` + `find_text`）或人工裁决离开。
+
+### 16.5 SDK 新增公共接口（向后兼容）
+
+- `personal_assistant_sdk`：`HostBrowserClient`（`session`/`status`/`register_adapter`/`adapters`/`snapshot`/`find_text`/`navigate`/`classify_labels`/`record_discovery`/`record_preparation`/`reconcile`/`close`/`cancel`/`aclose`）、`RuntimeContext.host_browser`；`HostBroker.browser` 与 `HOST_BROWSER_*` 方法常量（含 `HOST_BROWSER_RECONCILE = "host.browser.reconcile"`）。
+- `CapabilityRoutingExecutor` 新增 `browser_actions`：声明 `browser.fill`/`browser.submit` 的工具路由到宿主 `BrowserActionExecutor`，其余仍路由到拥有者 Worker；路由只按声明 capability，不按扩展 ID。
+
+### 16.6 迁移、配置与恢复
+
+- 新增核心迁移 `0007_f07_browser_sessions.sql`：`browser_sessions`（状态约束、origin/url、适配器与事务、fingerprint、preview JSON/hash/nonce、outcome/receipt/diagnostic、`re_navigations`/`visited_paths`、`owner_id`、`version`、created/updated/expires）与 `browser_adapters`（`(extension_id, adapter_id, adapter_version)` 主键、descriptor JSON、版本）。表内不含 cookie、密码、token、storage state、截图或 trace；`preview`/`receipt` 只保存本契约定义的有界结构。
+- 新增核心迁移 `0008_f07_browser_session_uniqueness.sql`（审计修复）：`browser_sessions` 增加 `receipt_baseline`（点击前跟踪页基线，对账时扣除）并为非终态会话建立 `task_id` 部分唯一索引 `browser_sessions_task_open_unique_idx`，使"每任务单活动会话"成为原子数据库不变量；`0007` 与更早迁移逐字节未改。
+- 新增配置：`PA_BROWSER_COMPANION_URL`（必须 loopback http，半配置 fail closed）、`PA_BROWSER_ALLOWED_ORIGINS`（默认空 = 不打开任何会话；所有 adapter origin 必须是其子集）、`PA_BROWSER_SUBMIT_ENABLED`（默认 false）。Companion root capability 只经 `PA_BROWSER_COMPANION_CAPABILITY` 进程内存注入，不进入 Settings repr、数据库或日志。
+- public/admin lifespan 启动时调用 `BrowserSessionStore.recover_stale_executions`：仅把崩溃遗留的 `EXECUTING` 会话原子转 `UNKNOWN`，绝不恢复点击；重启后队列的 at-least-once 不会造成第二次提交（outbox + 会话状态双重约束）。
+
+### 16.7 扩展 `nju.ehall` 与有意未实现
+
+- 扩展槽位：`ContextProvider: ehall.transaction_context`、`WorkflowProvider: ehall.supervised_flow`、`FormSchemaProvider: ehall.transaction_form`、`MigrationProvider: ehall.schema`；工具风险：`ehall.discover_apps`/`ehall.inspect_transaction`/`ehall.reconcile` READ，`ehall.prepare_preview`/`ehall.open_transaction` INTERNAL_WRITE，`ehall.fill_form`/`ehall.submit` EXTERNAL_WRITE（分别声明 `browser.fill`/`browser.submit`）；无 R3 工具。扩展业务数据只在 `ext_nju_2e_ehall`。适配器按事务拆分：`adapters/proof.json` 与 `adapters/transcript.json`（每个事务一个 adapter，各自固定路径、指纹、字段与 final action）。
+- 扩展不导入 core/infrastructure、不建立网络连接、不接触 cookie/密码/验证码；适配器以结构性 locator（`ctl:<group>:<index>`/`act:<index>`）描述页面，具体选择器不出现在核心。适配器同时固定人工核验的页面版本集合与提交目标（`method`/`target_path`，origin 由部署 origin 注入）；仓库内 `adapters/proof.json` 的指纹值对应确定性测试夹具页面，真实 `ehall.nju.edu.cn` 页面指纹必须在用户执行的真实验收中捕获后替换。
+
+### 16.8 独立审计修复（contract v1.8，2026-09-21，F07 仍为 IN_PROGRESS）
+
+独立审计判定 F07 未通过（4 个 P1、7 个 P2 与 1 个测试失败）。修复内容：
+
+- **P1 延迟自动保存**：driver 的写请求策略从"fill 阶段临时阻断"改为持久状态：`fill` 开始即进入 `_mutations_blocked`，只有提交临界区的一条精确匹配写请求（`_submit_allowance`，匹配 method/origin/path 且只放行一次）可以出网；snapshot/find_text 等读操作不再解除阻断；诊断暴露 `allowed_write_requests`/`blocked_mutating_requests`/`mutations_blocked`。真实浏览器反例覆盖 0.5/1.5/2.5 秒延迟 autosave、填写后读取再等待、双击/脚本二次 POST、加载期与提交期 action 改写。
+- **P1 提交目标绑定**：`AdapterActionSpec` 新增 `method`/`target_origin`/`target_path`（final action 必须声明且 origin 在用户 allow-list 内、路径静态）；目标进入 `TransactionPreview` 与 `canonical_preview_sha256`（`target_action_id`/`target_method`/`target_origin`/`target_path`），因此进入 R2 审批绑定；`execute_submit` 在快照前复核预览目标与适配器当前 final action 一致，不一致即 `SUBMIT_TARGET_DRIFT`/`SAFETY_PAUSED` 且 0 次点击；driver 只放行一条完全匹配写请求。反例覆盖错误 method/origin/path、路径前缀混淆、第二条 POST、提交期动态改写 action、后台并发写、目标变更后提交、hash 绑定。
+- **P1 页面版本与扫描**：`TransactionAdapterDescriptor.allowed_page_fingerprints` 为必填（1–8 个 64 位小写十六进制）；交易路径快照必须命中集合，否则 `UNKNOWN_PAGE_VERSION`/R3 + `SAFETY_PAUSED`（SSO/发现页不参与版本固定，仍受 origin/路径 allow-list、登录检测与禁止词扫描约束）；`PageSnapshot.scan_incomplete` 在正文读取失败或截断（>65536 字符）时为真，快照即 `PAGE_TEXT_SCAN_INCOMPLETE` + `SAFETY_PAUSED`，绝不按"无风险"处理；fingerprint 纳入表单 `action`/`method`/`id`/`name`。反例覆盖未固定版本、`?note=1`/`?extra=1` 变体、显式固定变体后的未知字段、超大正文、加载期 action 改写。
+- **P1 capability 脱敏**：`LoopbackCompanionClient._request` 不再 `raise ... from exc`，错误路径在抛错前删除 token/headers/body/response 局部引用，取消直接传播；新增 7 个测试断言 traceback、frame locals、`__cause__`/`__context__` 与异常参数中都不含 capability。
+- **真实站点验收中的修复（2026-09-21，用户实时参与）**：①CAS 登录跳转 `service=https://ehall.nju.edu.cn/...` 曾被开放重定向启发式误判为 `OPEN_REDIRECT`，driver abort 导致浏览器 `ERR_FAILED`；`_redirect_target_allowed` 现在只在目标非 https 或不在 allow-list（或含 userinfo/反斜杠）时拒绝，标准 CAS `service=` 与相对路径放行，新增 2 组回归测试（allowlisted service/双重编码/端口/子域混淆）。②Companion `status` 现在返回 `url` 与 `login_page`（driver diagnostics 补齐），真实浏览器测试新增断言。③新增用户运行的真实站点只读采集工具 `scripts/ehall_real_acceptance.py`（capture/preview 两阶段；用户亲自 SSO；提交路径不存在）。真实大厅为 SPA、事项卡片无 `<a href>`，已记录列表页指纹 `d6d974e37414a98b612964a344c0b6fe6288c2f4b13d81b6769528f31ee87f87` 作为后续“自动路由”规划的输入。
+- **P2 逐项**：每次导航/快照都复核真实 URL（`evaluate_navigation`）；回执必须点击前后不同且匹配适配器 `receipt_pattern`；迁移 `0008` 以部分唯一索引原子保证每任务单活动会话（内存实现同语义），并新增 `receipt_baseline` 扣除点击前回执；`expires_at` 在会话读取时强制执行并释放任务槽位；对账改为宿主驱动 `host.browser.reconcile`（扩展无法声明 MATCHED，宿主证明含会话/事务/适配器版本/摘录哈希），`record_reconciliation` 已从 host/SDK/扩展移除；开放重定向检查覆盖双重编码（`%253A`/`%252F`）；文档数字与状态同步更新。
+- **测试失败修复**：driver 在测试模式轮询新出现的 Chromium PID（最多 3 秒）并保留 `browser_process_id`，`test_cancel_reaps_the_browser_process` 连续 5 次通过。
+- **证据（2026-09-21，第二轮快照，数字已被第三轮 v1.11 结果取代）**：`./scripts/test.ps1` → 1031 passed、119 skipped（含真实 Chromium 21 passed）；真实 PostgreSQL 集合 → 119 passed；`test_cancel_reaps_the_browser_process` 5/5；wheel 209 条目含 `0008`。
+- 有意未实现：真实 ehall 适配器与真实提交验收（`NOT_RUN`，需要用户亲自认证与合法低风险事务）、附件上传、PWA 表单渲染（F08）、Companion 自动启动/服务化与 Win32 Job Object 管护（F09）。
+- 剩余风险：真实站点在"连接被重置且无任何响应字节"的极端情况下可能触发浏览器自身 POST 重试（这不是本系统发起的重试）；因此真实提交必须依赖回执/流程编号并保留 UNKNOWN 对账。真实 SSO 需要把认证 origin 加入用户 allow-list。
+
+### 16.11 第三轮独立验收修复（contract v1.11，2026-09-21）
+
+第三轮独立审计判定 3 个 P1 与 1 个 P2。修复与冻结语义：
+
+- **登录窗口精确认证目标**：`_login_window` 不再放行任意写请求。driver 从挑战页中含密码输入的表单解析并冻结 `(method, origin, path)`（`login_target`），只授予一次性额度；仅**主框架文档导航**（`request.is_navigation_request()` 且 `resource_type == "document"` 且 frame 为主框架）且 method/origin/path 完全匹配的请求可以出网。后台 fetch/XHR、子框架表单、其他路径与已消耗额度一律 abort 并计数；用户完成登录进入非登录页后窗口立即关闭。诊断新增 `login_target`/`user_auth_requests` 反例断言。
+- **成功只认宿主 tracking 证明**：`execute_submit` 不再使用 DOM 回执判定成功。点击后一律先落 `UNKNOWN`，随即调用宿主只读差分对账（`_converge_submission` → `reconcile`）：恰好 1 条相对点击前基线新增的服务器回执才 `SUCCEEDED`（证明 `issued_by=host_tracking`、含引用哈希）；0 条/多条/基线不安全保持 `UNKNOWN`（`RECONCILE_NOT_FOUND`/`RECONCILE_AMBIGUOUS`/`RECONCILE_UNSAFE`/`SUBMIT_UNVERIFIED`）。`REJECTED` 仍为确定性 `FAILED`。反例：真实 POST + 伪造 DOM（存储服务器引用而非伪造文本）、无写请求 + 伪造 DOM、丢响应且有跟踪证据（自动收敛）、丢响应且无跟踪证据（保持 UNKNOWN 且拒绝重试）、历史回执不参与。
+- **0008 side-effect 安全收敛**：迁移先以 `DO $$ ... RAISE EXCEPTION` 对“同一任务存在多个 `EXECUTING/UNKNOWN`”fail closed（升级中止、数据库停留 0007、要求人工裁定）；否则按 `(state IN ('EXECUTING','UNKNOWN')) DESC, created_at` 排序，优先保留唯一未决会话，只取消副作用前的重复会话。反例：早期 `AUTHENTICATED` + 后期 `UNKNOWN` 保留 UNKNOWN；多个未决会话升级失败且 `0008` 未记录。
+- **迁移错误类型化**：迁移执行期的 `asyncpg.PostgresError` 包装为 `MigrationError`（数据库不可达等连接错误语义不变）。
+- **文档/证据一致**：README/TODO/NEXT_STEPS/CONTRACTS 统一为“真实门户/SSO 只读采集已运行；真实交易表单、真实适配器指纹、填写至预览及提交未运行”；历史测试数字标注“已被后续结果取代”；`docs/evidence/real_ehall_2026-09-21.md` 只陈述日志可独立证明的会话。
+
+- **证据（2026-09-21，第三轮 v1.11）**：`./scripts/test.ps1` → **1046 passed、122 skipped、0 failed**（真实 Chromium 29 passed 含登录窗口动态反例与真实 POST + 伪造 DOM 组合反例）；Ruff/Mypy 214 files；`test_cancel_reaps_the_browser_process` 独立 5/5；真实 PostgreSQL 集合 → **122 passed**（含 0008 未决动作保留、多个未决动作 fail-closed 反例）；`0008` SHA-256 `5dcd9513b9767a1c67092dcf6520bbf75eb42963916b6da12b909413c91d2af3`；wheel 209 条目无扩展源码。
+
+### 16.10 第二轮独立验收修复（contract v1.10，2026-09-21）
+
+第二轮独立审计判定 F07 未通过（6 个 P1、5 个 P2）。修复内容与冻结语义：
+
+- **默认阻断全部非 GET**：driver 新增 `_login_window`，默认为假。除提交临界区一次性
+  完整目标许可外，唯一例外是驱动自身观察到登录挑战页时（用户亲自完成 SSO 的 POST）；
+  `fill` 之后即使再次遇到登录页也不再放行。导航动作点击期间若有写请求被 abort，宿主
+  立即 `SAFETY_PAUSED`（`NAVIGATION_WRITE_BLOCKED`）。诊断暴露 `login_window`/
+  `user_auth_requests`/`writes_blocked_by_default`。
+- **提交许可绑定完整 URL**：`_allowance_matches` 现在要求请求 URL 无 query string；
+  `?operation=...` 被动态改写为另一路径/参数即不再匹配（契约中 final action 的
+  `target_path` 不允许 query）。反例已更新：任意 query 不再匹配。
+- **成功必须以绑定写请求为证据**：driver `click` 返回 `write_requests_allowed`（本次
+  点击实际放行的绑定写请求数）；核心仅在 `RECEIPT` 文本新鲜 **且** `write_requests_allowed==1`
+  时才判定 SUCCEEDED；仅 DOM 文本被脚本伪造时一律 UNKNOWN。真实浏览器新增
+  `?fakeReceipt=1` 反例。
+- **对账基线来自真实跟踪页**：`execute_submit` 在点击前通过 driver 的**只读临时标签页**
+  （`collect_matches(url=...)`，仍受 context 级 origin 拦截）读取真实 tracking page，
+  按 `receipt_pattern` 收集引用并只持久化 SHA-256 哈希集合（`receipt_baseline` JSON：
+  `captured/hashes/truncated`）。`reconcile` 同样收集差分：恰好 1 条新引用才 SUCCEEDED，
+  ≥2 条 AMBIGUOUS，0 条 NOT_FOUND；基线缺失/截断/页面不可完整扫描时 `RECONCILE_UNSAFE`
+  （绝不误报 MATCHED）。反例：历史回执不参与、DOM 伪造不成功、截断基线不算 MATCHED。
+- **UNKNOWN 为未决状态**：普通会话 TTL 不再自动取消 UNKNOWN（`_EXPIRABLE_STATES`），
+  未决动作保留并占用任务槽位直到只读对账或人工裁定；迁移 0008 的唯一索引包含 UNKNOWN。
+- **0008 兼容升级**：先以确定性 `row_number()` 收敛同任务重复开放会话（保留最早者，
+  其余置 `CANCELLED`/`DUPLICATE_CONVERGED`），再创建部分唯一索引；SHA-256
+  `5dcd9513b9767a1c67092dcf6520bbf75eb42963916b6da12b909413c91d2af3`（契约测试锁定）。
+  PostgreSQL 反例：仅应用 0007 的库存在 3 个开放重复会话时，升级必须成功且收敛为 1 个。
+- **多适配器真实接入**：`ADAPTER_FILES` 纳入 `transcript.json`；Worker 首次使用注册全部
+  adapter；发现流程除链接外读取声明式导航动作（真实 SPA 卡片场景），未声明但可见的动作
+  仍作为候选参与 R3 分类。
+- **capability 脱敏补强**：5xx 分支同时删除 `response`；测试递归检查 frames（含嵌套
+  request/response headers）与 `__cause__/__context__`。
+- **PID/回收修复**：改用 browser-level CDP `SystemInfo.getProcessInfo`（带重试与
+  page-level 回退）解析 Chromium 浏览器进程 id；`test_cancel_reaps_the_browser_process`
+  连续 5/5 通过。
+- **文档与证据**：真实站点只读采集证据归档到 `docs/evidence/real_ehall_2026-09-21.md`
+  （脱敏、含原始日志行与真实列表页指纹），文档统一表述为“真实门户/SSO 只读采集已运行；
+  真实交易表单与提交未运行”。
+
+### 16.9 导航动作与多事项适配器（contract v1.9，2026-09-21，用户已授权）
+
+目标：用户只亲自完成 SSO，之后由助手路由进入目标事项。首版实现“声明式导航动作 + 多事项适配器”，模糊指令路由与远程批准 UI 仍属 F08。
+
+- **声明**：`AdapterActionSpec` 新增 `kind="navigate"`、`transaction_id`、`navigates_to_path`。导航动作必须：绑定一个已声明事务、声明静态落地路径（`/` 开头，禁止 `..`/反斜杠/`?`，允许 `#` 以支持 hash 路由）、不得 `final`、不得声明 `method/target_origin/target_path`；非导航动作不得声明事务或落地路径。
+- **宿主执行**：`BrowserSessionBroker.execute_navigation(session_id, extension_id, adapter_id, transaction_id)` 仅允许 `AUTHENTICATED`/`DISCOVERED` 状态；动作必须出现在实时页面上且 label 与声明一致（否则 `NAVIGATION_ACTION_DRIFT`/`SAFETY_PAUSED`）；点击后真实落地路径必须等于 `navigates_to_path`（否则 `NAVIGATION_MISMATCH`/`SAFETY_PAUSED`），落地页必须命中该事务的 `allowed_page_fingerprints`（否则 `UNKNOWN_PAGE_VERSION`/R3）；不产生回执、不发放写请求额度、不重试。导航发生在 fill 之前，即“用户/助手驱动窗口”：此时页面写请求尚未被持久阻断（登录与站点自身初始化需要），落地页仍由指纹与路径双重校验；fill 之后所有写请求照旧只放行提交临界区的一条绑定请求。
+- **能力与工具**：新增 capability `browser.navigate` 与宿主执行工具 `ehall.open_transaction`（INTERNAL_WRITE，输入 `session_id`/`adapter_id`/`transaction_id`，输出落地 `url`/`path`/`page_fingerprint`/`state`）；经 Tool Gateway 审计，无需 R2（R2 仍只用于 fill/submit）；R3 事务不声明、不可达。
+- **端口与实现**：`DesktopBrowserPort.activate(session_id, locator, expected_path)`；Companion `POST /v1/sessions/{id}/activate`；driver `activate_navigation`（点击后校验 path，hash 路由按 `path#fragment` 比较）。
+- **多事项适配器**：扩展按事务提供多个 adapter JSON，`build_descriptor` 逐个构建并在首次使用时全部注册；`ehall.inspect_transaction` 按 `app_path` 解析 adapter，`ehall.prepare_preview` 按 `transaction_id` 解析；每个 adapter 只有一个事务与一个 final action。
+- **反例与测试**：`tests/unit/test_browser_navigation_f07.py`（校验 5 例、broker 路由/状态/漂移/错路径/未固定指纹/越权落地/多事项选择 9 例、executor 路由 1 例）；真实 Chromium 集成新增“门户按钮路由到指纹固定页”与“落地路径不符拒绝”2 例；真实 Worker/Gateway 链新增 `ehall.open_transaction` 1 例。
+- **仍有意未实现**：模糊指令 → `transaction_id` 的 Agent 路由（低置信度/R2+ 必须用户确认）、手机端审批 UI/Web Push（F08）、真实 ehall hash 路由 adapter 的指纹捕获与替换。

@@ -1,6 +1,7 @@
 """Deterministic adapters for local development and tests only."""
 
 from .audit import InMemoryAuditWriter
+from .browser import InMemoryBrowserAdapterStore, InMemoryBrowserSessionStore
 from .disclosures import InMemoryDisclosureConsentStore
 from .extension_data import UnavailableExtensionDataAccess
 from .extensions import InMemoryLifecycleStore
@@ -14,6 +15,8 @@ from .versions import InMemoryVersionCatalog
 
 __all__ = [
     "InMemoryAuditWriter",
+    "InMemoryBrowserAdapterStore",
+    "InMemoryBrowserSessionStore",
     "InMemoryDisclosureConsentStore",
     "InMemoryEventStream",
     "InMemoryExtensionArtifactAccess",

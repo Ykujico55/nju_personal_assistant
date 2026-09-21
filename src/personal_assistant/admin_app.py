@@ -245,6 +245,8 @@ def create_app(
             await container.mail_ledger.recover_stale_executions(
                 active_owners=container.mail_execution_owners.active()
             )
+            if container.browser_broker is not None:
+                await container.browser_broker.recover_stale_sessions()
             yield
         finally:
             await supervisor.stop_all()

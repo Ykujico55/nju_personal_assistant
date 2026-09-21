@@ -66,6 +66,10 @@ def create_app(
             await container.mail_ledger.recover_stale_executions(
                 active_owners=container.mail_execution_owners.active()
             )
+            # A supervised browser submission interrupted by a crash is UNKNOWN:
+            # startup recovery never resumes a click.
+            if container.browser_broker is not None:
+                await container.browser_broker.recover_stale_sessions()
             yield
         finally:
             # Closing the verifier must never prevent storage from closing.

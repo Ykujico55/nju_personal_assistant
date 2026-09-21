@@ -1,5 +1,6 @@
 """Production database adapters and migration runner."""
 
+from .browser_store import PostgresBrowserAdapterStore, PostgresBrowserSessionStore
 from .config import PostgresAdapterConfig, normalize_dsn
 from .connection import PostgresDatabase
 from .disclosure_consents import PostgresDisclosureConsentStore
@@ -20,6 +21,8 @@ __all__ = [
     "MigrationChecksumError",
     "MigrationError",
     "PostgresAdapterConfig",
+    "PostgresBrowserAdapterStore",
+    "PostgresBrowserSessionStore",
     "PostgresAdapterNotImplemented",
     "PostgresAdapters",
     "PostgresDatabase",

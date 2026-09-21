@@ -1,0 +1,19 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "result": {
+      "type": "string"
+    },
+    "reference": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "result"
+  ],
+  "additionalProperties": true
+}

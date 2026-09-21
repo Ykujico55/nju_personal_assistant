@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    },
+    "apps": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "session_id",
+    "state",
+    "apps"
+  ],
+  "additionalProperties": true
+}

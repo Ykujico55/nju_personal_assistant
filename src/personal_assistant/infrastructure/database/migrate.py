@@ -12,6 +12,8 @@ import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import asyncpg
+
 if TYPE_CHECKING:
     from .connection import PostgresDatabase
 
@@ -88,7 +90,15 @@ async def run_migrations(database: PostgresDatabase) -> tuple[str, ...]:
                     continue
                 body = _strip_transaction_wrapper(raw.decode("utf-8"))
                 async with connection.transaction():
-                    await connection.execute(body)
+                    try:
+                        await connection.execute(body)
+                    except asyncpg.PostgresError as exc:
+                        # Surface a typed, actionable failure: a migration that
+                        # refuses to run (e.g. pending external actions needing
+                        # manual adjudication) must not look like a driver error.
+                        raise MigrationError(
+                            f"migration {version} failed: {exc}"
+                        ) from exc
                     await connection.execute(
                         "INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)",
                         version,

@@ -5,7 +5,8 @@ from __future__ import annotations
 import unittest
 from dataclasses import dataclass
 
-from nju_smail.sync import _message_insert
+from nju_smail.sync import _message_insert, _safe_code
+from personal_assistant_sdk import HostCapabilityError
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +128,21 @@ class MessageIdentityTests(unittest.TestCase):
             _Fetched(uid=2, raw=_raw(message_id=None), truncated=True, size_bytes=200),
         )
         self.assertNotEqual(first.content_hash, second.content_hash)
+
+
+class HostErrorCodeTests(unittest.TestCase):
+    def test_unknown_host_code_is_preserved(self) -> None:
+        # Regression: DATA_RESULT_TOO_LARGE used to be masked as MAIL_UNAVAILABLE.
+        exc = HostCapabilityError("DATA_RESULT_TOO_LARGE", "batch too large")
+        self.assertEqual("DATA_RESULT_TOO_LARGE", _safe_code(exc))
+
+    def test_mail_error_codes_are_preserved(self) -> None:
+        exc = HostCapabilityError("MAIL_AUTH_FAILED", "auth")
+        self.assertEqual("MAIL_AUTH_FAILED", _safe_code(exc))
+
+    def test_garbage_code_falls_back_to_unavailable(self) -> None:
+        exc = HostCapabilityError("not a code!", "x")
+        self.assertEqual("MAIL_UNAVAILABLE", _safe_code(exc))
 
 
 class _CursorStore:

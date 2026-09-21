@@ -69,7 +69,12 @@ F04_MIGRATION_NAMES = (
     "0004_f02_operation_request_scope.sql",
     "0005_f04_model_disclosure.sql",
 )
-MIGRATION_NAMES = (*F04_MIGRATION_NAMES, "0006_f06_mail_transport.sql")
+MIGRATION_NAMES = (
+    *F04_MIGRATION_NAMES,
+    "0006_f06_mail_transport.sql",
+    "0007_f07_browser_sessions.sql",
+    "0008_f07_browser_session_uniqueness.sql",
+)
 
 
 def _dsn(url: str) -> str:
@@ -209,7 +214,13 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
         applied = await second.startup()
         self._adapters.append(second)
         self.assertEqual(
-            ("0005_f04_model_disclosure", "0006_f06_mail_transport"), applied
+            (
+                "0005_f04_model_disclosure",
+                "0006_f06_mail_transport",
+                "0007_f07_browser_sessions",
+                "0008_f07_browser_session_uniqueness",
+            ),
+            applied,
         )
         rows = await self._fetch(
             "SELECT version, checksum FROM schema_migrations ORDER BY version"
@@ -220,6 +231,14 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             _file_checksum("0006_f06_mail_transport.sql"),
             by_version["0006_f06_mail_transport"],
+        )
+        self.assertEqual(
+            _file_checksum("0007_f07_browser_sessions.sql"),
+            by_version["0007_f07_browser_sessions"],
+        )
+        self.assertEqual(
+            _file_checksum("0008_f07_browser_session_uniqueness.sql"),
+            by_version["0008_f07_browser_session_uniqueness"],
         )
 
     async def test_0005_checksum_drift_is_rejected(self) -> None:

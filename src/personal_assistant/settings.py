@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from personal_assistant.core.browser.errors import BrowserPolicyError
+from personal_assistant.core.browser.policy import normalize_origin
+
 
 class ConfigurationError(RuntimeError):
     pass
@@ -25,6 +28,45 @@ _MODEL_ID = re.compile(r"^[\x21-\x7e]{1,128}$")
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 _SECRET_HANDLE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _MAX_MODEL_TIMEOUT_SECONDS = 600.0
+_MAX_BROWSER_ORIGINS = 16
+
+
+def normalize_browser_origins(values: tuple[str, ...]) -> tuple[str, ...]:
+    """Canonicalize the user's supervised-browser origin allow-list."""
+
+    if len(values) > _MAX_BROWSER_ORIGINS:
+        raise ConfigurationError(
+            f"PA_BROWSER_ALLOWED_ORIGINS accepts at most {_MAX_BROWSER_ORIGINS} origins"
+        )
+    normalized: list[str] = []
+    for raw in values:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ConfigurationError("PA_BROWSER_ALLOWED_ORIGINS entries must be non-empty")
+        try:
+            origin = normalize_origin(raw.strip())
+        except BrowserPolicyError as exc:
+            raise ConfigurationError(
+                f"PA_BROWSER_ALLOWED_ORIGINS entry is not a valid https origin: {exc.reason}"
+            ) from exc
+        if origin not in normalized:
+            normalized.append(origin)
+    return tuple(normalized)
+
+
+def normalize_companion_url(raw: str) -> str:
+    """Validate the loopback Desktop Companion endpoint."""
+
+    parts = urlsplit(raw)
+    if parts.scheme != "http":
+        raise ConfigurationError("PA_BROWSER_COMPANION_URL must use http over loopback")
+    host = (parts.hostname or "").lower()
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise ConfigurationError("PA_BROWSER_COMPANION_URL must be a loopback address")
+    if not parts.port:
+        raise ConfigurationError("PA_BROWSER_COMPANION_URL must include a port")
+    if parts.path not in ("", "/") or parts.query or parts.fragment or parts.username:
+        raise ConfigurationError("PA_BROWSER_COMPANION_URL must be a bare loopback origin")
+    return f"http://{host}:{parts.port}"
 
 
 def normalize_team_domain(raw: str) -> str:
@@ -295,6 +337,9 @@ class Settings:
     mail_send_enabled: bool = False
     mail_test_recipients: tuple[str, ...] = ()
     mail_max_message_bytes: int = 2 * 1024 * 1024
+    browser_companion_url: str = ""
+    browser_allowed_origins: tuple[str, ...] = ()
+    browser_submit_enabled: bool = False
 
     def __post_init__(self) -> None:
         # Every construction path (from_env, direct construction, replace)
@@ -383,6 +428,17 @@ class Settings:
             "mail_test_recipients",
             normalize_mail_recipients(self.mail_test_recipients),
         )
+        if self.browser_companion_url:
+            object.__setattr__(
+                self,
+                "browser_companion_url",
+                normalize_companion_url(self.browser_companion_url),
+            )
+        object.__setattr__(
+            self,
+            "browser_allowed_origins",
+            normalize_browser_origins(tuple(self.browser_allowed_origins)),
+        )
         self.validate()
 
     @classmethod
@@ -437,6 +493,15 @@ class Settings:
             mail_max_message_bytes=_env_int(
                 "PA_MAIL_MAX_MESSAGE_BYTES", 2 * 1024 * 1024
             ),
+            browser_companion_url=os.getenv("PA_BROWSER_COMPANION_URL", "").strip(),
+            browser_allowed_origins=normalize_browser_origins(
+                tuple(
+                    item.strip()
+                    for item in os.getenv("PA_BROWSER_ALLOWED_ORIGINS", "").split(",")
+                    if item.strip()
+                )
+            ),
+            browser_submit_enabled=_env_bool("PA_BROWSER_SUBMIT_ENABLED", False),
         )
         return settings
 
@@ -564,4 +629,18 @@ class Settings:
         if normalize_mail_recipients(self.mail_test_recipients) != self.mail_test_recipients:
             raise ConfigurationError(
                 "PA_MAIL_TEST_RECIPIENTS must be stored in normalized lower-case form"
+            )
+        if normalize_browser_origins(self.browser_allowed_origins) != self.browser_allowed_origins:
+            raise ConfigurationError(
+                "PA_BROWSER_ALLOWED_ORIGINS must be stored in normalized https origin form"
+            )
+        if self.browser_companion_url and (
+            normalize_companion_url(self.browser_companion_url) != self.browser_companion_url
+        ):
+            raise ConfigurationError(
+                "PA_BROWSER_COMPANION_URL must be stored in normalized loopback form"
+            )
+        if self.browser_companion_url and not self.browser_allowed_origins:
+            raise ConfigurationError(
+                "PA_BROWSER_COMPANION_URL requires at least one PA_BROWSER_ALLOWED_ORIGINS entry"
             )

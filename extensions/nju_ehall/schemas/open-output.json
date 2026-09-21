@@ -1,0 +1,32 @@
+{
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string"
+    },
+    "transaction_id": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "page_fingerprint": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "session_id",
+    "transaction_id",
+    "url",
+    "path",
+    "page_fingerprint",
+    "state"
+  ],
+  "additionalProperties": false
+}

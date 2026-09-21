@@ -95,6 +95,13 @@ class ImapState:
     folders: dict[str, list[ImapMessage]] = field(default_factory=dict)
     uidvalidity: dict[str, int] = field(default_factory=dict)
     logins: int = 0
+    #: QQ Exmail refuses SELECT without a prior RFC 2971 ID command.
+    require_id: bool = False
+    #: Container mailboxes advertised with a mixed-case NoSelect attribute.
+    no_select_folders: tuple[str, ...] = ()
+    #: Child mailboxes only returned by a referenced LIST (QQ 其他文件夹 style).
+    child_folders: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    identifications: list[str] = field(default_factory=list)
     commands: list[str] = field(default_factory=list)
     select_readonly: dict[str, bool] = field(default_factory=dict)
     mutated: list[str] = field(default_factory=list)
@@ -178,9 +185,19 @@ class SimulatedImapServer:
                     )
             elif command == "AUTHENTICATE":
                 await self._handle_authenticate(reader, writer, tag, parts)
+            elif command == "ID":
+                self.state.identifications.append(text)
+                await self._write(writer, b'* ID ("name" "test-client")\r\n')
+                await self._ok(writer, tag, "ID completed")
             elif command == "LIST":
-                await self._handle_list(writer, tag)
+                await self._handle_list(writer, tag, parts)
             elif command in {"SELECT", "EXAMINE"}:
+                if self.state.require_id and not self.state.identifications:
+                    await self._write(
+                        writer,
+                        b"A1 NO [ALERT] Unsafe Login. Please contact kefu@188.com\r\n",
+                    )
+                    return
                 selected = self._mailbox(parts)
                 await self._handle_select(
                     writer,
@@ -242,12 +259,24 @@ class SimulatedImapServer:
         else:
             await self._write(writer, f"{tag} NO authentication failed\r\n".encode())
 
-    async def _handle_list(self, writer: asyncio.StreamWriter, tag: str) -> None:
+    async def _handle_list(
+        self, writer: asyncio.StreamWriter, tag: str, parts: list[str]
+    ) -> None:
+        reference = parts[2].strip('"') if len(parts) >= 4 else ""
+        if reference:
+            for name in self.state.child_folders.get(reference, ()):
+                line = f'* LIST (\\HasNoChildren) "/" "{name}"\r\n'
+                await self._write(writer, line.encode())
+            await self._ok(writer, tag, "LIST completed")
+            return
         for name in self.state.folders:
             attributes = "\\HasNoChildren"
             if name.upper() == "SENT":
                 attributes = "\\HasNoChildren \\Sent"
             line = f'* LIST ({attributes}) "/" "{name}"\r\n'
+            await self._write(writer, line.encode())
+        for name in self.state.no_select_folders:
+            line = f'* LIST (\\NoSelect \\HasChildren) "/" "{name}"\r\n'
             await self._write(writer, line.encode())
         await self._ok(writer, tag, "LIST completed")
 

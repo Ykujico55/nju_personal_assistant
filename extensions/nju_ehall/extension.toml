@@ -1,0 +1,65 @@
+manifest_version = "1"
+id = "nju.ehall"
+name = "NJU supervised ehall"
+version = "0.1.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.14"
+entrypoint = "nju_ehall.worker:create_extension"
+dependency_lock = "requirements.lock"
+config_schema = "schemas/config.json"
+state_schema_version = 1
+healthcheck = "system.health"
+
+context_providers = ["ehall.transaction_context"]
+workflows = ["ehall.supervised_flow"]
+forms = ["ehall.transaction_form"]
+migrations = ["ehall.schema"]
+
+[[tools]]
+id = "ehall.discover_apps"
+risk = "READ"
+input_schema = "schemas/discover-input.json"
+output_schema = "schemas/discover-output.json"
+
+[[tools]]
+id = "ehall.inspect_transaction"
+risk = "READ"
+input_schema = "schemas/inspect-input.json"
+output_schema = "schemas/inspect-output.json"
+
+[[tools]]
+id = "ehall.prepare_preview"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/prepare-input.json"
+output_schema = "schemas/prepare-output.json"
+
+[[tools]]
+id = "ehall.open_transaction"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/open-input.json"
+output_schema = "schemas/open-output.json"
+capabilities = ["browser.navigate"]
+
+[[tools]]
+id = "ehall.fill_form"
+risk = "EXTERNAL_WRITE"
+input_schema = "schemas/fill-input.json"
+output_schema = "schemas/fill-output.json"
+capabilities = ["browser.fill"]
+
+[[tools]]
+id = "ehall.submit"
+risk = "EXTERNAL_WRITE"
+input_schema = "schemas/submit-input.json"
+output_schema = "schemas/submit-output.json"
+capabilities = ["browser.submit"]
+
+[[tools]]
+id = "ehall.reconcile"
+risk = "READ"
+input_schema = "schemas/reconcile-input.json"
+output_schema = "schemas/reconcile-output.json"
+
+[capabilities]
+required = ["extension.data.sql"]
+optional = ["browser.read", "browser.navigate", "browser.fill", "browser.submit"]

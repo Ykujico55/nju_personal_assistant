@@ -1,0 +1,85 @@
+{
+  "adapter_id": "nju.ehall.proof",
+  "adapter_version": "1.0.0",
+  "display_name": "在读证明申请",
+  "declared_risk": "EXTERNAL_WRITE",
+  "allowed_paths": [
+    "/apps/proof"
+  ],
+  "login_paths": [
+    "/sso/login"
+  ],
+  "discovery_path": "/portal",
+  "tracking_path": "/apps/proof/status",
+  "tracking_query": "回执号",
+  "receipt_locator": "text:回执号",
+  "receipt_pattern": "NJU-[0-9]{4}-[0-9]{4}",
+  "allowed_page_fingerprints": [
+    "1ad9029f4ed7e83224a464cf0559874731e8805eb6bca4f5c6b8aa3cd51a102b"
+  ],
+  "consequences": "提交后进入院系审核；材料不实将影响办理结果。",
+  "transaction_ids": [
+    "proof.apply"
+  ],
+  "fields": [
+    {
+      "field_id": "reason",
+      "label": "申请理由",
+      "kind": "text",
+      "required": true,
+      "max_length": 200,
+      "locator": "ctl:0:0",
+      "source": "USER_INPUT"
+    },
+    {
+      "field_id": "phone",
+      "label": "联系电话",
+      "kind": "text",
+      "required": true,
+      "max_length": 20,
+      "pattern": "1[0-9]{10}",
+      "locator": "ctl:0:1",
+      "source": "USER_INPUT"
+    },
+    {
+      "field_id": "delivery",
+      "label": "领取方式",
+      "kind": "select",
+      "required": true,
+      "locator": "ctl:1:0",
+      "source": "USER_INPUT"
+    }
+  ],
+  "actions": [
+    {
+      "action_id": "proof.submit",
+      "locator": "act:0",
+      "label": "提交申请",
+      "kind": "submit",
+      "risk": "EXTERNAL_WRITE",
+      "final": true,
+      "method": "POST",
+      "target_path": "/apps/proof/submit"
+    },
+    {
+      "action_id": "proof.open",
+      "locator": "act:0",
+      "label": "在读证明申请",
+      "kind": "navigate",
+      "risk": "INTERNAL_WRITE",
+      "transaction_id": "proof.apply",
+      "navigates_to_path": "/apps/proof"
+    }
+  ],
+  "materials": [
+    {
+      "name": "身份证号",
+      "required": false,
+      "note": "部分院系需要核验身份信息"
+    },
+    {
+      "name": "在读期间说明",
+      "required": false
+    }
+  ]
+}

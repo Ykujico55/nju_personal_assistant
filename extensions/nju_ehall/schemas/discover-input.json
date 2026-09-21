@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "purpose": {
+      "type": "string",
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "purpose"
+  ],
+  "additionalProperties": false
+}

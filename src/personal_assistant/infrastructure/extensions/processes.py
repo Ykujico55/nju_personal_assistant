@@ -42,10 +42,16 @@ from personal_assistant.core.extensions.lifecycle import InstalledArtifact
 from personal_assistant.core.extensions.manifest import ExtensionManifest
 from personal_assistant.core.extensions.models import ExtensionRecord, data_namespace
 from personal_assistant.core.extensions.rpc import (
+    WORKER_INPUT_FRAME_BYTES,
     ExtensionWorker,
     HostRequestHandler,
     JsonRpcProcessClient,
     WorkerSpec,
+)
+from personal_assistant.infrastructure.browser.host import (
+    HOST_BROWSER_METHODS,
+    BrowserCapabilityContext,
+    BrowserHostCapability,
 )
 from personal_assistant.infrastructure.mail.host import (
     HOST_MAIL_METHODS,
@@ -58,6 +64,7 @@ from .installer import venv_python
 
 MAIL_READ_CAPABILITY = "mail.read"
 MAIL_SEND_CAPABILITY = "mail.send"
+BROWSER_READ_CAPABILITY = "browser.read"
 
 _ID_SLOT_METHODS = {
     "EventSource": "event_source.list",
@@ -96,6 +103,7 @@ def _build_worker(
             host_handler=host_handler,
         ),
         max_frame_bytes=max_frame_bytes,
+        max_outbound_frame_bytes=WORKER_INPUT_FRAME_BYTES,
     )
     return ExtensionWorker(manifest, client)
 
@@ -113,6 +121,7 @@ class ProcessRuntimeSupervisor:
         mail_capability: MailHostCapability | None = None,
         mail_send_available: bool = False,
         artifact_access: ExtensionArtifactAccess | None = None,
+        browser_capability: BrowserHostCapability | None = None,
     ) -> None:
         self._handshake_timeout = handshake_timeout_seconds
         self._health_timeout = health_timeout_seconds
@@ -123,6 +132,7 @@ class ProcessRuntimeSupervisor:
         self._mail_capability = mail_capability
         self._mail_send_available = mail_send_available
         self._artifact_access = artifact_access
+        self._browser_capability = browser_capability
         self._workers: dict[str, ExtensionWorker] = {}
         self._start_locks: dict[str, asyncio.Lock] = {}
 
@@ -176,6 +186,8 @@ class ProcessRuntimeSupervisor:
             return self._mail_capability is not None and self._mail_capability.available
         if capability == MAIL_SEND_CAPABILITY:
             return self._mail_send_available
+        if capability == BROWSER_READ_CAPABILITY:
+            return self._browser_capability is not None and self._browser_capability.available
         return False
 
     def _require_capabilities(self, manifest: ExtensionManifest) -> None:
@@ -245,6 +257,24 @@ class ProcessRuntimeSupervisor:
                 )
 
             routes.append((HOST_ARTIFACT_METHODS, artifact_handler))
+        browser_capability = self._browser_capability
+        if (
+            browser_capability is not None
+            and browser_capability.available
+            and BROWSER_READ_CAPABILITY in declared
+        ):
+            browser_context = BrowserCapabilityContext(
+                extension_id=manifest.id, extension_version=manifest.version
+            )
+
+            async def browser_handler(
+                method: str, params: Mapping[str, Any]
+            ) -> Any:
+                return await browser_capability.handle(
+                    method, params, context=browser_context
+                )
+
+            routes.append((HOST_BROWSER_METHODS, browser_handler))
         if not routes:
             return None
 
