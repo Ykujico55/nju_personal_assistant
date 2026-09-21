@@ -94,7 +94,12 @@ _ACTIVE_STATES = frozenset(
 # UNKNOWN is a pending external action: it occupies the task slot until a
 # read-only reconciliation or a human decision resolves it, so the browser TTL
 # must never turn it into a terminal CANCELLED (which the state machine forbids).
-_EXPIRABLE_STATES = frozenset(_ACTIVE_STATES - {BrowserSessionState.UNKNOWN})
+# EXECUTING is likewise excluded: the state machine only allows
+# EXECUTING -> {SUCCEEDED, FAILED, UNKNOWN}, and startup recovery owns crashed
+# executions, so a TTL expiry must not raise mid-transition.
+_EXPIRABLE_STATES = frozenset(
+    _ACTIVE_STATES - {BrowserSessionState.UNKNOWN, BrowserSessionState.EXECUTING}
+)
 
 
 def _utcnow() -> datetime:
@@ -346,7 +351,12 @@ class BrowserSessionBroker:
         repeated = decision.path in record.visited_paths
         if repeated and record.re_navigations >= self._limits.max_renavigations:
             raise BrowserLimitError("the session reached its re-navigation limit")
-        payload = _require_mapping(await self._companion.navigate(session_id, url), "navigation")
+        payload = _require_mapping(
+            await self._companion.navigate(
+                session_id, url, login_paths=tuple(descriptor.login_paths)
+            ),
+            "navigation",
+        )
         login_page = bool(payload.get("login_page", False))
         now = self._now()
         updates: dict[str, Any] = {
@@ -979,6 +989,7 @@ class BrowserSessionBroker:
                 record.session_id,
                 prohibited_terms=tuple(terms),
                 scan_text=descriptor is not None,
+                login_paths=tuple(descriptor.login_paths) if descriptor else (),
             ),
             "snapshot",
         )

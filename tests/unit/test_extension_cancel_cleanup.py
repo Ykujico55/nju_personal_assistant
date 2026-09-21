@@ -75,6 +75,9 @@ class CancellingInstaller:
     async def uninstall_code(self, record: ExtensionRecord) -> None:
         del record
 
+    async def remove_orphan_version(self, extension_id: str, version: str) -> None:
+        del extension_id, version
+
     async def remove_version(self, record: ExtensionRecord) -> None:
         if record.install_path:
             self.removed.append(record.install_path)

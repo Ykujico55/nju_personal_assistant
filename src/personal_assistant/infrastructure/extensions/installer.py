@@ -163,6 +163,19 @@ class VenvArtifactInstaller:
             )
         await run_blocking(shutil.rmtree, version_dir, True)
 
+    async def remove_orphan_version(self, extension_id: str, version: str) -> None:
+        """Delete an untracked version directory left behind by a hard kill."""
+
+        root = self._install_root.resolve()
+        destination = (
+            self._install_root / _safe_component(extension_id) / _safe_component(version)
+        ).resolve()
+        if destination == root or not destination.is_relative_to(root):
+            raise ExtensionOperationError(
+                "UNINSTALL_PATH_UNSAFE", "refusing to delete outside the install root"
+            )
+        await run_blocking(shutil.rmtree, destination, True)
+
     async def clean_failed_install(self, staged: StagedArtifact) -> None:
         """Rollback of the version directory is owned by :meth:`install`.
 

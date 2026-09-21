@@ -169,7 +169,8 @@ class PostgresObservationStore:
     async def append(self, observation: Observation) -> None:
         async with self._db.transaction(), self._db.connection() as connection:
             await connection.execute(
-                "INSERT INTO run_observations (run_id, value) VALUES ($1, $2)",
+                "INSERT INTO run_observations (run_id, value) "
+                "VALUES ($1, COALESCE($2::jsonb, 'null'::jsonb))",
                 observation.run_id,
                 observation.value,
             )

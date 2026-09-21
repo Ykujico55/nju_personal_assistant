@@ -162,12 +162,14 @@ class LoopbackCompanionClient:
             "GET", f"/v1/sessions/{session_id}", token=self._token(session_id)
         )
 
-    async def navigate(self, session_id: str, url: str) -> Mapping[str, Any]:
+    async def navigate(
+        self, session_id: str, url: str, *, login_paths: tuple[str, ...] = ()
+    ) -> Mapping[str, Any]:
         return await self._request(
             "POST",
             f"/v1/sessions/{session_id}/navigate",
             token=self._token(session_id),
-            payload={"url": url},
+            payload={"url": url, "login_paths": list(login_paths)},
         )
 
     async def snapshot(
@@ -176,6 +178,7 @@ class LoopbackCompanionClient:
         *,
         prohibited_terms: tuple[str, ...] = (),
         scan_text: bool = False,
+        login_paths: tuple[str, ...] = (),
     ) -> Mapping[str, Any]:
         return await self._request(
             "POST",
@@ -184,6 +187,7 @@ class LoopbackCompanionClient:
             payload={
                 "prohibited_terms": list(prohibited_terms),
                 "scan_text": scan_text,
+                "login_paths": list(login_paths),
             },
         )
 

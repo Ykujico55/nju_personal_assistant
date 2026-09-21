@@ -9,6 +9,7 @@ from personal_assistant.core.approvals import (
     ApprovalService,
     ApprovalStateError,
     InMemoryApprovalRepository,
+    InvalidApprovalNonceError,
 )
 from personal_assistant.domain import ApprovalState, ValidationError
 
@@ -54,6 +55,12 @@ class ApprovalServiceTests(unittest.IsolatedAsyncioTestCase):
         service = ApprovalService(InMemoryApprovalRepository())
         with self.assertRaises(ValidationError):
             await service.prepare(binding(), ttl=timedelta(minutes=6))
+
+    async def test_non_ascii_nonce_is_rejected_as_invalid_nonce(self) -> None:
+        service = ApprovalService(InMemoryApprovalRepository())
+        prepared = await service.prepare(binding())
+        with self.assertRaises(InvalidApprovalNonceError):
+            await service.approve(prepared.id, nonce="é-not-the-nonce", actor_id="owner")
 
 
 if __name__ == "__main__":

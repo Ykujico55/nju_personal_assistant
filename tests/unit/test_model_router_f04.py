@@ -812,6 +812,17 @@ class RouterDisclosureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, slow.closed)
         self.assertEqual(1, other.closed)
 
+    async def test_cancellation_wins_over_a_late_close_error(self) -> None:
+        failing = FakeProvider("failing.remote", remote=True)
+        failing.close_delay = 0.1
+        failing.close_error = RuntimeError("close failed after cancel")
+        router = ModelRouter((failing,))
+        task = asyncio.create_task(router.aclose())
+        await asyncio.sleep(0.02)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
     async def test_ttl_ceiling_is_enforced_through_the_service(self) -> None:
         request = sensitive_request()
         with self.assertRaises(ValidationError):

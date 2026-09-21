@@ -169,20 +169,29 @@ class DraftService:
                 expected_current=existing["current_version"] if existing else 0,
             )
         except BaseException:
+            committed: Mapping[str, Any] | None = None
+            if request_id:
+                with contextlib.suppress(Exception):
+                    committed = await self._store.get_draft_version_by_request(
+                        draft_id, revision_request_id
+                    )
+            if committed is not None and committed.get("mime_artifact_id") == handle.id:
+                # The host committed the version but its response was lost:
+                # the artifact belongs to a durable row and must survive.  The
+                # caller gets the committed version (idempotent replay).
+                return self._version_output(committed, info)
             # A failed or cancelled prepare must not leave an orphan MIME
             # artifact; the shielded delete keeps running through repeated
             # cancellation before the original signal is re-raised.
             if self._artifacts is not None:
                 await _delete_artifact_shielded(self._artifacts, handle.id)
-            if request_id:
-                # A racing duplicate of the same request may have inserted the
-                # version (unique index); replay it if the content matches.
-                with contextlib.suppress(Exception):
-                    raced = await self._store.get_draft_version_by_request(
-                        draft_id, revision_request_id
-                    )
-                    if raced is not None and raced["canonical_digest"] == canonical_digest:
-                        return self._version_output(raced, info)
+            if (
+                committed is not None
+                and committed.get("canonical_digest") == canonical_digest
+            ):
+                # A racing duplicate of the same request inserted its own row
+                # and artifact; this attempt's artifact was the orphan.
+                return self._version_output(committed, info)
             raise
         return {
             "draft_id": draft_id,

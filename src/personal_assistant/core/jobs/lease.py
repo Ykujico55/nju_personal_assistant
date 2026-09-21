@@ -38,15 +38,18 @@ class LeaseKeepalive:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        del exc_type, exc, traceback
+        del exc_type, traceback
         self._stop.set()
         if self._task is not None:
             self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            # A heartbeat failure is stored in ``self._failure``; it must not
+            # replace the body's exception or skip the release below.
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
         with contextlib.suppress(LeaseConflict):
             await self._queue.release(job_id=self._job_id, worker_id=self._worker_id)
-        self.ensure_owned()
+        if exc is None:
+            self.ensure_owned()
 
     def ensure_owned(self) -> None:
         if self._failure is not None:

@@ -403,6 +403,14 @@ class HttpJsonModelProvider:
             raise ModelProviderProtocolError(
                 "the model response has no completion text", provider_id=self.provider_id
             )
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            # ``UnicodeEncodeError`` carries the offending object in its args;
+            # never chain it, or the provider body would survive in the trace.
+            raise ModelProviderProtocolError(
+                "the model response text is not valid UTF-8", provider_id=self.provider_id
+            ) from None
         return value
 
     def _output(

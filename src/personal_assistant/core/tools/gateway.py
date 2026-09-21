@@ -139,6 +139,12 @@ class ToolGateway:
         self._audit = audit or InMemoryInvocationAudit()
         self._outbox = outbox
 
+    @property
+    def outbox(self) -> SideEffectOutboxPort | None:
+        """The durable outbox shared with the composition root, when configured."""
+
+        return self._outbox
+
     async def invoke(self, call: ToolCall) -> ToolOutcome:
         try:
             descriptor = self._registry.snapshot().resolve(

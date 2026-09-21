@@ -233,6 +233,11 @@ def _extract_pdf(data: bytes, *, path: str) -> ExtractedDocument:
                 continue
             raise
         page_text = _content_to_text(content)
+        # A page's own text may contain a form feed (the PDF "\f" escape);
+        # normalize it so the "\f" page separator stays unambiguous for
+        # page_fragment locators.  The replacement is one character wide, so
+        # the offsets computed below remain valid.
+        page_text = page_text.replace("\f", "\n")
         total_chars += len(page_text)
         if total_chars > MAX_PDF_TEXT_CHARS:
             raise ExtractionError(

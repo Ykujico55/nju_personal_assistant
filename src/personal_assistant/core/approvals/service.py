@@ -236,7 +236,9 @@ class ApprovalService:
             )
         if not actor_id.strip():
             raise ValidationError("actor_id is required")
-        if not hmac.compare_digest(record.nonce, nonce):
+        if not hmac.compare_digest(
+            record.nonce.encode("utf-8"), nonce.encode("utf-8")
+        ):
             raise InvalidApprovalNonceError("approval nonce does not match")
         ensure_approval_transition(record.state, ApprovalState.APPROVED)
         updated = replace(

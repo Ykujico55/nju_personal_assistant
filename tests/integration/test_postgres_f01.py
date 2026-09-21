@@ -345,6 +345,22 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("demo.weather.get", recovered_extension.manifest.tools[0].id)
 
     # -- queue lease semantics ---------------------------------------------
+    async def test_observation_with_json_null_value_is_persisted(self) -> None:
+        adapters = await self.migrate()
+        service = self.task_service(adapters)
+        task = await service.create(
+            objective="null observation", idempotency_key="null-observation"
+        )
+        run = TaskRun(id=f"run_{uuid4().hex}", task_id=task.id, objective="null observation")
+        await adapters.run_repository.add(run)
+        await adapters.observation_store.append(Observation(run.id, None))
+        value_text = await self._fetchval(
+            adapters,
+            "SELECT value::text FROM run_observations WHERE run_id = $1",
+            run.id,
+        )
+        self.assertEqual("null", value_text)
+
     async def test_concurrent_claim_has_single_owner(self) -> None:
         first = await self.migrate()
         second = self.adapters()

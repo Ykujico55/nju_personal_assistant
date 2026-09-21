@@ -63,6 +63,28 @@ class StatementGuardTests(unittest.TestCase):
     def test_other_extension_namespace_is_rejected(self) -> None:
         _reject("SELECT * FROM ext_other_2e_thing.chunks")
 
+    def test_backslash_escaped_quote_cannot_hide_a_second_statement(self) -> None:
+        # standard_conforming_strings=on closes 'x\' at the quote, so the
+        # semicolon is a real separator even though the scanner used to skip it.
+        _reject("UPDATE chunks SET text = 'x\\'; SELECT pg_sleep(5); --'")
+
+    def test_quoted_or_comment_split_foreign_schema_is_rejected(self) -> None:
+        _reject('SELECT * FROM "ext_other_2e_thing".chunks')
+        _reject("SELECT * FROM ext_other_2e_thing/*c*/.chunks")
+
+    def test_comment_split_core_schema_is_rejected(self) -> None:
+        _reject("SELECT setval(public/*c*/.run_checkpoint_sequence, 1)")
+
+    def test_destructive_type_and_sequence_commands_are_rejected(self) -> None:
+        for statement in (
+            "DROP TYPE vector CASCADE",
+            "ALTER TYPE vector ADD VALUE 'x'",
+            "DROP SEQUENCE run_checkpoint_sequence",
+            "SELECT setval('run_checkpoint_sequence', 1)",
+        ):
+            with self.subTest(statement=statement):
+                _reject(statement)
+
     def test_own_namespace_qualifier_is_allowed(self) -> None:
         statement = f"SELECT * FROM {NAMESPACE}.chunks"
         self.assertEqual(statement, validate_statement(statement, namespace=NAMESPACE))
@@ -116,6 +138,15 @@ class StatementGuardTests(unittest.TestCase):
         with self.assertRaises(DataAccessError):
             validate_migration_sql(
                 "CREATE TABLE chunks (id text); DROP TABLE tasks;",
+                namespace=NAMESPACE,
+                forbidden_relations=frozenset({"tasks"}),
+            )
+
+    def test_migration_cannot_hide_a_statement_with_a_backslash_quote(self) -> None:
+        with self.assertRaises(DataAccessError):
+            validate_migration_sql(
+                "CREATE TABLE chunks (id text); "
+                "UPDATE chunks SET id='x\\'; DROP TABLE tasks; --'",
                 namespace=NAMESPACE,
                 forbidden_relations=frozenset({"tasks"}),
             )

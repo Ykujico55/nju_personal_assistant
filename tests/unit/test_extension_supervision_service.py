@@ -81,6 +81,7 @@ class FakeInstaller:
         self.root = root
         self.installed: list[str] = []
         self.uninstalled: list[str] = []
+        self.orphans_removed: list[tuple[str, str]] = []
         self.cleaned = 0
 
     async def install(self, staged: StagedArtifact, manifest) -> Any:
@@ -92,6 +93,12 @@ class FakeInstaller:
         from personal_assistant.core.extensions.lifecycle import InstalledArtifact
 
         return InstalledArtifact(target, f"runtime-{manifest.version}")
+
+    async def remove_orphan_version(self, extension_id: str, version: str) -> None:
+        self.orphans_removed.append((extension_id, version))
+        target = self.root / extension_id / version
+        if target.exists():
+            shutil.rmtree(target)
 
     async def uninstall_code(self, record: ExtensionRecord) -> None:
         if record.install_path:
@@ -187,6 +194,21 @@ class FakeRuntime:
             raise RpcCallError(-32091, "worker exited unexpectedly")
         self.invocations.append((extension_id, tool_id, arguments))
         return {"outcome": "SUCCEEDED", "output": {"echo": arguments.get("text", "")}}
+
+
+class BlockingInvokeRuntime(FakeRuntime):
+    """Fake worker that lets a test interleave a lifecycle operation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def invoke_tool(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        del args, kwargs
+        self.entered.set()
+        await self.release.wait()
+        raise RpcCallError(-32091, "worker exited unexpectedly")
 
 
 class FlakyVersionOperator:
@@ -412,6 +434,67 @@ class SupervisorServiceTests(unittest.IsolatedAsyncioTestCase):
                 run_id="r",
                 idempotency_key="k",
             )
+
+    async def test_upgrade_from_a_fresh_install_switches_versions(self) -> None:
+        preview = await self.service.inspect(str(EXAMPLE))
+        install = await self.service.begin_install(preview.plan_id, self._confirmation(preview))
+        installed = await self.service.wait_operation(install.id)
+        self.assertEqual(OperationState.SUCCEEDED, installed.status, installed)
+        before = await self.service.record("example.echo")
+        assert before is not None
+        self.assertEqual(ExtensionState.INSTALLED_DISABLED, before.state)
+
+        upgrade_preview = await self.service.inspect(
+            str(_stage_copy(self.tmp, version="0.2.0"))
+        )
+        self.assertEqual("upgrade", upgrade_preview.mode)
+        upgrade = await self.service.begin_upgrade(
+            "example.echo", upgrade_preview.plan_id, self._confirmation(upgrade_preview)
+        )
+        final = await self.service.wait_operation(upgrade.id)
+        self.assertEqual(OperationState.SUCCEEDED, final.status, final)
+        record = await self.service.record("example.echo")
+        assert record is not None
+        self.assertEqual("0.2.0", record.manifest.version)
+        self.assertEqual(ExtensionState.DISABLED, record.state)
+
+    async def test_worker_failure_after_concurrent_uninstall_does_not_revive_state(self) -> None:
+        await self._install_and_enable(EXAMPLE)
+        runtime = BlockingInvokeRuntime()
+        self.runtime = runtime
+        self._rebuild_service()
+        task = asyncio.create_task(
+            self.service.invoke_tool(
+                "example.echo",
+                "example.echo",
+                {"text": "race"},
+                task_id="task-race",
+                run_id="run-race",
+                idempotency_key="key-race",
+            )
+        )
+        await runtime.entered.wait()
+        uninstall = await self.service.begin_uninstall("example.echo")
+        removed = await self.service.wait_operation(uninstall.id)
+        self.assertEqual(OperationState.SUCCEEDED, removed.status, removed)
+        runtime.release.set()
+        with self.assertRaises(RpcCallError):
+            await task
+        record = await self.service.record("example.echo")
+        assert record is not None
+        self.assertEqual(ExtensionState.UNINSTALLED, record.state)
+        self.assertTrue(record.tombstone)
+
+    async def test_reinstall_removes_an_orphan_version_directory(self) -> None:
+        orphan = self.installer.root / "example.echo" / "0.1.0"
+        orphan.mkdir(parents=True)
+        (orphan / "partial").write_text("stale", encoding="utf-8")
+        preview = await self.service.inspect(str(EXAMPLE))
+        install = await self.service.begin_install(preview.plan_id, self._confirmation(preview))
+        final = await self.service.wait_operation(install.id)
+        self.assertEqual(OperationState.SUCCEEDED, final.status, final)
+        self.assertIn(("example.echo", "0.1.0"), self.installer.orphans_removed)
+        self.assertFalse((orphan / "partial").exists())
 
     async def test_unhealthy_enable_quarantines_and_can_be_repaired(self) -> None:
         preview = await self.service.inspect(str(EXAMPLE))

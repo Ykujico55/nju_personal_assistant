@@ -316,6 +316,17 @@ class RemoteAdapterTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ModelProviderProtocolError):
                     await provider.complete(sample_request())
 
+    async def test_lone_surrogate_content_is_a_protocol_error(self) -> None:
+        # JSON permits "\ud800"; the resulting Python string is not encodable as
+        # UTF-8, so it must be rejected at the protocol boundary rather than
+        # exploding later inside audit hashing.
+        payload = json.dumps({"choices": [{"message": {"content": "\ud800"}}]}).encode(
+            "ascii"
+        )
+        provider = self.build(lambda request, p=payload: httpx.Response(200, content=p))
+        with self.assertRaises(ModelProviderProtocolError):
+            await provider.complete(sample_request())
+
     async def test_oversized_response_is_rejected_and_stream_closed(self) -> None:
         tracker: dict[str, int] = {}
         provider = self.build(

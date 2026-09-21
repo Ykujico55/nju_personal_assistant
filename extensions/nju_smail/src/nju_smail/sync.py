@@ -36,7 +36,8 @@ NEEDS_USER_ACTION_CODES = frozenset(
 )
 MAX_BACKOFF_SECONDS = 3600
 BASE_BACKOFF_SECONDS = 60
-MAX_FAILURES = 5
+# 60 * 2 ** (failures - 1) reaches the one-hour ceiling at seven failures.
+MAX_FAILURES = 7
 EVENT_TYPE = "mail.received"
 
 
@@ -99,10 +100,7 @@ class MailSynchronizer:
                 state is not None
                 and (
                     str(state.get("status")) == "NEEDS_USER_ACTION"
-                    or (
-                        isinstance(state.get("backoff_until"), datetime)
-                        and state["backoff_until"] > datetime.now(UTC)
-                    )
+                    or _backoff_active(state)
                 )
                 for state in states
             ):
@@ -162,17 +160,16 @@ class MailSynchronizer:
                     (state or {}).get("error_code") or "MAIL_AUTH_FAILED"
                 ),
             )
-        if state is not None and not force:
-            backoff_until = state.get("backoff_until")
-            if isinstance(backoff_until, datetime) and backoff_until > datetime.now(UTC):
-                return FolderSyncReport(
-                    account_id=account.account_id,
-                    folder=folder,
-                    status="BACKOFF",
-                    error_code=str(state.get("error_code") or "MAIL_UNAVAILABLE"),
-                )
+        if state is not None and not force and _backoff_active(state):
+            return FolderSyncReport(
+                account_id=account.account_id,
+                folder=folder,
+                status="BACKOFF",
+                error_code=str(state.get("error_code") or "MAIL_UNAVAILABLE"),
+            )
         uidvalidity = int(state["uidvalidity"]) if state is not None else 0
         last_uid = int(state["last_uid"]) if state is not None else 0
+        reset = False
         try:
             batch = await self._host_mail.fetch(
                 account.account_id,
@@ -194,6 +191,7 @@ class MailSynchronizer:
             # identity.  Dedupe by Message-ID/content hash prevents duplicates
             # and no message is lost.
             await self._store.reset_cursor(account.account_id, folder, batch.uidvalidity)
+            reset = True
             try:
                 batch = await self._host_mail.fetch(
                     account.account_id,
@@ -213,8 +211,13 @@ class MailSynchronizer:
         messages = batch.messages
         if not messages:
             if batch.uidvalidity:
+                # After a UIDVALIDITY reset the new space starts at UID 1; the
+                # pre-reset cursor must never be written under the new identity.
                 await self._store.set_state_idle(
-                    account.account_id, folder, batch.uidvalidity, last_uid
+                    account.account_id,
+                    folder,
+                    batch.uidvalidity,
+                    0 if reset else last_uid,
                 )
             return FolderSyncReport(
                 account_id=account.account_id,
@@ -277,10 +280,7 @@ class MailSynchronizer:
                     backoff_until=None,
                 )
                 continue
-            delay = min(
-                BASE_BACKOFF_SECONDS * (2 ** max(0, next_failures - 1)),
-                MAX_BACKOFF_SECONDS,
-            )
+            delay = _backoff_delay(next_failures)
             await self._store.set_state_error(
                 account.account_id,
                 folder,
@@ -388,6 +388,34 @@ def _normalized_subject(value: str | None) -> str:
     from .mime import normalized_subject
 
     return normalized_subject(value)
+
+
+def _backoff_delay(failure_count: int) -> float:
+    """Exponential backoff bounded by the one-hour ceiling."""
+
+    delay = BASE_BACKOFF_SECONDS * (2 ** max(0, failure_count - 1))
+    return float(min(delay, MAX_BACKOFF_SECONDS))
+
+
+def _backoff_active(state: Mapping[str, Any]) -> bool:
+    """Honor a backoff deadline whether the store returns a datetime or an ISO string.
+
+    The PostgreSQL host adapter serializes ``timestamptz`` to an ISO string, so
+    the extension must not rely on ``isinstance(..., datetime)``.
+    """
+
+    value = state.get("backoff_until")
+    if isinstance(value, datetime):
+        return value > datetime.now(UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return False
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed > datetime.now(UTC)
+    return False
 
 
 def _failure_status(exc: HostCapabilityError) -> str:

@@ -61,6 +61,7 @@ class FakeStore:
         self.versions: dict[str, dict[int, dict[str, Any]]] = {}
         self.actions: dict[str, dict[str, Any]] = {}
         self.fail_after_insert = fail_after_insert
+        self.commit_then_raise = False
         self.prepared_artifacts: list[str] = []
         self.insert_gate: asyncio.Event | None = None
         self.insert_started = asyncio.Event()
@@ -86,6 +87,7 @@ class FakeStore:
             self.insert_started.set()
             await self.insert_gate.wait()
         draft_id = kwargs["draft_id"]
+        previous_draft = self.drafts.get(draft_id)
         current = self.drafts.get(draft_id, {}).get("current_version", 0)
         if kwargs.get("expected_current", current) != current:
             raise RuntimeError("SMAL_DRAFT_CONFLICT")
@@ -121,7 +123,16 @@ class FakeStore:
             "thread_id": kwargs["thread_id"],
         }
         if self.fail_after_insert:
+            # Emulate a rolled-back host transaction: the row never committed.
+            versions.pop(version, None)
+            if previous_draft is None:
+                self.drafts.pop(draft_id, None)
+            else:
+                self.drafts[draft_id] = previous_draft
             raise RuntimeError("simulated database failure after insert")
+        if self.commit_then_raise:
+            # Emulate a committed transaction whose response was lost.
+            raise RuntimeError("simulated lost response after commit")
         return version
 
     async def get_action(self, local_action_id: str) -> dict[str, Any] | None:
@@ -322,6 +333,14 @@ class DraftVersionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             await self._prepare()
         self.assertEqual(before, len(self.artifacts.blobs))
+
+    async def test_committed_version_survives_a_lost_response(self) -> None:
+        self.store.commit_then_raise = True
+        before = len(self.artifacts.blobs)
+        prepared = await self._prepare(request_id="edit-lost-response")
+        self.assertEqual(1, prepared["version"])
+        self.assertEqual(before + 1, len(self.artifacts.blobs))
+        self.assertIn(prepared["mime_artifact_id"], self.artifacts.blobs)
 
     async def test_materialize_returns_exact_current_version(self) -> None:
         prepared = await self._prepare()

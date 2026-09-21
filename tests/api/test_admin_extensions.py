@@ -77,6 +77,9 @@ class _Installer:
         self.installs.append(manifest.version)
         return InstalledArtifact(target, f"runtime-{manifest.version}")
 
+    async def remove_orphan_version(self, extension_id: str, version: str) -> None:
+        del extension_id, version
+
     async def uninstall_code(self, record: ExtensionRecord) -> None:
         if record.install_path and Path(record.install_path).exists():
             shutil.rmtree(Path(record.install_path))

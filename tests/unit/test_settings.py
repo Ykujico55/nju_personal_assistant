@@ -148,6 +148,23 @@ class SettingsTests(unittest.TestCase):
             settings = Settings.from_env()
         self.assertEqual("https://assistant.example.test", settings.public_origin)
 
+    def test_public_origin_drops_the_default_port_and_encodes_idn(self) -> None:
+        with patch.dict(
+            os.environ,
+            trusted_environment(PA_PUBLIC_ORIGIN="https://Assistant.Example.Test:443"),
+            clear=True,
+        ):
+            settings = Settings.from_env()
+        self.assertEqual("https://assistant.example.test", settings.public_origin)
+
+        with patch.dict(
+            os.environ,
+            trusted_environment(PA_PUBLIC_ORIGIN="https://münchen.example:8443"),
+            clear=True,
+        ):
+            settings = Settings.from_env()
+        self.assertEqual("https://xn--mnchen-3ya.example:8443", settings.public_origin)
+
     def test_trusted_mode_requires_all_cloudflare_values(self) -> None:
         for missing in ("PA_CF_ACCESS_TEAM_DOMAIN", "PA_CF_ACCESS_AUD", "PA_PUBLIC_ORIGIN"):
             with self.subTest(missing=missing):
@@ -233,6 +250,20 @@ class ModelSettingsTests(unittest.TestCase):
 
         replaced = replace(settings, model_remote_base_url="https://API.Example.Test/v2/")
         self.assertEqual("https://api.example.test/v2", replaced.model_remote_base_url)
+
+    def test_ipv6_loopback_model_endpoint_keeps_its_brackets(self) -> None:
+        settings = Settings(
+            **direct_settings_values(
+                model_local_base_url="http://[::1]:11434",
+                model_local_model="llama3.1:8b",
+            )
+        )
+        self.assertEqual("http://[::1]:11434", settings.model_local_base_url)
+
+    def test_ipv6_companion_url_keeps_its_brackets(self) -> None:
+        from personal_assistant.settings import normalize_companion_url
+
+        self.assertEqual("http://[::1]:8765", normalize_companion_url("http://[::1]:8765"))
 
     def test_local_model_endpoint_must_be_loopback(self) -> None:
         for bad in (

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import unittest
 from typing import Any
+from unittest.mock import patch
 
+from personal_assistant.bootstrap import build_container
 from personal_assistant.core.approvals import ApprovalService, InMemoryApprovalRepository
 from personal_assistant.core.tools import OutcomeUnknownError, ToolGateway, ToolPolicy, ToolRegistry
 from personal_assistant.domain import (
@@ -12,6 +15,7 @@ from personal_assistant.domain import (
     ToolDescriptor,
     ToolOutcomeKind,
 )
+from personal_assistant.settings import Settings
 
 
 class FakeExecutor:
@@ -168,6 +172,15 @@ class ToolGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ToolOutcomeKind.OUTCOME_UNKNOWN, outcome.kind)
         self.assertFalse(outcome.retryable)
         self.assertEqual(ApprovalState.UNKNOWN, (await approvals.get(prepared.id)).state)
+
+
+class MemoryContainerOutboxTests(unittest.TestCase):
+    def test_gateway_and_container_share_the_same_reference_outbox(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings.from_env()
+        container = build_container(settings)
+        self.assertIsNotNone(container.tool_gateway.outbox)
+        self.assertIs(container.side_effect_outbox, container.tool_gateway.outbox)
 
 
 if __name__ == "__main__":

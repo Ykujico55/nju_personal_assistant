@@ -262,6 +262,16 @@ class VerifierClaimTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(AccessTokenRejectedError):
             await self.fixture.verifier.verify(token)
 
+    async def test_out_of_range_integer_expiry_is_rejected_not_crashed(self) -> None:
+        token = jwt.encode(
+            {"iss": ISSUER, "aud": AUDIENCE, "sub": "subject-123", "exp": 10**400},
+            self.fixture.private_key,
+            algorithm="RS256",
+            headers={"kid": KID},
+        )
+        with self.assertRaises(AccessTokenRejectedError):
+            await self.fixture.verifier.verify(token)
+
     async def test_missing_subject_is_rejected(self) -> None:
         token = jwt.encode(
             {"iss": ISSUER, "aud": AUDIENCE, "exp": int(self.fixture.clock() + 300)},

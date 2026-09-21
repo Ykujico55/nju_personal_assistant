@@ -95,6 +95,9 @@ class _Installer:
     async def uninstall_code(self, record: ExtensionRecord) -> None:
         del record
 
+    async def remove_orphan_version(self, extension_id: str, version: str) -> None:
+        del extension_id, version
+
     async def clean_failed_install(self, staged) -> None:  # pragma: no cover
         del staged
 

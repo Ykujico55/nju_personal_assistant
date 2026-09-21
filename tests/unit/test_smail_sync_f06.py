@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from nju_smail.sync import _message_insert, _safe_code
+from nju_smail.sync import _backoff_delay, _message_insert, _safe_code
 from personal_assistant_sdk import HostCapabilityError
 
 
@@ -331,6 +332,93 @@ class ChunkedCursorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], store.cursor_updates)
         self.assertEqual(10, store.state_row["last_uid"])  # type: ignore[index]
         self.assertEqual(11, host.fetch_starts[-1])
+
+
+class _ResetThenEmptyHost(_CursorHostMail):
+    """Server whose UIDVALIDITY changed and whose rebuilt mailbox is empty."""
+
+    def __init__(self) -> None:
+        super().__init__(count=0)
+        self.validity = 9
+
+    async def probe(self, account_id: str) -> object:
+        del account_id
+        from personal_assistant_sdk import MailboxCapabilities
+
+        return MailboxCapabilities(
+            imap_capabilities=("IMAP4REV1",),
+            auth_mechanisms=("PLAIN",),
+            uidvalidity=self.validity,
+            exists=0,
+        )
+
+    async def fetch(
+        self,
+        account_id: str,
+        folder: str,
+        *,
+        uidvalidity: int | None,
+        start_uid: int,
+        limit: int = 100,
+    ) -> object:
+        del account_id, folder, start_uid, limit
+        from personal_assistant_sdk import FetchedMailBatch
+
+        return FetchedMailBatch(uidvalidity=self.validity, exists=0, messages=())
+
+
+class BackoffCursorTests(unittest.IsolatedAsyncioTestCase):
+    async def _settings(self) -> object:
+        from nju_smail.models import parse_settings
+
+        return parse_settings(
+            {"accounts": [{"account_id": "nju"}], "folders": ["INBOX"]}
+        )
+
+    def test_backoff_delay_reaches_the_hour_ceiling(self) -> None:
+        self.assertEqual(60, _backoff_delay(1))
+        self.assertEqual(1920, _backoff_delay(6))
+        self.assertEqual(3600, _backoff_delay(7))
+        self.assertEqual(3600, _backoff_delay(50))
+
+    async def test_uidvalidity_reset_with_empty_folder_resets_the_cursor(self) -> None:
+        from nju_smail.sync import MailSynchronizer
+
+        store = _CursorStore()
+        store.state_row = {
+            "uidvalidity": 5,
+            "last_uid": 100,
+            "status": "IDLE",
+            "failure_count": 0,
+            "backoff_until": None,
+        }
+        host = _ResetThenEmptyHost()
+        sync = MailSynchronizer(
+            store, host, await self._settings(), migrations=()  # type: ignore[arg-type]
+        )
+        await sync.sync()
+        self.assertEqual(9, store.state_row["uidvalidity"])  # type: ignore[index]
+        self.assertEqual(0, store.state_row["last_uid"])  # type: ignore[index]
+
+    async def test_iso_backoff_value_from_postgres_is_honored(self) -> None:
+        from nju_smail.sync import MailSynchronizer
+
+        store = _CursorStore()
+        store.state_row = {
+            "uidvalidity": 5,
+            "last_uid": 0,
+            "status": "BACKOFF",
+            "error_code": "MAIL_UNAVAILABLE",
+            "failure_count": 1,
+            "backoff_until": (datetime.now(UTC) + timedelta(seconds=300)).isoformat(),
+        }
+        host = _CursorHostMail(count=3)
+        sync = MailSynchronizer(
+            store, host, await self._settings(), migrations=()  # type: ignore[arg-type]
+        )
+        report = await sync.sync()
+        self.assertEqual([], host.fetch_starts)
+        self.assertEqual("BACKOFF", report.folders[0].status)
 
 
 if __name__ == "__main__":

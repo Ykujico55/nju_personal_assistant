@@ -254,13 +254,18 @@ class PlaywrightHeadedDriver:
                 "BROWSER_LAUNCH_FAILED", "the headed browser could not be launched"
             ) from exc
         self.headless = False
-        self._context = await self._browser.new_context(
-            accept_downloads=False,
-            ignore_https_errors=self._allow_insecure,
-            service_workers="block",
-        )
-        await self._context.route("**/*", self._route)
-        self._page = await self._context.new_page()
+        try:
+            self._context = await self._browser.new_context(
+                accept_downloads=False,
+                ignore_https_errors=self._allow_insecure,
+                service_workers="block",
+            )
+            await self._context.route("**/*", self._route)
+            self._page = await self._context.new_page()
+        except BaseException:
+            # A partially started browser must never outlive the failed session.
+            await self._force_stop()
+            raise
         if self._test_mode:
             fresh = await self._fresh_chrome_pids()
             self._chrome_pids = fresh
@@ -336,7 +341,11 @@ class PlaywrightHeadedDriver:
             return
         if method not in GET_METHODS:
             allowance = self._submit_allowance
-            if allowance is not None and _allowance_matches(allowance, method, url):
+            if (
+                allowance is not None
+                and _allowance_matches(allowance, method, url)
+                and _is_main_frame_document(route.request, self._page)
+            ):
                 remaining = allowance[3] - 1
                 self._submit_allowance = (
                     (allowance[0], allowance[1], allowance[2], remaining)
@@ -360,6 +369,9 @@ class PlaywrightHeadedDriver:
                     if remaining > 0
                     else None
                 )
+                # Clear the frozen target so the next observation can re-arm a
+                # retry on the same challenge page after a failed login POST.
+                self._login_armed_target = None
                 self.user_auth_requests += 1
                 await route.continue_()
                 return
@@ -469,6 +481,8 @@ class PlaywrightHeadedDriver:
         page = self._require_page()
         self._mutations_blocked = True
         self._login_window = False
+        self._login_allowance = None
+        self._login_armed_target = None
         applied = 0
         for locator, value in fields:
             meta = self._control_meta.get(locator)
@@ -797,6 +811,14 @@ class PlaywrightHeadedDriver:
             if login_page is None
             else login_page
         )
+        if detected and login_paths and not self._matches_login_path(page, login_paths):
+            # A page that merely contains a password input outside the declared
+            # authentication paths must not arm the one-shot login write window
+            # nor be reported as the challenge.
+            self._login_allowance = None
+            self._login_armed_target = None
+            self._login_window = False
+            return False
         if detected and not self._mutations_blocked:
             target = await self._login_form_target(page)
             if target is not None and target != self._login_armed_target:
@@ -808,6 +830,14 @@ class PlaywrightHeadedDriver:
             self._login_armed_target = None
             self._login_window = False
         return detected
+
+    @staticmethod
+    def _matches_login_path(page: Any, login_paths: Sequence[str]) -> bool:
+        path = urlsplit(str(page.url)).path or "/"
+        for pattern in login_paths:
+            if path == pattern or path.startswith(pattern.rstrip("*")):
+                return True
+        return False
 
     async def _login_form_target(self, page: Any) -> tuple[str, str, str] | None:
         """Freeze the challenge form's exact write target (method/origin/path)."""

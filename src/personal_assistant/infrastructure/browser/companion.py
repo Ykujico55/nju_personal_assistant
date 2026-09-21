@@ -95,6 +95,16 @@ class DesktopCompanion:
     def test_mode(self) -> bool:
         return self._test_mode
 
+    async def authorize(self, session_id: str, *, token: str) -> None:
+        """Validate a session capability without touching the driver."""
+
+        await self._require_session(session_id, token)
+
+    def authorize_root(self, *, token: str) -> None:
+        """Validate the one-shot root capability without parsing a body."""
+
+        self._require_root(token)
+
     async def create_session(
         self,
         *,

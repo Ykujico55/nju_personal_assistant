@@ -57,6 +57,9 @@ class NoopInstaller:
     async def uninstall_code(self, record):
         del record
 
+    async def remove_orphan_version(self, extension_id, version):
+        del extension_id, version
+
     async def clean_failed_install(self, staged):
         del staged
 

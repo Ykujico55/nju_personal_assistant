@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from personal_assistant.core.browser import (
@@ -271,6 +272,19 @@ class WaitingUserTests(BrokerTestCase):
             )
         self.assertEqual(self.companion.fill_calls, [])
         self.assertEqual(self.companion.click_calls, [])
+
+    async def test_executing_session_is_not_ttl_expired_mid_transition(self) -> None:
+        await self.register()
+        session_id = await self.create()
+        record = await self.sessions.get(session_id)
+        assert record is not None
+        await self.sessions.save(
+            replace(record, state=BrowserSessionState.EXECUTING),
+            expected_version=record.version,
+        )
+        self.clock.advance(1801)
+        still = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(BrowserSessionState.EXECUTING, still.state)
 
     async def test_unknown_page_version_is_refused_with_zero_writes(self) -> None:
         self.make_broker(companion=standard_companion(unknown_field=True))

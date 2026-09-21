@@ -66,7 +66,8 @@ def normalize_companion_url(raw: str) -> str:
         raise ConfigurationError("PA_BROWSER_COMPANION_URL must include a port")
     if parts.path not in ("", "/") or parts.query or parts.fragment or parts.username:
         raise ConfigurationError("PA_BROWSER_COMPANION_URL must be a bare loopback origin")
-    return f"http://{host}:{parts.port}"
+    canonical_host = f"[{host}]" if ":" in host else host
+    return f"http://{canonical_host}:{parts.port}"
 
 
 def normalize_team_domain(raw: str) -> str:
@@ -165,7 +166,16 @@ def normalize_public_origin(raw: str) -> str:
     if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
         raise ConfigurationError("PA_PUBLIC_ORIGIN must not include a path, query or fragment")
     host = parsed.hostname.lower()
-    netloc = host if port is None else f"{host}:{port}"
+    if ":" in host:
+        # IPv6 literals are never IDNA-encoded and must stay bracketed.
+        netloc_host = f"[{host}]"
+    else:
+        try:
+            netloc_host = host.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ConfigurationError("PA_PUBLIC_ORIGIN host is not a valid IDN") from exc
+    # Browsers serialize the Origin header without the https default port.
+    netloc = netloc_host if port is None or port == 443 else f"{netloc_host}:{port}"
     return f"https://{netloc}"
 
 
@@ -214,6 +224,13 @@ def normalize_model_endpoint(
     if require_loopback and not _is_loopback(parsed.hostname):
         raise ConfigurationError(f"{field_name} must be a loopback address")
     host = parsed.hostname.lower()
+    if ":" in host:
+        netloc_host = f"[{host}]"
+    else:
+        try:
+            netloc_host = host.encode("idna").decode("ascii")
+        except UnicodeError as exc:
+            raise ConfigurationError(f"{field_name} host is not a valid IDN") from exc
     path = parsed.path.rstrip("/")
     decoded_path = path
     for _ in range(3):
@@ -225,7 +242,7 @@ def normalize_model_endpoint(
         raise ConfigurationError(f"{field_name} contains illegal characters")
     if any(segment in (".", "..") for segment in decoded_path.split("/")):
         raise ConfigurationError(f"{field_name} must not contain '.' or '..' path segments")
-    netloc = host if port is None else f"{host}:{port}"
+    netloc = netloc_host if port is None else f"{netloc_host}:{port}"
     return f"{parsed.scheme}://{netloc}{path}"
 
 

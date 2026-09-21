@@ -10,7 +10,7 @@ import asyncpg
 
 from personal_assistant.core.jobs.queue import Job, JobState, LeaseConflict
 
-from ._support import aware_utc
+from ._support import aware_utc, require_aware
 from .connection import PostgresDatabase
 
 _JOB_COLUMNS = (
@@ -59,6 +59,8 @@ class PostgresJobQueue:
             raise ValueError("idempotency_key is required")
         if max_attempts < 1:
             raise ValueError("max_attempts must be positive")
+        if available_at is not None:
+            require_aware(available_at, "available_at")
         async with self._db.transaction(), self._db.connection() as connection:
             row = await connection.fetchrow(
                 """

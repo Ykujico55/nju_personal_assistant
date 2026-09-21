@@ -157,7 +157,10 @@ class FakeCompanion:
             "click_operations": len(self.click_calls),
         }
 
-    async def navigate(self, session_id: str, url: str) -> Mapping[str, Any]:
+    async def navigate(
+        self, session_id: str, url: str, *, login_paths: tuple[str, ...] = ()
+    ) -> Mapping[str, Any]:
+        del login_paths
         if self.navigate_error is not None:
             raise self.navigate_error
         self.navigations.append((session_id, url))
@@ -177,7 +180,9 @@ class FakeCompanion:
         *,
         prohibited_terms: tuple[str, ...] = (),
         scan_text: bool = False,
+        login_paths: tuple[str, ...] = (),
     ) -> Mapping[str, Any]:
+        del login_paths
         if self.snapshot_error is not None:
             raise self.snapshot_error
         session = self.sessions[session_id]

@@ -42,7 +42,10 @@ from .connection import PostgresDatabase
 VECTOR_TYPE_SCHEMA_SQL = (
     "SELECT n.nspname FROM pg_type t "
     "JOIN pg_namespace n ON n.oid = t.typnamespace "
-    "WHERE t.typname = 'vector' ORDER BY n.nspname LIMIT 1"
+    "WHERE t.typname = 'vector' "
+    "AND n.nspname NOT LIKE 'pg\\_%' "
+    "AND n.nspname NOT LIKE 'ext\\_%' "
+    "ORDER BY n.nspname LIMIT 1"
 )
 CORE_RELATIONS_SQL = (
     "SELECT c.relname FROM pg_class c "

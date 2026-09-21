@@ -140,6 +140,9 @@ class ArtifactInstaller(Protocol):
     async def remove_version(self, record: ExtensionRecord) -> None:
         """Delete exactly the version named by ``record.install_path``."""
 
+    async def remove_orphan_version(self, extension_id: str, version: str) -> None:
+        """Delete an untracked version directory left behind by a hard kill."""
+
     async def clean_failed_install(self, staged: StagedArtifact) -> None: ...
 
 
@@ -422,6 +425,13 @@ class InstallCoordinator:
         plan.consumed = True
         installed: InstalledArtifact | None = None
         try:
+            if expected_mode == "install":
+                # A hard kill may leave `<id>/<version>` behind without any
+                # persisted record pointing at it (the plan record has no
+                # install_path).  The fresh install owns that directory.
+                await self._installer.remove_orphan_version(
+                    plan.manifest.id, plan.manifest.version
+                )
             installed = await self._installer.install(plan.staged, plan.manifest)
             await self._verifier.verify(installed, plan.manifest)
             await self._discard_staged(plan.staged)
@@ -732,7 +742,17 @@ class LifecycleManager:
         """Activate an already confirmed, installed, and contract-tested candidate."""
 
         current = await self._require(extension_id)
-        _require_state(current, {ExtensionState.ENABLED, ExtensionState.DISABLED}, "upgrade")
+        _require_state(
+            current,
+            {
+                ExtensionState.ENABLED,
+                ExtensionState.DISABLED,
+                ExtensionState.INSTALLED_DISABLED,
+                ExtensionState.QUARANTINED,
+                ExtensionState.ROLLED_BACK,
+            },
+            "upgrade",
+        )
         if candidate.manifest.id != extension_id:
             raise ExtensionError("upgrade candidate has a different extension id")
         if candidate.state is not ExtensionState.INSTALLED_DISABLED:

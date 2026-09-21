@@ -177,6 +177,19 @@ class PdfExtractionTests(unittest.TestCase):
         for chunk in chunk_document(document):
             self.assertEqual(chunk.text, rebuild_chunk_text(document, chunk.locator))
 
+    def test_form_feed_escape_does_not_shift_page_locators(self) -> None:
+        script_a = "BT /F1 12 Tf 72 720 Td (Alpha\\fTail) Tj ET"
+        script_b = "BT /F1 12 Tf 72 720 Td (Beta page) Tj ET"
+        document = extract_document(build_pdf([script_a, script_b]), "application/pdf")
+        self.assertEqual(2, len(document.text.split("\f")))
+        pages = document.text.split("\f")
+        for section in document.sections:
+            assert section.locator.page is not None
+            page_text = pages[section.locator.page - 1]
+            self.assertEqual(
+                section.text, page_text[section.locator.start : section.locator.end]
+            )
+
     def test_encrypted_marker_is_a_typed_error(self) -> None:
         with self.assertRaises(ExtractionError) as captured:
             extract_document(build_pdf(["test"], with_encrypt=True), "application/pdf")

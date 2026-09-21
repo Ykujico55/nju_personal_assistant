@@ -360,7 +360,12 @@ class CloudflareAccessTokenVerifier:
             return None
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise AccessTokenRejectedError(f"the Access token {name} claim is not numeric")
-        numeric = float(value)
+        try:
+            numeric = float(value)
+        except (OverflowError, ValueError) as exc:
+            raise AccessTokenRejectedError(
+                f"the Access token {name} claim is out of range"
+            ) from exc
         if not math.isfinite(numeric) or numeric <= 0:
             raise AccessTokenRejectedError(f"the Access token {name} claim is out of range")
         return numeric

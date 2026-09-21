@@ -24,7 +24,10 @@ from personal_assistant.core.browser import (
     TransactionAdapterDescriptor,
     descriptor_from_document,
 )
+from personal_assistant.core.browser.policy import assess_risk
+from personal_assistant.core.browser.session import _split_signals
 from personal_assistant.core.extensions.errors import ExtensionOperationError
+from personal_assistant.domain.enums import RiskLevel
 
 HOST_BROWSER_SESSION = "host.browser.session"
 HOST_BROWSER_STATUS = "host.browser.status"
@@ -194,7 +197,18 @@ class BrowserHostCapability:
                 transaction_id=_text(params.get("transaction_id")),
                 url=_text(params.get("url")),
             )
-            return _snapshot_view(snapshot, None)
+            # Navigation is a read-side route, so only page evidence can
+            # escalate the risk here; prohibited terms must never surface as
+            # ``risk: null`` / empty categories.
+            matches, others = _split_signals(snapshot.signals)
+            assessment = assess_risk(
+                RiskLevel.READ,
+                matches=matches,
+                extra_signals=others,
+                transaction_known=True,
+                page_version_known=True,
+            )
+            return _snapshot_view(snapshot, assessment)
         if method == HOST_BROWSER_RECORD_DISCOVERY:
             record = await self._broker.record_discovery(
                 session_id,

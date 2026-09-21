@@ -517,6 +517,7 @@ def _build_memory_container(
     events = InMemoryEventStream()
     task_repository = InMemoryTaskRepository()
     approvals = ApprovalService(InMemoryApprovalRepository())
+    memory_outbox = InMemorySideEffectOutbox(approvals)
     registry = ExtensionRegistry()
     lifecycle_store = InMemoryLifecycleStore()
     operations = InMemoryExtensionOperationStore()
@@ -603,7 +604,7 @@ def _build_memory_container(
         checkpoint_store=InMemoryCheckpointStore(),
         observation_store=InMemoryObservationStore(),
         audit_writer=audit,
-        side_effect_outbox=InMemorySideEffectOutbox(approvals),
+        side_effect_outbox=memory_outbox,
         lifecycle_store=lifecycle_store,
         extension_config_store=config_store,
         disclosures=disclosures,
@@ -636,7 +637,7 @@ def _build_memory_container(
                 mail_send=mail_send,
                 browser_actions=browser_actions,
             ),
-            outbox=InMemorySideEffectOutbox(approvals),
+            outbox=memory_outbox,
         ),
     )
 

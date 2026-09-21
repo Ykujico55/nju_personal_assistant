@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime
 
 from personal_assistant.core.jobs import JobState, LeaseConflict
+from personal_assistant.domain import ValidationError
+from personal_assistant.infrastructure.database.job_queue import PostgresJobQueue
 from personal_assistant.infrastructure.memory.job_queue import InMemoryJobQueue
 
 
@@ -36,6 +39,18 @@ class InMemoryJobQueueTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(JobState.WAITING_RECONCILIATION, unknown.state)
         self.assertIsNone(await queue.claim(worker_id="worker-b"))
+
+
+class PostgresJobQueueValidationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_naive_available_at_is_rejected_before_the_transaction(self) -> None:
+        queue = PostgresJobQueue(object())  # type: ignore[arg-type]
+        with self.assertRaises(ValidationError):
+            await queue.enqueue(
+                kind="agent.run",
+                payload={},
+                idempotency_key="naive-time",
+                available_at=datetime(2026, 1, 1, 12, 0, 0),
+            )
 
 
 if __name__ == "__main__":

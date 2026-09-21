@@ -107,15 +107,19 @@ _DENIED_SUBSTRINGS = (
     "create user",
     "alter user",
     "drop user",
+    "drop type",
+    "alter type",
+    "drop sequence",
+    "alter sequence",
+    "setval(",
     "program ",
 )
 
 _FORBIDDEN_SCHEMA_RE = re.compile(
-    r'"(?:public|information_schema|pg_catalog|pg_toast|pg_temp\w*)"\s*\.'
-    r"|\b(?:public|information_schema|pg_catalog|pg_toast|pg_temp\w*)\s*\.",
+    r'"?\b(?:public|information_schema|pg_catalog|pg_toast|pg_temp\w*)\b"?\s*\.',
     re.IGNORECASE,
 )
-_EXT_SCHEMA_RE = re.compile(r'\b(ext_[a-z0-9_]*)\s*\.', re.IGNORECASE)
+_EXT_SCHEMA_RE = re.compile(r'"?\b(ext_[a-z0-9_]*)\b"?\s*\.', re.IGNORECASE)
 _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _LEADING_KEYWORD_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*")
 
@@ -197,11 +201,12 @@ def validate_statement(
         raise DataAccessError(
             "DATA_STATEMENT_REJECTED", f"statement kind is not allowed: {keyword or 'unknown'}"
         )
-    if _FORBIDDEN_SCHEMA_RE.search(stripped):
+    screenable = _strip_comments(stripped)
+    if _FORBIDDEN_SCHEMA_RE.search(screenable):
         raise DataAccessError(
             "DATA_STATEMENT_REJECTED", "statement references a schema outside the extension"
         )
-    for found in _EXT_SCHEMA_RE.findall(stripped):
+    for found in _EXT_SCHEMA_RE.findall(screenable):
         if found.lower() != namespace.lower():
             raise DataAccessError(
                 "DATA_STATEMENT_REJECTED", "statement references another extension namespace"
@@ -235,11 +240,11 @@ def validate_migration_sql(
             raise DataAccessError(
                 "DATA_MIGRATION_INVALID", f"migration uses a denied construct: {token}"
             )
-    if _FORBIDDEN_SCHEMA_RE.search(sql):
+    if _FORBIDDEN_SCHEMA_RE.search(_strip_comments(sql)):
         raise DataAccessError(
             "DATA_MIGRATION_INVALID", "migration references a schema outside the extension"
         )
-    for found in _EXT_SCHEMA_RE.findall(sql):
+    for found in _EXT_SCHEMA_RE.findall(_strip_comments(sql)):
         if found.lower() != namespace.lower():
             raise DataAccessError(
                 "DATA_MIGRATION_INVALID", "migration references another extension namespace"
@@ -442,7 +447,12 @@ def _scan_single_statement(statement: str) -> None:
     while index < length:
         character = statement[index]
         if character == "'":
-            index = _skip_quoted(statement, index, "'")
+            index = _skip_quoted(
+                statement,
+                index,
+                "'",
+                backslash_escapes=_is_escape_string(statement, index),
+            )
             continue
         if character == '"':
             index = _skip_quoted(statement, index, '"')
@@ -485,7 +495,12 @@ def _split_migration_statements(sql: str) -> tuple[str, ...]:
     while index < length:
         character = sql[index]
         if character == "'":
-            index = _skip_quoted(sql, index, "'")
+            index = _skip_quoted(
+                sql,
+                index,
+                "'",
+                backslash_escapes=_is_escape_string(sql, index),
+            )
             continue
         if character == '"':
             index = _skip_quoted(sql, index, '"')
@@ -544,7 +559,69 @@ def _strip_leading_comments(statement: str) -> str:
     return remaining
 
 
-def _skip_quoted(statement: str, start: int, quote: str) -> int:
+def _is_escape_string(statement: str, quote_index: int) -> bool:
+    """True only for an ``E'...'`` literal, where PostgreSQL honors backslashes."""
+
+    if quote_index == 0:
+        return False
+    prefix = statement[quote_index - 1]
+    if prefix not in ("E", "e"):
+        return False
+    if quote_index == 1:
+        return True
+    before = statement[quote_index - 2]
+    return not (before.isalnum() or before == "_")
+
+
+def _strip_comments(statement: str) -> str:
+    """Replace SQL comments with spaces while preserving quoted spans.
+
+    Schema/namespace checks run on this view so ``public/*c*/.t`` cannot hide a
+    forbidden qualifier behind a comment.
+    """
+
+    output: list[str] = []
+    index = 0
+    length = len(statement)
+    while index < length:
+        character = statement[index]
+        if character == "'":
+            end = _skip_quoted(
+                statement,
+                index,
+                "'",
+                backslash_escapes=_is_escape_string(statement, index),
+            )
+            output.append(statement[index:end])
+            index = end
+            continue
+        if character == '"':
+            end = _skip_quoted(statement, index, '"')
+            output.append(statement[index:end])
+            index = end
+            continue
+        if character == "-" and statement.startswith("--", index):
+            newline = statement.find("\n", index)
+            output.append(" ")
+            index = length if newline == -1 else newline
+            continue
+        if character == "/" and statement.startswith("/*", index):
+            end = statement.find("*/", index + 2)
+            output.append(" ")
+            index = length if end == -1 else end + 2
+            continue
+        output.append(character)
+        index += 1
+    return "".join(output)
+
+
+def _skip_quoted(
+    statement: str,
+    start: int,
+    quote: str,
+    *,
+    backslash_escapes: bool = False,
+) -> int:
     index = start + 1
     length = len(statement)
     while index < length:
@@ -554,7 +631,7 @@ def _skip_quoted(statement: str, start: int, quote: str) -> int:
                 index += 2
                 continue
             return index + 1
-        if character == "\\" and index + 1 < length:
+        if backslash_escapes and character == "\\" and index + 1 < length:
             index += 2
             continue
         index += 1

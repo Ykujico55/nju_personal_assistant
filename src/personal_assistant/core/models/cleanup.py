@@ -23,6 +23,11 @@ async def run_cleanup[T](awaitable: Awaitable[T]) -> T:
         except asyncio.CancelledError:
             cancelled = True
             continue
+        except Exception:  # noqa: BLE001 - reported after the cleanup completes
+            # ``shield`` re-raises the task's own exception once the task
+            # finishes; keep looping so a recorded cancellation still wins over
+            # a late cleanup error.
+            continue
     results: list[T] = []
     error: BaseException | None = None
     try:

@@ -585,7 +585,17 @@ class ExtensionSupervisorService:
 
     async def _quarantine(self, record: ExtensionRecord, exc: Exception) -> None:
         self._registry.disable(record.manifest.id)
-        quarantined = replace(record, state=ExtensionState.QUARANTINED)
+        # The call snapshot may be stale: a concurrent disable/uninstall/upgrade
+        # owns the newer durable state and must not be overwritten by a stale
+        # quarantine write.
+        current = await self._store.get(record.manifest.id)
+        if (
+            current is None
+            or current.state is not ExtensionState.ENABLED
+            or current.manifest.version != record.manifest.version
+        ):
+            return
+        quarantined = replace(current, state=ExtensionState.QUARANTINED)
         await self._store.save(quarantined)
         await self._record_operation(
             record.manifest.id,

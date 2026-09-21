@@ -434,7 +434,13 @@ class DesktopBrowserPort(Protocol):
 
     async def status(self, session_id: str) -> Mapping[str, Any]: ...
 
-    async def navigate(self, session_id: str, url: str) -> Mapping[str, Any]: ...
+    async def navigate(
+        self,
+        session_id: str,
+        url: str,
+        *,
+        login_paths: tuple[str, ...] = (),
+    ) -> Mapping[str, Any]: ...
 
     async def snapshot(
         self,
@@ -442,6 +448,7 @@ class DesktopBrowserPort(Protocol):
         *,
         prohibited_terms: tuple[str, ...] = (),
         scan_text: bool = False,
+        login_paths: tuple[str, ...] = (),
     ) -> Mapping[str, Any]: ...
 
     async def fill(

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from personal_assistant.core.extensions.errors import (
     ExtensionError,
+    ExtensionOperationError,
     ManifestValidationError,
 )
 from personal_assistant.core.extensions.lifecycle import StagedArtifact
@@ -149,6 +150,30 @@ class LocalArtifactStagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((staged.root / ".venv").exists())
         self.assertFalse((staged.root / "__pycache__").exists())
         self.assertEqual(compute_artifact_hash(EXAMPLE), staged.artifact_hash)
+
+
+class OrphanVersionCleanupTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="pa_f02_orphan_"))
+
+    def tearDown(self) -> None:
+        _safe_rmtree(self.tmp)
+
+    async def test_remove_orphan_version_is_confined_to_the_install_root(self) -> None:
+        from personal_assistant.infrastructure.extensions.installer import (
+            VenvArtifactInstaller,
+        )
+
+        installer = VenvArtifactInstaller(
+            install_root=self.tmp / "installed", stager=None  # type: ignore[arg-type]
+        )
+        orphan = self.tmp / "installed" / "example.echo" / "0.1.0"
+        orphan.mkdir(parents=True)
+        (orphan / "partial").write_text("stale", encoding="utf-8")
+        await installer.remove_orphan_version("example.echo", "0.1.0")
+        self.assertFalse(orphan.exists())
+        with self.assertRaises(ExtensionOperationError):
+            await installer.remove_orphan_version("..", "0.1.0")
 
 
 class LockfileValidationTests(unittest.TestCase):

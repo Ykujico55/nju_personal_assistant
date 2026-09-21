@@ -790,7 +790,7 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
         _, status = await self.broker.session_status(session_id, extension_id=EXTENSION_ID)
         self.assertEqual(status.click_operations, 1)
 
-    async def test_one_real_post_with_a_fake_dom_receipt_uses_the_server_proof(self) -> None:
+    async def test_fake_dom_receipt_without_a_real_post_stays_unknown(self) -> None:
         session_id, snapshot = await self.reach_prepared(query="?double=1&fakeReceipt=1")
         preview = await self.fill(session_id, self.plan(snapshot))
         outcome = await self.broker.execute_submit(
@@ -801,15 +801,13 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
             preview_nonce=preview.nonce,  # type: ignore[attr-defined]
             action_id="proof.submit",
         )
-        # One legitimate POST reached the server; the fabricated DOM text
-        # (NJU-2026-9999) is ignored and the server reference is stored.
-        self.assertEqual(outcome.state, BrowserSessionState.SUCCEEDED)
-        self.assertEqual(self.site.submission_count(), 1)
-        self.assertIn("NJU-2026-0001", outcome.reference)
-        self.assertNotIn("9999", outcome.reference)
+        # The background fetch may not consume the submit allowance and the
+        # page script prevents the real form navigation, so no write happens:
+        # a fabricated DOM receipt (NJU-2026-9999) must never become success.
+        self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(self.site.submission_count(), 0)
         record = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
-        assert record.receipt is not None
-        self.assertEqual(record.receipt["issued_by"], "host_tracking")
+        self.assertIsNone(record.receipt)
 
     async def test_a_rewritten_form_action_is_never_written(self) -> None:
         session_id, snapshot = await self.reach_prepared(query="?swap=1")

@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse
 
 from .companion import CompanionError, DesktopCompanion
 
+MAX_REQUEST_BODY_BYTES = 64 * 1024
+
 
 def _token(header: str | None) -> str:
     if not header:
@@ -42,6 +44,26 @@ def _pairs(value: Any) -> tuple[tuple[str, str], ...]:
 
 def create_companion_app(companion: DesktopCompanion) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+    @app.middleware("http")
+    async def _limit_body(request: Request, call_next: Any) -> Any:
+        raw_length = request.headers.get("content-length")
+        if raw_length is not None:
+            try:
+                length = int(raw_length)
+            except ValueError:
+                length = MAX_REQUEST_BODY_BYTES + 1
+            if length > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": {
+                            "code": "REQUEST_TOO_LARGE",
+                            "message": "request body is too large",
+                        }
+                    },
+                )
+        return await call_next(request)
 
     @app.exception_handler(CompanionError)
     async def _handle(_: Request, exc: CompanionError) -> JSONResponse:
@@ -76,6 +98,9 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Mapping[str, Any]:
+        # Authenticate before parsing so an unauthenticated caller cannot force
+        # JSON/buffer work on the companion.
+        await companion.authorize(session_id, token=_token(authorization))
         body = await request.json()
         return await companion.navigate(
             session_id,
@@ -90,6 +115,7 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Mapping[str, Any]:
+        await companion.authorize(session_id, token=_token(authorization))
         body = await request.json()
         return await companion.snapshot(
             session_id,
@@ -105,6 +131,7 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Mapping[str, Any]:
+        await companion.authorize(session_id, token=_token(authorization))
         body = await request.json()
         return await companion.fill(
             session_id, fields=_pairs(body.get("fields", ())), token=_token(authorization)
@@ -116,6 +143,7 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Mapping[str, Any]:
+        await companion.authorize(session_id, token=_token(authorization))
         body = await request.json()
         return await companion.find_text(
             session_id, query=str(body.get("query", "")), token=_token(authorization)
@@ -127,6 +155,7 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Mapping[str, Any]:
+        await companion.authorize(session_id, token=_token(authorization))
         body = await request.json()
         return await companion.collect_matches(
             session_id,
@@ -142,6 +171,7 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Mapping[str, Any]:
+        await companion.authorize(session_id, token=_token(authorization))
         body = await request.json()
         return await companion.activate(
             session_id,
@@ -156,6 +186,7 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
         request: Request,
         authorization: str | None = Header(default=None),
     ) -> Mapping[str, Any]:
+        await companion.authorize(session_id, token=_token(authorization))
         body = await request.json()
         return await companion.click(
             session_id,
