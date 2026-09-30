@@ -158,6 +158,7 @@ def validate_adapter_descriptor(
     descriptor: TransactionAdapterDescriptor,
     *,
     allowed_origins: frozenset[str] | set[str],
+    origin_mode: str = "allowlist",
 ) -> None:
     """Structural validation; raises ``BrowserPolicyError`` on any violation."""
 
@@ -183,7 +184,7 @@ def validate_adapter_descriptor(
         canonical = normalize_origin(origin)
         if canonical != origin:
             raise BrowserPolicyError("ADAPTER_INVALID", "adapter origins must be normalized")
-        if canonical not in allowed_origins:
+        if origin_mode == "allowlist" and canonical not in allowed_origins:
             raise BrowserPolicyError(
                 "ORIGIN_NOT_ALLOWED",
                 "an adapter origin is not in the user allowlist",
@@ -307,7 +308,7 @@ def validate_adapter_descriptor(
                 raise BrowserPolicyError(
                     "ADAPTER_INVALID", "a final action origin must be normalized"
                 )
-            if canonical_origin not in allowed_origins:
+            if origin_mode == "allowlist" and canonical_origin not in allowed_origins:
                 raise BrowserPolicyError(
                     "ORIGIN_NOT_ALLOWED",
                     "a final action target origin is not in the user allowlist",
@@ -424,6 +425,7 @@ class DesktopBrowserPort(Protocol):
         session_id: str,
         purpose: str,
         allowed_origins: tuple[str, ...],
+        origin_mode: str,
         task_id: str,
         extension_id: str,
     ) -> Mapping[str, Any]: ...
@@ -475,6 +477,8 @@ class DesktopBrowserPort(Protocol):
         expected_method: str,
         expected_origin: str,
         expected_path: str,
+        expected_payload_sha256: str,
+        expected_payload_locators: str,
     ) -> Mapping[str, Any]: ...
 
     async def aclose(self) -> None: ...

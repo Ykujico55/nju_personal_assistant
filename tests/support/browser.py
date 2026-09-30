@@ -8,6 +8,7 @@ lives in ``tests/integration/test_browser_companion_real_f07.py``.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -88,6 +89,8 @@ class FakeCompanion:
     tracking_matches: list[str] = field(default_factory=list)
     tracking_truncated: bool = False
     receipt_appears_after_click: str = ""
+    malformed_click_result: bool = False
+    click_blocker: asyncio.Event | None = None
 
     def __post_init__(self) -> None:
         self.sessions: dict[str, dict[str, Any]] = {}
@@ -97,6 +100,10 @@ class FakeCompanion:
         self.click_targets: list[tuple[str, str, str]] = []
         self.activate_calls: list[tuple[str, str, str]] = []
         self.collect_urls: list[str] = []
+        self.click_payloads: list[str] = []
+        self.click_locators: list[str] = []
+        self.click_started = asyncio.Event()
+        self.collect_url_override: str = ""
         self.submitted = False
         self.closed: list[str] = []
         self.cancelled: list[str] = []
@@ -117,10 +124,13 @@ class FakeCompanion:
         session_id: str,
         purpose: str,
         allowed_origins: tuple[str, ...],
+        origin_mode: str,
         task_id: str,
         extension_id: str,
     ) -> Mapping[str, Any]:
-        self.sessions[session_id] = {"url": "", "page": None, "purpose": purpose}
+        self.sessions[session_id] = {
+            "url": "", "page": None, "purpose": purpose, "origin_mode": origin_mode
+        }
         return {"url": "", "origin": "", "session_id": session_id}
 
     async def close_session(self, session_id: str) -> None:
@@ -252,7 +262,12 @@ class FakeCompanion:
         if self.submitted and self.receipt_appears_after_click:
             visible.append(self.receipt_appears_after_click)
         matches = [item[:128] for item in visible if compiled.search(item)][:limit]
-        return {"matches": matches, "truncated": self.tracking_truncated}
+        current = str(self.sessions.get(session_id, {}).get("url", ""))
+        return {
+            "matches": matches,
+            "truncated": self.tracking_truncated,
+            "url": self.collect_url_override or url or current,
+        }
 
     async def fill(
         self, session_id: str, fields: tuple[tuple[str, str], ...]
@@ -287,12 +302,21 @@ class FakeCompanion:
         expected_method: str,
         expected_origin: str,
         expected_path: str,
+        expected_payload_sha256: str,
+        expected_payload_locators: str,
     ) -> Mapping[str, Any]:
         self.click_calls.append((session_id, action_id, locator))
         self.click_targets.append((expected_method, expected_origin, expected_path))
+        self.click_payloads.append(expected_payload_sha256)
+        self.click_locators.append(expected_payload_locators)
         self.submitted = True
+        self.click_started.set()
+        if self.click_blocker is not None:
+            await self.click_blocker.wait()
         if self.click_error is not None:
             raise self.click_error
+        if self.malformed_click_result:
+            return []  # type: ignore[return-value]
         session = self.sessions[session_id]
         return {
             "clicked": True,

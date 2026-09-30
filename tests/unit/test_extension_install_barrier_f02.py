@@ -113,7 +113,9 @@ class Store:
     async def all(self) -> tuple[ExtensionRecord, ...]:
         return tuple(self.records.values())
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self, record: ExtensionRecord, *, expected: object = None
+    ) -> None:
         self.records[record.manifest.id] = record
 
 
@@ -124,7 +126,9 @@ class FlakyStore(Store):
         super().__init__()
         self.fail_final_save = True
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self, record: ExtensionRecord, *, expected: object = None
+    ) -> None:
         if record.state is ExtensionState.INSTALLED_DISABLED and self.fail_final_save:
             self.fail_final_save = False
             raise OSError("injected final persistence failure")

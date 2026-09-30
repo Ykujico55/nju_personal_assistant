@@ -22,6 +22,7 @@ from personal_assistant.core.browser import (
     FieldValidation,
     FieldValueSource,
     FillPlan,
+    UnknownBrowserOutcomeError,
 )
 from personal_assistant.core.tools.gateway import (
     DefinitiveToolFailure,
@@ -147,6 +148,11 @@ class BrowserActionExecutor:
             raise OutcomeUnknownError(
                 reference_id=f"browser-submit:{session_id}",
                 message="the submission did not finish inside the deadline",
+            ) from exc
+        except UnknownBrowserOutcomeError as exc:
+            raise OutcomeUnknownError(
+                reference_id=f"browser-submit:{session_id}",
+                message="the submission may have reached the site; reconcile read-only",
             ) from exc
         except BrowserError as exc:
             raise DefinitiveToolFailure(f"{_code(exc)}: {_message(exc)}") from None

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
@@ -98,6 +99,25 @@ class InvocationAuditEvent:
 
 class InvocationAudit(Protocol):
     async def append(self, event: InvocationAuditEvent) -> None: ...
+
+
+async def _finish_terminal_recording(awaitable: Awaitable[None]) -> None:
+    """Finish a started terminal write before propagating caller cancellation."""
+
+    task: asyncio.Future[None] = asyncio.ensure_future(awaitable)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            task.result()
+        raise
 
 
 class InMemoryInvocationAudit:
@@ -265,11 +285,9 @@ class ToolGateway:
         except asyncio.CancelledError:
             if is_external:
                 # Persist uncertainty even when the worker itself is being
-                # cancelled; shield the state write from that cancellation.
+                # cancelled; terminal recording resists repeated cancellation.
                 reference_id = f"unknown:{attempt_id}"
-                await asyncio.shield(
-                    self._mark_unknown_external(call, reference_id, intent)
-                )
+                await self._mark_unknown_external(call, reference_id, intent)
             raise
         except Exception as exc:  # noqa: BLE001 - boundary converts untyped worker failures
             if is_external:
@@ -396,6 +414,29 @@ class ToolGateway:
         in-memory approval repository is updated directly.
         """
 
+        await _finish_terminal_recording(
+            self._finalize_external_impl(
+                approval_id,
+                intent,
+                state,
+                result_reference=result_reference,
+                failure_reason=failure_reason,
+                diagnostic_code=diagnostic_code,
+                receipt=receipt,
+            )
+        )
+
+    async def _finalize_external_impl(
+        self,
+        approval_id: str,
+        intent: SideEffectIntent | None,
+        state: SideEffectState,
+        *,
+        result_reference: str | None,
+        failure_reason: str | None,
+        diagnostic_code: str | None,
+        receipt: dict[str, Any] | None,
+    ) -> None:
         if intent is not None and self._outbox is not None:
             await self._outbox.finalize(
                 intent.id,

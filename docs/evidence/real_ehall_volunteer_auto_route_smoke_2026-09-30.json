@@ -1,0 +1,45 @@
+{
+  "mode": "direct-auto-route-synthetic",
+  "captured_at": "2026-09-29T17:02:25.530890+00:00",
+  "route": [
+    "第二课堂",
+    "第二课堂成绩单（在线办理）",
+    "志愿服务经历（申请）"
+  ],
+  "one_browser_context": true,
+  "navigation_completed": true,
+  "all_fields_visible_and_match": true,
+  "submit_button_visible": true,
+  "user_verified": true,
+  "submitted": false,
+  "supervised_gateway_chain": false,
+  "stage": "route_and_fill",
+  "form_frame_count": 1,
+  "field_matches": {
+    "名称": true,
+    "开始时间": true,
+    "结束时间": true,
+    "团队职务": true,
+    "服务时长": true,
+    "审核学院": true,
+    "审核人": true
+  },
+  "filled_field_labels": [
+    "名称",
+    "开始时间",
+    "结束时间",
+    "团队职务",
+    "服务时长",
+    "审核学院",
+    "审核人"
+  ],
+  "sample_values": {
+    "名称": "自动化测试请勿提交",
+    "开始时间": "2026-09-27 09:00",
+    "结束时间": "2026-09-28",
+    "团队职务": "无",
+    "服务时长": "1.0",
+    "审核学院": "文学院",
+    "审核人": "[页面选项已选中]"
+  }
+}

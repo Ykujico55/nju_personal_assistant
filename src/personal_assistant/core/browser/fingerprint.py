@@ -79,6 +79,7 @@ def page_structure_document(
     headings: Sequence[Mapping[str, Any]] = (),
     links: Sequence[Mapping[str, Any]] = (),
     forms: Sequence[Mapping[str, Any]] = (),
+    hidden_fields: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Normalize raw companion structure into the canonical fingerprint input."""
 
@@ -120,12 +121,29 @@ def page_structure_document(
                 "name": _bounded_text(item.get("name")),
             }
         )
-    document = {
+    normalized_hidden: list[dict[str, Any]] = []
+    for index, item in enumerate(hidden_fields):
+        if len(normalized_hidden) >= MAX_STRUCTURE_CONTROLS:
+            break
+        normalized_hidden.append(
+            {
+                "order": index,
+                "type": _bounded_text(item.get("type")) or "hidden",
+                "name": _bounded_text(item.get("name")),
+                "element_id": _bounded_text(item.get("element_id")),
+            }
+        )
+    document: dict[str, Any] = {
         "controls": normalized_controls,
         "headings": normalized_headings,
         "links": normalized_links,
         "forms": normalized_forms,
     }
+    # Hidden inputs are pinned by name/type only (never by value) and the key
+    # appears only when present, so pages without hidden fields keep their
+    # previously verified fingerprints.
+    if normalized_hidden:
+        document["hidden_fields"] = normalized_hidden
     if len(canonical_json(document).encode("utf-8")) > MAX_STRUCTURE_BYTES:
         raise BrowserLimitError("page structure exceeds the byte limit")
     return document

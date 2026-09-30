@@ -328,6 +328,30 @@ class PostgresF02Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ExtensionState.DISABLED, again.state)
         self.assertEqual(5, len(await adapters.lifecycle_store.all()))
 
+    async def test_lifecycle_cas_uses_active_package_version(self) -> None:
+        adapters = await self._new_adapters()
+        store = adapters.lifecycle_store
+        manifest = replace(ManifestParser().parse(EXAMPLE), id="cas.package.version")
+        enabled = ExtensionRecord(
+            manifest=manifest,
+            artifact_hash="sha256:" + "a" * 64,
+            state=ExtensionState.ENABLED,
+            install_path=str(self.tmp / "cas-package-version"),
+        )
+        self.assertNotEqual(manifest.version, manifest.manifest_version)
+        await store.save(enabled)
+
+        disabled = replace(enabled, state=ExtensionState.DISABLED)
+        applied = await store.save(
+            disabled,
+            expected=(ExtensionState.ENABLED, enabled.manifest.version),
+        )
+
+        self.assertTrue(applied)
+        persisted = await store.get("cas.package.version")
+        assert persisted is not None
+        self.assertEqual(ExtensionState.DISABLED, persisted.state)
+
     async def test_version_catalog_retained_versions_and_compatibility(self) -> None:
         adapters = await self._new_adapters()
         store = adapters.lifecycle_store

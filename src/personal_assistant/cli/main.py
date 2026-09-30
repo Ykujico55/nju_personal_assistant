@@ -9,6 +9,7 @@ to the exact preview (artifact hash, extension id, version and manifest).
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 import time
@@ -199,6 +200,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-url", default="http://127.0.0.1:8001")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor")
+    ehall = commands.add_parser("ehall", help="manually validate ehall navigation and filling")
+    ehall.add_argument(
+        "instruction",
+        nargs="?",
+        help="例如：打开 成绩查询",
+    )
+    ehall.add_argument(
+        "--sample",
+        action="store_true",
+        help="试填可确定的测试字段并停在提交前，不点击提交",
+    )
+    ehall.add_argument(
+        "--capture-out",
+        type=Path,
+        help="只读取并保存脱敏页面结构；不填写或点击提交",
+    )
     extension = commands.add_parser("extension")
     actions = extension.add_subparsers(dest="extension_command", required=True)
     actions.add_parser("list")
@@ -226,6 +243,16 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "doctor":
         return _doctor()
+    if args.command == "ehall":
+        from personal_assistant.ehall_interactive_entry import run_ehall
+
+        return asyncio.run(
+            run_ehall(
+                args.instruction,
+                sample=args.sample,
+                capture_out=args.capture_out,
+            )
+        )
     command = args.extension_command
     if command == "scaffold":
         try:

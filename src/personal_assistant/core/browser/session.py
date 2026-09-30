@@ -8,13 +8,14 @@ browser work happens in a Desktop Companion behind :class:`DesktopBrowserPort`.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import hmac
 import json
 import re
 import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -22,7 +23,6 @@ from urllib.parse import urlsplit
 
 from personal_assistant.core.approvals.canonicalize import canonical_json
 from personal_assistant.core.browser.errors import (
-    BrowserError,
     BrowserLimitError,
     BrowserPolicyError,
     BrowserSessionStateError,
@@ -30,6 +30,7 @@ from personal_assistant.core.browser.errors import (
     PageDriftError,
     PreviewExpiredError,
     ProhibitedTransactionError,
+    UnknownBrowserOutcomeError,
 )
 from personal_assistant.core.browser.fingerprint import (
     compute_page_fingerprint,
@@ -54,6 +55,7 @@ from personal_assistant.core.browser.models import (
     allowed_browser_transitions,
     canonical_preview_sha256,
     ensure_browser_transition,
+    form_payload_sha256,
 )
 from personal_assistant.core.browser.policy import (
     ProhibitedCategory,
@@ -106,6 +108,23 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+async def _settle_after_cancellation(awaitable: Awaitable[object]) -> None:
+    """Let post-click state persistence finish despite repeated cancellation."""
+
+    task = asyncio.ensure_future(awaitable)
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+        except Exception:
+            break
+    # The original caller cancellation wins. Startup recovery can convert a
+    # surviving EXECUTING row if persistence itself was unavailable.
+    with contextlib.suppress(Exception, asyncio.CancelledError):
+        task.result()
+
+
 def _default_id() -> str:
     return f"brs_{secrets.token_urlsafe(18)}"
 
@@ -130,6 +149,7 @@ class BrowserSessionBroker:
         sessions: BrowserSessionStore,
         adapters: BrowserAdapterStore,
         allowed_origins: frozenset[str] | set[str],
+        origin_mode: str = "allowlist",
         limits: BrowserLimits | None = None,
         submit_enabled: bool = False,
         now: Callable[[], datetime] | None = None,
@@ -140,6 +160,9 @@ class BrowserSessionBroker:
         self._sessions = sessions
         self._adapters = adapters
         self._allowed_origins = frozenset(allowed_origins)
+        if origin_mode not in {"allowlist", "open"}:
+            raise BrowserPolicyError("ORIGIN_MODE_INVALID", "unknown browser origin mode")
+        self._origin_mode = origin_mode
         self._limits = limits or BrowserLimits()
         self._submit_enabled = submit_enabled
         self._now = now or _utcnow
@@ -161,7 +184,7 @@ class BrowserSessionBroker:
     # ------------------------------------------------------------------ setup
 
     def _require_origins(self) -> None:
-        if not self._allowed_origins:
+        if self._origin_mode == "allowlist" and not self._allowed_origins:
             raise BrowserPolicyError(
                 "NO_ALLOWED_ORIGINS",
                 "no browser origin is allow-listed; refusing to open a session",
@@ -225,6 +248,7 @@ class BrowserSessionBroker:
                 session_id=session_id,
                 purpose=purpose,
                 allowed_origins=tuple(sorted(self._allowed_origins)),
+                origin_mode=self._origin_mode,
                 task_id=task_id,
                 extension_id=extension_id,
             )
@@ -237,13 +261,19 @@ class BrowserSessionBroker:
         url = _require_str(payload.get("url", ""), "session url", max_length=2048)
         origin = _require_str(payload.get("origin", ""), "session origin", max_length=255)
         if url and url != "about:blank":
-            evaluate_navigation(url, allowed_origins=self._allowed_origins)
+            evaluate_navigation(
+                url, allowed_origins=self._allowed_origins, origin_mode=self._origin_mode
+            )
         return await self._save(created, {"url": url, "origin": origin})
 
     async def register_adapter(
         self, descriptor: TransactionAdapterDescriptor
     ) -> BrowserAdapterRecord:
-        validate_adapter_descriptor(descriptor, allowed_origins=self._allowed_origins)
+        validate_adapter_descriptor(
+            descriptor,
+            allowed_origins=self._allowed_origins,
+            origin_mode=self._origin_mode,
+        )
         document = _descriptor_document(descriptor)
         now = self._now()
         existing = await self._adapters.get(
@@ -345,6 +375,7 @@ class BrowserSessionBroker:
             url,
             allowed_origins=self._allowed_origins,
             allowed_paths=_adapter_paths(descriptor),
+            origin_mode=self._origin_mode,
         )
         if not decision.allowed:
             raise NavigationDeniedError(decision.reason)
@@ -606,6 +637,7 @@ class BrowserSessionBroker:
             snapshot.url,
             allowed_origins=self._allowed_origins,
             allowed_paths=_adapter_paths(descriptor),
+            origin_mode=self._origin_mode,
         )
         if not decision.allowed:
             raise NavigationDeniedError(decision.reason)
@@ -756,34 +788,109 @@ class BrowserSessionBroker:
                 expected_method=final.method,
                 expected_origin=final.target_origin,
                 expected_path=final.target_path,
+                expected_payload_sha256=form_payload_sha256(
+                    tuple(
+                        (change.locator, change.new_value) for change in preview.fields
+                    )
+                ),
+                expected_payload_locators=",".join(
+                    change.locator for change in preview.fields
+                ),
+            )
+            # Everything after the click may run after the server accepted the
+            # write. Malformed transport data and post-click persistence errors
+            # are therefore uncertain outcomes, never policy failures.
+            result = _require_mapping(raw, "click result")
+            outcome = _require_str(
+                result.get("outcome", "UNKNOWN"), "click outcome", max_length=32
+            )
+            if outcome == "REJECTED":
+                # The transport answered with a definitive rejection: no retry.
+                final_record = _replace_state(
+                    executing,
+                    BrowserSessionState.FAILED,
+                    self._now(),
+                    outcome="FAILED",
+                    diagnostic_code="SERVER_REJECTED",
+                )
+                await self._save(final_record, {})
+                return SubmissionOutcome(
+                    state=BrowserSessionState.FAILED, diagnostic_code="SERVER_REJECTED"
+                )
+        except asyncio.CancelledError:
+            # Cancellation can arrive after the browser released the request.
+            # Persist UNKNOWN and perform one read-only reconciliation before
+            # preserving the caller's cancellation.
+            await _settle_after_cancellation(
+                self._mark_submit_unknown_and_converge(
+                    executing,
+                    session_id=session_id,
+                    extension_id=extension_id,
+                    diagnostic_code="SUBMIT_CANCELLED_AFTER_START",
+                )
+            )
+            raise
+        except Exception:
+            return await self._settle_submit_outcome(
+                executing,
+                session_id=session_id,
+                extension_id=extension_id,
+                diagnostic_code="SUBMIT_OUTCOME_LOST",
+            )
+        # The DOM is never authoritative: a page script can fabricate a
+        # receipt after a single legitimate POST. Record UNKNOWN and let
+        # the read-only tracking-page diff prove (or refuse) success.
+        return await self._settle_submit_outcome(
+            executing,
+            session_id=session_id,
+            extension_id=extension_id,
+            diagnostic_code="SUBMIT_OUTCOME_UNKNOWN",
+        )
+
+    async def _settle_submit_outcome(
+        self,
+        executing: BrowserSessionRecord,
+        *,
+        session_id: str,
+        extension_id: str,
+        diagnostic_code: str,
+    ) -> SubmissionOutcome:
+        """Finish UNKNOWN persistence and read-only reconciliation after a click."""
+
+        settlement = asyncio.create_task(
+            self._mark_submit_unknown_and_converge(
+                executing,
+                session_id=session_id,
+                extension_id=extension_id,
+                diagnostic_code=diagnostic_code,
+            )
+        )
+        try:
+            return await asyncio.shield(settlement)
+        except asyncio.CancelledError:
+            await _settle_after_cancellation(settlement)
+            raise
+
+    async def _mark_submit_unknown_and_converge(
+        self,
+        executing: BrowserSessionRecord,
+        *,
+        session_id: str,
+        extension_id: str,
+        diagnostic_code: str,
+    ) -> SubmissionOutcome:
+        """Persist uncertainty after a click and reconcile without clicking again."""
+
+        try:
+            await self._transition_terminal(
+                executing,
+                BrowserSessionState.UNKNOWN,
+                diagnostic_code=diagnostic_code,
             )
         except Exception as exc:
-            await self._transition_terminal(
-                executing, BrowserSessionState.UNKNOWN, diagnostic_code="SUBMIT_OUTCOME_LOST"
-            )
-            del exc
-            return await self._converge_submission(session_id, extension_id=extension_id)
-        result = _require_mapping(raw, "click result")
-        outcome = _require_str(result.get("outcome", "UNKNOWN"), "click outcome", max_length=32)
-        if outcome == "REJECTED":
-            # The transport answered with a definitive rejection: no retry.
-            final_record = _replace_state(
-                executing,
-                BrowserSessionState.FAILED,
-                self._now(),
-                outcome="FAILED",
-                diagnostic_code="SERVER_REJECTED",
-            )
-            await self._save(final_record, {})
-            return SubmissionOutcome(
-                state=BrowserSessionState.FAILED, diagnostic_code="SERVER_REJECTED"
-            )
-        # The DOM is never authoritative: a page script can fabricate a receipt
-        # after a single legitimate POST.  Record UNKNOWN and let the read-only
-        # tracking-page diff prove (or refuse) success.
-        await self._transition_terminal(
-            executing, BrowserSessionState.UNKNOWN, diagnostic_code="SUBMIT_OUTCOME_UNKNOWN"
-        )
+            raise UnknownBrowserOutcomeError(
+                "the submit may have reached the site; UNKNOWN persistence failed"
+            ) from exc
         return await self._converge_submission(session_id, extension_id=extension_id)
 
     async def _converge_submission(
@@ -793,7 +900,7 @@ class BrowserSessionBroker:
 
         try:
             record = await self.reconcile(session_id, extension_id=extension_id)
-        except BrowserError:
+        except Exception:
             return SubmissionOutcome(
                 state=BrowserSessionState.UNKNOWN,
                 diagnostic_code="SUBMIT_UNVERIFIED",
@@ -837,22 +944,31 @@ class BrowserSessionBroker:
             url,
             allowed_origins=self._allowed_origins,
             allowed_paths=_adapter_paths(descriptor),
+            origin_mode=self._origin_mode,
         )
         if not decision.allowed:
             raise NavigationDeniedError(decision.reason)
-        raw = _require_mapping(await self._companion.navigate(session_id, url), "navigation")
-        live_url = _require_str(raw.get("url", url), "navigation url", max_length=2048)
-        live = evaluate_navigation(
-            live_url,
-            allowed_origins=self._allowed_origins,
-            allowed_paths=_adapter_paths(descriptor),
-        )
-        if not live.allowed:
-            raise NavigationDeniedError(live.reason)
+        # One read-only tab call: there is no window between a navigation and
+        # the collection in which the page could redirect elsewhere.  The final
+        # URL must be exactly the declared tracking target (no extra query).
         collected = _require_mapping(
-            await self._companion.collect_matches(session_id, pattern=pattern, limit=256),
+            await self._companion.collect_matches(
+                session_id, pattern=pattern, limit=256, url=url
+            ),
             "tracking matches",
         )
+        collected_url = _require_str(
+            collected.get("url", ""), "tracking url", max_length=2048
+        )
+        if not _tracking_url_matches(
+            collected_url, origin=descriptor.allowed_origins[0], tracking=tracking
+        ):
+            return await self._save(
+                replace(
+                    record, updated_at=self._now(), diagnostic_code="RECONCILE_UNSAFE"
+                ),
+                {},
+            )
         matches = [
             str(item)[:128] for item in collected.get("matches", ()) if isinstance(item, str)
         ]
@@ -959,6 +1075,7 @@ class BrowserSessionBroker:
             url,
             allowed_origins=self._allowed_origins,
             allowed_paths=_adapter_paths(descriptor),
+            origin_mode=self._origin_mode,
         )
         if not decision.allowed:
             raise NavigationDeniedError(decision.reason)
@@ -968,6 +1085,16 @@ class BrowserSessionBroker:
             ),
             "tracking matches",
         )
+        collected_url = _require_str(
+            collected.get("url", ""), "tracking url", max_length=2048
+        )
+        if not _tracking_url_matches(
+            collected_url, origin=descriptor.allowed_origins[0], tracking=tracking
+        ):
+            raise BrowserPolicyError(
+                "TRACKING_URL_MISMATCH",
+                "the tracking page redirected away from its declared target",
+            )
         matches = [
             str(item)[:128]
             for item in collected.get("matches", ())
@@ -1013,17 +1140,23 @@ class BrowserSessionBroker:
         if not isinstance(forms_raw, Sequence):
             forms_raw = ()
         raw_forms = [item for item in list(forms_raw)[:32] if isinstance(item, Mapping)]
+        hidden_raw = structure.get("hidden_fields", ())
+        if not isinstance(hidden_raw, Sequence):
+            hidden_raw = ()
+        raw_hidden = [item for item in list(hidden_raw)[:512] if isinstance(item, Mapping)]
         document = page_structure_document(
             controls=raw_controls,
             headings=[item for item in headings_raw if isinstance(item, Mapping)],
             links=raw_links,
             forms=raw_forms,
+            hidden_fields=raw_hidden,
         )
         fingerprint = compute_page_fingerprint(document)
         decision = evaluate_navigation(
             url,
             allowed_origins=self._allowed_origins,
             allowed_paths=_adapter_paths(descriptor) if descriptor else (),
+            origin_mode=self._origin_mode,
         )
         if not decision.allowed:
             raise NavigationDeniedError(decision.reason)
@@ -1062,7 +1195,14 @@ class BrowserSessionBroker:
                     field_id=spec.field_id if spec else "",
                     locator=locator,
                     kind=str(item.get("type") or item.get("tag") or "unknown"),
-                    value=str(item.get("value", "")),
+                    # Defense in depth: even if a port returned them, hidden
+                    # and password values are never exported to callers.
+                    value=(
+                        ""
+                        if str(item.get("type") or item.get("tag") or "").lower()
+                        in {"hidden", "password"}
+                        else str(item.get("value", ""))
+                    ),
                     name=str(item.get("name", "")),
                     required=bool(item.get("required", False)),
                     readonly=bool(item.get("readonly", False)),
@@ -1410,6 +1550,23 @@ def _parse_baseline(text: str) -> tuple[frozenset[str], bool, bool]:
         bool(document.get("truncated", False)),
         True,
     )
+
+
+def _tracking_url_matches(url: str, *, origin: str, tracking: str) -> bool:
+    """The live tracking URL must be exactly the declared target.
+
+    Origin and path (including hash) must match and no extra query string may
+    be attached: a redirect to another allowed page, or to the same path with
+    different parameters, can never mint a receipt proof.
+    """
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if parts.query:
+        return False
+    return _navigation_path(url) == tracking and _origin(url) == origin
 
 
 def _navigation_path(url: str) -> str:

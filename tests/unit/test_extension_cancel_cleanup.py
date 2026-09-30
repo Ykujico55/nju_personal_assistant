@@ -147,7 +147,9 @@ class Store:
     async def all(self):
         return tuple(self.records.values())
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self, record: ExtensionRecord, *, expected: object = None
+    ) -> None:
         if record.state is ExtensionState.INSTALLED_DISABLED and self.cancel_final_save:
             self.cancel_final_save = False
             raise asyncio.CancelledError

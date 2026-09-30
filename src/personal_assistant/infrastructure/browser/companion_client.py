@@ -33,6 +33,8 @@ def _loopback_base_url(raw: str) -> str:
         raise BrowserUnavailableError("the companion URL requires a port")
     if parts.path not in ("", "/") or parts.query or parts.fragment or parts.username:
         raise BrowserUnavailableError("the companion URL must be a bare origin")
+    if ":" in host:
+        host = f"[{host}]"
     return f"http://{host}:{parts.port}"
 
 
@@ -124,6 +126,7 @@ class LoopbackCompanionClient:
         session_id: str,
         purpose: str,
         allowed_origins: tuple[str, ...],
+        origin_mode: str = "allowlist",
         task_id: str,
         extension_id: str,
     ) -> Mapping[str, Any]:
@@ -135,6 +138,7 @@ class LoopbackCompanionClient:
                 "session_id": session_id,
                 "purpose": purpose,
                 "allowed_origins": list(allowed_origins),
+                "origin_mode": origin_mode,
                 "task_id": task_id,
                 "extension_id": extension_id,
             },
@@ -191,6 +195,25 @@ class LoopbackCompanionClient:
             },
         )
 
+    async def adopt_opened_page(self, session_id: str) -> Mapping[str, Any]:
+        """Select the single tab the operator opened for read-only capture."""
+
+        return await self._request(
+            "POST",
+            f"/v1/sessions/{session_id}/adopt-opened-page",
+            token=self._token(session_id),
+        )
+
+    async def select_frame(
+        self, session_id: str, *, origin: str, path: str
+    ) -> Mapping[str, Any]:
+        return await self._request(
+            "POST",
+            f"/v1/sessions/{session_id}/select-frame",
+            token=self._token(session_id),
+            payload={"origin": origin, "path": path},
+        )
+
     async def fill(
         self, session_id: str, fields: tuple[tuple[str, str], ...]
     ) -> Mapping[str, Any]:
@@ -239,6 +262,8 @@ class LoopbackCompanionClient:
         expected_method: str,
         expected_origin: str,
         expected_path: str,
+        expected_payload_sha256: str,
+        expected_payload_locators: str,
     ) -> Mapping[str, Any]:
         return await self._request(
             "POST",
@@ -251,6 +276,8 @@ class LoopbackCompanionClient:
                 "expected_method": expected_method,
                 "expected_origin": expected_origin,
                 "expected_path": expected_path,
+                "expected_payload_sha256": expected_payload_sha256,
+                "expected_payload_locators": expected_payload_locators,
             },
         )
 

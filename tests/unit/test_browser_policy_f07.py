@@ -36,6 +36,45 @@ class OriginPolicyBypassTests(unittest.TestCase):
         self.assertEqual(decision.origin, "https://ehall.example.edu")
         self.assertEqual(decision.path, "/apps/proof")
 
+    def test_explicit_open_mode_accepts_other_https_origin(self) -> None:
+        decision = evaluate_navigation(
+            "https://ehallapp.example.edu/apps/proof",
+            allowed_origins=ALLOWED,
+            origin_mode="open",
+        )
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.origin, "https://ehallapp.example.edu")
+        self.assertEqual(
+            decide("https://ehallapp.example.edu/apps/proof"),
+            "HOST_NOT_ALLOWED",
+        )
+
+    def test_open_mode_keeps_url_shape_checks(self) -> None:
+        for url, reason in (
+            ("http://other.example.edu/app", "SCHEME_NOT_ALLOWED"),
+            ("https://user@other.example.edu/app", "USERINFO_NOT_ALLOWED"),
+            ("https://other.example.edu/a/%2e%2e/b", "ENCODED_TRAVERSAL"),
+        ):
+            with self.subTest(url=url):
+                decision = evaluate_navigation(
+                    url, allowed_origins=ALLOWED, origin_mode="open"
+                )
+                self.assertEqual(reason, decision.reason)
+
+    def test_open_mode_accepts_https_cas_redirect_to_another_origin(self) -> None:
+        decision = evaluate_navigation(
+            "https://auth.example.edu/login?service=https://ehallapp.example.edu/app",
+            allowed_origins=ALLOWED,
+            origin_mode="open",
+        )
+        self.assertTrue(decision.allowed)
+        invalid = evaluate_navigation(
+            "https://auth.example.edu/login?service=http://other.example.edu/app",
+            allowed_origins=ALLOWED,
+            origin_mode="open",
+        )
+        self.assertEqual("OPEN_REDIRECT", invalid.reason)
+
     def test_plain_http_is_rejected(self) -> None:
         self.assertEqual(decide("http://ehall.example.edu/apps/proof"), "SCHEME_NOT_ALLOWED")
 

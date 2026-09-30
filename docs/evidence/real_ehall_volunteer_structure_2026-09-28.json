@@ -1,0 +1,222 @@
+{
+  "captured_at": "2026-09-28T08:59:41.421033+00:00",
+  "service": "志愿服务经历",
+  "frames": [
+    {
+      "url": "https://youth.nju.edu.cn/tw/adminMini",
+      "fingerprint": "fbf9193af85cf85c7780a9f40ebeff8d96703ff0a79ba45fe2f331d0a663037e",
+      "controls": [],
+      "actions": [],
+      "forms": [],
+      "hidden_fields": [],
+      "frame_index": 0
+    },
+    {
+      "url": "https://youth.nju.edu.cn/tw/xssq/xssq",
+      "fingerprint": "34c8a2640bf63b685922313b618dc2a3a399f334d2ad39b1094a02e1d088bfc9",
+      "controls": [
+        {
+          "locator": "ctl:0:0",
+          "tag": "input",
+          "type": "text",
+          "name": "",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:1:0",
+          "tag": "select",
+          "type": "select",
+          "name": "",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 9
+        }
+      ],
+      "actions": [
+        {
+          "locator": "act:0",
+          "label": "确定",
+          "kind": "other"
+        }
+      ],
+      "forms": [],
+      "hidden_fields": [],
+      "frame_index": 1
+    },
+    {
+      "url": "https://youth.nju.edu.cn/tw/xssq/xssq/create",
+      "fingerprint": "137294bef8dbce8396765198dd5fd20c8eb0c82774a34c086e4d7ea9c949ac54",
+      "controls": [
+        {
+          "locator": "ctl:0:0",
+          "tag": "input",
+          "type": "text",
+          "name": "data.mc",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:0:1",
+          "tag": "input",
+          "type": "text",
+          "name": "data.kssj",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:0:2",
+          "tag": "input",
+          "type": "text",
+          "name": "data.jssj",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:0:3",
+          "tag": "input",
+          "type": "text",
+          "name": "preview-bdx",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:0:4",
+          "tag": "input",
+          "type": "text",
+          "name": "preview-bdx",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:0:5",
+          "tag": "input",
+          "type": "text",
+          "name": "",
+          "required": false,
+          "readonly": true,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:0:6",
+          "tag": "input",
+          "type": "text",
+          "name": "",
+          "required": false,
+          "readonly": true,
+          "disabled": false,
+          "option_count": 0
+        },
+        {
+          "locator": "ctl:1:0",
+          "tag": "select",
+          "type": "select",
+          "name": "data.shxy.id",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 64
+        },
+        {
+          "locator": "ctl:1:1",
+          "tag": "select",
+          "type": "select",
+          "name": "",
+          "required": false,
+          "readonly": false,
+          "disabled": false,
+          "option_count": 64
+        }
+      ],
+      "actions": [
+        {
+          "locator": "act:0",
+          "label": "提交",
+          "kind": "other"
+        }
+      ],
+      "forms": [
+        {
+          "action": "",
+          "method": "get",
+          "element_id": "",
+          "name": ""
+        }
+      ],
+      "hidden_fields": [],
+      "frame_index": 2
+    }
+  ],
+  "visible_fields": [
+    {
+      "frame_index": 1,
+      "label": "未命名",
+      "kind": "text",
+      "fillable": true
+    },
+    {
+      "frame_index": 1,
+      "label": "未命名",
+      "kind": "select",
+      "fillable": true
+    },
+    {
+      "frame_index": 2,
+      "label": "data.mc",
+      "kind": "text",
+      "fillable": true
+    },
+    {
+      "frame_index": 2,
+      "label": "data.kssj",
+      "kind": "text",
+      "fillable": true
+    },
+    {
+      "frame_index": 2,
+      "label": "data.jssj",
+      "kind": "text",
+      "fillable": true
+    },
+    {
+      "frame_index": 2,
+      "label": "preview-bdx",
+      "kind": "text",
+      "fillable": true
+    },
+    {
+      "frame_index": 2,
+      "label": "preview-bdx",
+      "kind": "text",
+      "fillable": true
+    },
+    {
+      "frame_index": 2,
+      "label": "请选择",
+      "kind": "text",
+      "fillable": false
+    },
+    {
+      "frame_index": 2,
+      "label": "请选择",
+      "kind": "text",
+      "fillable": false
+    }
+  ],
+  "filled": false,
+  "submitted": false
+}

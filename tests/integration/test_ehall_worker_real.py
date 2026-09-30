@@ -356,7 +356,10 @@ class EhallWorkerRealTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_submit_reconciles_read_only(self) -> None:
         await self._install_and_enable()
-        self.companion.click_outcome = "UNKNOWN"
+        # The site accepts the write, but the Companion reply is malformed.
+        # Broker -> Gateway -> PostgreSQL Outbox must preserve UNKNOWN and
+        # reconcile read-only without issuing a second click.
+        self.companion.malformed_click_result = True
         discovered = await self._invoke("ehall.discover_apps", {"purpose": "x"})
         self.assertEqual(discovered["outcome"], "SUCCEEDED", discovered)
         session_id = discovered["output"]["session_id"]
@@ -409,6 +412,11 @@ class EhallWorkerRealTests(unittest.IsolatedAsyncioTestCase):
             "SELECT state FROM browser_sessions WHERE session_id = $1", session_id
         )
         self.assertEqual(state[0]["state"], BrowserSessionState.UNKNOWN.value)
+        intents = await self._sql(
+            "SELECT state FROM side_effect_intents "
+            "WHERE tool_id = 'ehall.submit' ORDER BY created_at DESC LIMIT 1"
+        )
+        self.assertEqual(intents[0]["state"], "UNKNOWN")
         # Automated retries must never reach the transport.
         retry = await self._gateway_call(
             "ehall.submit",

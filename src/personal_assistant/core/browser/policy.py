@@ -1,8 +1,9 @@
-"""Origin allow-listing and permanent R3 classification.
+"""Selectable origin policy and permanent R3 classification.
 
 Policy rules (F07 contract):
 
-* only ``https`` origins that the user explicitly allow-listed may be visited;
+* allowlist mode visits only explicit https origins; an explicitly selected
+  open mode accepts any structurally valid https origin;
 * userinfo, non-default ports that were not allow-listed, IP literals that were
   not allow-listed, encoded traversal, protocol-relative and open-redirect URLs
   are rejected;
@@ -159,9 +160,12 @@ def evaluate_navigation(
     *,
     allowed_origins: frozenset[str] | set[str],
     allowed_paths: Sequence[str] = (),
+    origin_mode: str = "allowlist",
 ) -> NavigationDecision:
     """Decide whether the supervised browser may navigate to ``url``."""
 
+    if origin_mode not in {"allowlist", "open"}:
+        return NavigationDecision(False, reason="ORIGIN_MODE_INVALID")
     if not isinstance(url, str) or not url:
         return NavigationDecision(False, reason="EMPTY_URL")
     if len(url) > MAX_URL_LENGTH:
@@ -193,7 +197,7 @@ def evaluate_navigation(
         return NavigationDecision(False, reason="MALFORMED_URL")
     if port == 0:
         return NavigationDecision(False, reason="PORT_NOT_ALLOWED")
-    if canonical_origin not in allowed_origins:
+    if origin_mode == "allowlist" and canonical_origin not in allowed_origins:
         return NavigationDecision(False, canonical_origin, reason="HOST_NOT_ALLOWED")
     path = parts.path or "/"
     decoded = _decoded_path(path)
@@ -204,7 +208,7 @@ def evaluate_navigation(
     for segment in decoded.split("/"):
         if segment in (".", ".."):
             return NavigationDecision(False, canonical_origin, path, "ENCODED_TRAVERSAL")
-    if _has_open_redirect(parts.query, allowed_origins):
+    if _has_open_redirect(parts.query, allowed_origins, origin_mode=origin_mode):
         return NavigationDecision(False, canonical_origin, path, "OPEN_REDIRECT")
     if allowed_paths and not any(_path_matches(path, pattern) for pattern in allowed_paths):
         return NavigationDecision(False, canonical_origin, path, "PATH_NOT_ALLOWED")
@@ -217,7 +221,12 @@ def _path_matches(path: str, pattern: str) -> bool:
     return fnmatchcase(path, pattern)
 
 
-def _has_open_redirect(query: str, allowed_origins: frozenset[str] | set[str]) -> bool:
+def _has_open_redirect(
+    query: str,
+    allowed_origins: frozenset[str] | set[str],
+    *,
+    origin_mode: str = "allowlist",
+) -> bool:
     """Reject redirect parameters that could send the browser off the allowlist.
 
     A redirect target is only accepted when it stays on an allowlisted https
@@ -244,12 +253,19 @@ def _has_open_redirect(query: str, allowed_origins: frozenset[str] | set[str]) -
             if decoded == candidate:
                 break
             candidate = decoded
-        if not _redirect_target_allowed(candidate, allowed_origins):
+        if not _redirect_target_allowed(
+            candidate, allowed_origins, origin_mode=origin_mode
+        ):
             return True
     return False
 
 
-def _redirect_target_allowed(candidate: str, allowed_origins: frozenset[str] | set[str]) -> bool:
+def _redirect_target_allowed(
+    candidate: str,
+    allowed_origins: frozenset[str] | set[str],
+    *,
+    origin_mode: str = "allowlist",
+) -> bool:
     if "\\" in candidate or "@" in candidate:
         return False
     if candidate.startswith("//"):
@@ -267,7 +283,7 @@ def _redirect_target_allowed(candidate: str, allowed_origins: frozenset[str] | s
         origin = normalize_origin(f"{nested.scheme}://{nested.netloc}")
     except BrowserPolicyError:
         return False
-    return origin in allowed_origins
+    return origin_mode == "open" or origin in allowed_origins
 
 
 class ProhibitedCategory(StrEnum):

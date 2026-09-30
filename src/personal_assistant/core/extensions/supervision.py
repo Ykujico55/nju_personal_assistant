@@ -584,19 +584,42 @@ class ExtensionSupervisorService:
             self._active.discard(extension_id)
 
     async def _quarantine(self, record: ExtensionRecord, exc: Exception) -> None:
-        self._registry.disable(record.manifest.id)
-        # The call snapshot may be stale: a concurrent disable/uninstall/upgrade
-        # owns the newer durable state and must not be overwritten by a stale
-        # quarantine write.
-        current = await self._store.get(record.manifest.id)
+        extension_id = record.manifest.id
+        # Verify the durable owner *before* touching the registry: a late
+        # failure from an old worker must never remove a newer version from the
+        # registry while the database still reports it as ENABLED.
+        current = await self._store.get(extension_id)
         if (
             current is None
             or current.state is not ExtensionState.ENABLED
             or current.manifest.version != record.manifest.version
         ):
             return
-        quarantined = replace(current, state=ExtensionState.QUARANTINED)
-        await self._store.save(quarantined)
+        self._registry.disable(extension_id)
+        # Guard the check/disable window against a concurrent upgrade: if the
+        # durable owner changed in between, restore its registration.
+        after = await self._store.get(extension_id)
+        if (
+            after is None
+            or after.state is not ExtensionState.ENABLED
+            or after.manifest.version != record.manifest.version
+        ):
+            if after is not None and after.state is ExtensionState.ENABLED:
+                self._registry.enable(after)
+            return
+        # Atomic compare-and-set: only the exact durable state observed above
+        # may be quarantined.  A concurrent disable/update wins and is kept.
+        applied = await self._store.save(
+            replace(after, state=ExtensionState.QUARANTINED),
+            expected=(ExtensionState.ENABLED, after.manifest.version),
+        )
+        # ``applied is False`` is an explicit CAS failure; stores that do not
+        # implement CAS return None and are treated as having written.
+        if applied is False:
+            fresh = await self._store.get(extension_id)
+            if fresh is not None and fresh.state is ExtensionState.ENABLED:
+                self._registry.enable(fresh)
+            return
         await self._record_operation(
             record.manifest.id,
             "quarantine",

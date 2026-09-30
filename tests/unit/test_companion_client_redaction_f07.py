@@ -55,6 +55,20 @@ def _handler_factory(behaviour: str):
     return handler
 
 
+class CompanionUrlTests(unittest.TestCase):
+    def test_ipv6_loopback_is_bracketed(self) -> None:
+        client = LoopbackCompanionClient(
+            base_url="http://[::1]:8765", root_capability="cap"
+        )
+        self.assertEqual("http://[::1]:8765", client._base_url)
+
+    def test_ipv4_and_localhost_are_unchanged(self) -> None:
+        for raw in ("http://127.0.0.1:8765", "http://localhost:8765"):
+            with self.subTest(raw=raw):
+                client = LoopbackCompanionClient(base_url=raw, root_capability="cap")
+                self.assertEqual(raw, client._base_url)
+
+
 class CapabilityRedactionTests(unittest.IsolatedAsyncioTestCase):
     """Six independent failure paths, each checked for capability leakage."""
 

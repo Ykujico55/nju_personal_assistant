@@ -19,6 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -61,6 +62,7 @@ from personal_assistant.domain import (
     TaskState,
     ToolCall,
     ToolDescriptor,
+    ToolOutcomeKind,
     ValidationError,
     utc_now,
 )
@@ -560,6 +562,86 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
             1, await self._fetchval(adapters, "SELECT count(*) FROM side_effect_intents")
         )
         self.assertEqual("WAITING_APPROVAL", (await approval_service.get(waiting.id)).state.value)
+
+    async def test_gateway_finalization_survives_repeated_cancellation(self) -> None:
+        adapters = await self.migrate()
+        service = self.task_service(adapters)
+        task = await service.create(objective="finalize", idempotency_key="finalize-1")
+        approvals = ApprovalService(adapters.approval_repository)
+        registry = ToolRegistry()
+        registry.publish(
+            (
+                ToolDescriptor(
+                    id="test.external",
+                    version="1",
+                    extension_id="test.extension",
+                    extension_version="0.1.0",
+                    risk=RiskLevel.EXTERNAL_WRITE,
+                    input_schema={"type": "object"},
+                    output_schema={"type": "object"},
+                ),
+            )
+        )
+        gateway = ToolGateway(
+            registry=registry,
+            policy=ToolPolicy(),
+            approvals=approvals,
+            executor=_Executor(),
+            outbox=adapters.side_effect_outbox,
+        )
+        call = ToolCall(
+            tool_id="test.external",
+            tool_version="1",
+            arguments={"value": 1},
+            task_id=task.id,
+            target={"recipient": "target-1"},
+            workflow_allowed_tools=frozenset({"test.external"}),
+        )
+        requested = await gateway.invoke(call)
+        self.assertEqual(requested.kind, ToolOutcomeKind.APPROVAL_REQUIRED)
+        approval_id = requested.approval_id or ""
+        prepared = await approvals.get(approval_id)
+        await approvals.approve(approval_id, nonce=prepared.nonce, actor_id="owner")
+        started = asyncio.Event()
+        release = asyncio.Event()
+        original_finalize = adapters.side_effect_outbox.finalize
+
+        async def delayed_finalize(*args: Any, **kwargs: Any) -> None:
+            started.set()
+            await release.wait()
+            await original_finalize(*args, **kwargs)
+
+        with patch.object(
+            adapters.side_effect_outbox, "finalize", side_effect=delayed_finalize
+        ):
+            invocation = asyncio.create_task(
+                gateway.invoke(
+                    ToolCall(
+                        tool_id=call.tool_id,
+                        tool_version=call.tool_version,
+                        arguments=call.arguments,
+                        task_id=call.task_id,
+                        target=call.target,
+                        workflow_allowed_tools=call.workflow_allowed_tools,
+                        approval_id=approval_id,
+                    )
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=3)
+            invocation.cancel()
+            await asyncio.sleep(0)
+            invocation.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(invocation, timeout=3)
+
+        rows = await self._fetch(
+            adapters,
+            "SELECT state FROM side_effect_intents WHERE approval_id = $1",
+            approval_id,
+        )
+        self.assertEqual(rows[0]["state"], "SUCCEEDED")
+        self.assertEqual((await approvals.get(approval_id)).state.value, "SUCCEEDED")
 
     async def test_approval_unknown_survives_restart(self) -> None:
         adapters = await self.migrate()

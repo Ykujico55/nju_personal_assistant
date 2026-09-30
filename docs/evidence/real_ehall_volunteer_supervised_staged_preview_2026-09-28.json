@@ -1,0 +1,13 @@
+{
+  "acceptance_complete": false,
+  "blocked_mutating_requests": 0,
+  "captured_at": "2026-09-28T15:17:17.732848+00:00",
+  "error_type": "BrowserPolicyError",
+  "last_fill_locator": "ctl:1:1",
+  "mode": "preview-current-volunteer",
+  "reviewer_option_count": 8,
+  "state": "FILL_FAILED",
+  "submitted": false,
+  "supervised": true,
+  "visible_college": true
+}

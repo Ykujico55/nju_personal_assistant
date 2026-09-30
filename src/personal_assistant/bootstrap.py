@@ -237,6 +237,7 @@ def _build_browser_broker(
         sessions=sessions,
         adapters=adapters,
         allowed_origins=frozenset(settings.browser_allowed_origins),
+        origin_mode=settings.browser_origin_mode,
         submit_enabled=settings.browser_submit_enabled,
     )
 

@@ -356,6 +356,7 @@ class Settings:
     mail_max_message_bytes: int = 2 * 1024 * 1024
     browser_companion_url: str = ""
     browser_allowed_origins: tuple[str, ...] = ()
+    browser_origin_mode: str = "open"
     browser_submit_enabled: bool = False
 
     def __post_init__(self) -> None:
@@ -456,6 +457,9 @@ class Settings:
             "browser_allowed_origins",
             normalize_browser_origins(tuple(self.browser_allowed_origins)),
         )
+        object.__setattr__(
+            self, "browser_origin_mode", self.browser_origin_mode.strip().lower()
+        )
         self.validate()
 
     @classmethod
@@ -517,6 +521,9 @@ class Settings:
                     for item in os.getenv("PA_BROWSER_ALLOWED_ORIGINS", "").split(",")
                     if item.strip()
                 )
+            ),
+            browser_origin_mode=os.getenv(
+                "PA_BROWSER_ORIGIN_MODE", "open"
             ),
             browser_submit_enabled=_env_bool("PA_BROWSER_SUBMIT_ENABLED", False),
         )
@@ -657,7 +664,15 @@ class Settings:
             raise ConfigurationError(
                 "PA_BROWSER_COMPANION_URL must be stored in normalized loopback form"
             )
-        if self.browser_companion_url and not self.browser_allowed_origins:
+        if self.browser_origin_mode not in {"allowlist", "open"}:
+            raise ConfigurationError(
+                "PA_BROWSER_ORIGIN_MODE must be allowlist or open"
+            )
+        if (
+            self.browser_companion_url
+            and self.browser_origin_mode == "allowlist"
+            and not self.browser_allowed_origins
+        ):
             raise ConfigurationError(
                 "PA_BROWSER_COMPANION_URL requires at least one PA_BROWSER_ALLOWED_ORIGINS entry"
             )

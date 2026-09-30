@@ -32,6 +32,7 @@ from personal_assistant.core.browser import (
     AdapterActionSpec,
     AdapterFieldSpec,
     AttachmentPreview,
+    BrowserPolicyError,
     BrowserSessionState,
     BrowserSessionStateError,
     BrowserUnavailableError,
@@ -53,7 +54,9 @@ from tests.support.mail_servers import generate_tls_pair
 from tests.support.mock_ehall_site import (
     APP_PAGE_FINGERPRINT,
     APP_PATH,
+    FRAME_SHELL_PATH,
     LOGIN_PATH,
+    POPUP_PORTAL_PATH,
     PORTAL_PATH,
     STATUS_PATH,
     TEST_PASSWORD,
@@ -76,6 +79,7 @@ def _adapter(
     fingerprints: tuple[str, ...] = (APP_PAGE_FINGERPRINT,),
     *,
     actions_override: tuple[AdapterActionSpec, ...] | None = None,
+    additional_fields: tuple[AdapterFieldSpec, ...] = (),
 ) -> TransactionAdapterDescriptor:
     if actions_override is not None:
         return _adapter_with_actions(origin, fingerprints, actions_override)
@@ -113,7 +117,7 @@ def _adapter(
                 required=True,
                 locator="ctl:1:0",
             ),
-        ),
+        ) + additional_fields,
         actions=(
             AdapterActionSpec(
                 action_id="proof.submit",
@@ -204,6 +208,7 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
             cf_access_aud=None,
             browser_companion_url=self.companion.url,
             browser_allowed_origins=(self.site.origin,),
+            browser_origin_mode="allowlist",
             browser_submit_enabled=True,
         )
         self.client = LoopbackCompanionClient(
@@ -309,6 +314,119 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
         )
         return session_id, snapshot
 
+    async def reach_prepared_with_successful_controls(
+        self, *, consent_checked: bool
+    ) -> tuple[str, object]:
+        session_id = await self.reach_authenticated()
+        query = "?successfulControls=1"
+        if consent_checked:
+            query += "&consentChecked=1"
+        app_url = self.site.url(APP_PATH + query)
+
+        # Read this deterministic local fixture once so the adapter can pin
+        # the exact test-page version containing checkbox/radio/disabled
+        # controls.  It is a GET against the local mock, before any fill/write.
+        await self.client.navigate(session_id, app_url, login_paths=(LOGIN_PATH,))
+        from personal_assistant.core.browser import (
+            compute_page_fingerprint,
+            page_structure_document,
+        )
+
+        raw = await self.client.snapshot(session_id, scan_text=True)
+        structure = raw["structure"]
+        observed_fingerprint = compute_page_fingerprint(
+            page_structure_document(
+                controls=structure.get("controls", ()),
+                headings=structure.get("headings", ()),
+                links=raw.get("links", ()),
+                forms=structure.get("forms", ()),
+                hidden_fields=structure.get("hidden_fields", ()),
+            )
+        )
+        additional_fields = (
+            AdapterFieldSpec(
+                field_id="consent",
+                label="同意办理",
+                kind="checkbox",
+                required=False,
+                locator="ctl:0:2",
+            ),
+            AdapterFieldSpec(
+                field_id="channel_email",
+                label="电子领取",
+                kind="radio",
+                required=False,
+                locator="ctl:0:3",
+            ),
+            AdapterFieldSpec(
+                field_id="channel_paper",
+                label="纸质领取",
+                kind="radio",
+                required=False,
+                locator="ctl:0:4",
+            ),
+            AdapterFieldSpec(
+                field_id="disabled_note",
+                label="站点禁用备注",
+                kind="text",
+                required=False,
+                locator="ctl:0:5",
+            ),
+        )
+        await self.broker.register_adapter(
+            _adapter(
+                self.site.origin,
+                (observed_fingerprint,),
+                additional_fields=additional_fields,
+            )
+        )
+        snapshot = await self.navigate(session_id, app_url)
+        await self.broker.record_discovery(
+            session_id, extension_id=EXTENSION_ID, app_count=5
+        )
+        await self.broker.record_preparation(
+            session_id,
+            extension_id=EXTENSION_ID,
+            adapter_id=ADAPTER_ID,
+            adapter_version=ADAPTER_VERSION,
+            app_id="proof",
+            transaction_id=TRANSACTION_ID,
+            page_fingerprint=snapshot.fingerprint,  # type: ignore[attr-defined]
+            planned_fields=7,
+        )
+        return session_id, snapshot
+
+    def successful_controls_plan(
+        self, snapshot: object, *, consent_value: str
+    ) -> FillPlan:
+        base = self.plan(snapshot)
+        live = {item.field_id: item for item in snapshot.fields}  # type: ignore[attr-defined]
+        extra = (
+            FieldChange(
+                "consent", "ctl:0:2", "同意办理", live["consent"].value,
+                consent_value,
+            ),
+            FieldChange(
+                "channel_email", "ctl:0:3", "电子领取",
+                live["channel_email"].value, "false",
+            ),
+            FieldChange(
+                "channel_paper", "ctl:0:4", "纸质领取",
+                live["channel_paper"].value, "true",
+            ),
+        )
+        return FillPlan(
+            adapter_id=base.adapter_id,
+            adapter_version=base.adapter_version,
+            transaction_id=base.transaction_id,
+            expected_origin=base.expected_origin,
+            expected_page_fingerprint=base.expected_page_fingerprint,
+            app_id=base.app_id,
+            fields=(*base.fields, *extra),
+            consequences=base.consequences,
+            attachments=base.attachments,
+        )
+
     def plan(
         self,
         snapshot: object,
@@ -389,6 +507,116 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(flagged, {"退课申请", "在线缴费", "选课变更"})
         self.assertEqual(assessment.risk, RiskLevel.READ)
 
+    async def test_operator_can_capture_a_user_opened_popup_without_writes(self) -> None:
+        session_id = await self.reach_authenticated()
+        await self.client.navigate(session_id, self.site.url(POPUP_PORTAL_PATH))
+        from playwright.async_api import async_playwright
+
+        assert self.companion.cdp_port
+        async with async_playwright() as playwright_api:
+            cdp = await playwright_api.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{self.companion.cdp_port}"
+            )
+            try:
+                page = next(
+                    item for item in cdp.contexts[0].pages
+                    if POPUP_PORTAL_PATH in item.url
+                )
+                async with page.expect_popup() as popup_event:
+                    await page.click("#open-popup")
+                popup = await popup_event.value
+                await popup.wait_for_load_state("domcontentloaded")
+            finally:
+                await cdp.close()
+        adopted = await self.client.adopt_opened_page(session_id)
+        self.assertTrue(adopted["adopted"])
+        snapshot = await self.client.snapshot(session_id, scan_text=False)
+        self.assertIn(APP_PATH, snapshot["url"])
+        self.assertEqual(0, self.site.submission_count())
+
+    async def test_companion_selects_nested_transaction_frame(self) -> None:
+        session_id = await self.reach_authenticated()
+        await self.client.navigate(session_id, self.site.url(FRAME_SHELL_PATH))
+        selected = await self.client.select_frame(
+            session_id, origin=self.site.origin, path=APP_PATH
+        )
+        self.assertEqual(APP_PATH, selected["path"])
+        snapshot = await self.client.snapshot(session_id, scan_text=False)
+        self.assertEqual(self.site.url(APP_PATH), snapshot["url"])
+        self.assertEqual("reason", snapshot["structure"]["controls"][0]["name"])
+        self.assertEqual(0, self.site.submission_count())
+
+    async def test_nested_frame_reaches_broker_preview_without_submit(self) -> None:
+        session_id = await self.reach_authenticated()
+        await self.client.navigate(session_id, self.site.url(FRAME_SHELL_PATH))
+        await self.client.select_frame(
+            session_id, origin=self.site.origin, path=APP_PATH
+        )
+        snapshot, assessment = await self.broker.snapshot(
+            session_id,
+            extension_id=EXTENSION_ID,
+            adapter_id=ADAPTER_ID,
+            transaction_id=TRANSACTION_ID,
+        )
+        self.assertFalse(assessment.prohibited)
+        await self.broker.record_discovery(
+            session_id, extension_id=EXTENSION_ID, app_count=1
+        )
+        await self.broker.record_preparation(
+            session_id,
+            extension_id=EXTENSION_ID,
+            adapter_id=ADAPTER_ID,
+            adapter_version=ADAPTER_VERSION,
+            app_id="proof",
+            transaction_id=TRANSACTION_ID,
+            page_fingerprint=snapshot.fingerprint,
+            planned_fields=3,
+        )
+        preview = await self.fill(session_id, self.plan(snapshot))
+        self.assertEqual("proof.submit", preview.target_action_id)
+        self.assertEqual(0, self.site.submission_count())
+        record = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(BrowserSessionState.PREVIEW_READY, record.state)
+
+    async def test_explicit_open_mode_reaches_another_https_origin(self) -> None:
+        other_site = MockEhallSite(self.tls)
+        other_site.start()
+        open_session = "browser-open-mode"
+        strict_session = "browser-allowlist-mode"
+        try:
+            await self.client.create_session(
+                session_id=open_session,
+                purpose="read-only open-origin test",
+                allowed_origins=(self.site.origin,),
+                origin_mode="open",
+                task_id=TASK_ID,
+                extension_id=EXTENSION_ID,
+            )
+            reached = await self.client.navigate(
+                open_session, other_site.url(PORTAL_PATH)
+            )
+            self.assertEqual(other_site.origin, reached["origin"])
+            status = await self.client.status(open_session)
+            self.assertEqual(0, status["blocked_origin_requests"])
+            self.assertEqual(0, other_site.submission_count())
+
+            await self.client.create_session(
+                session_id=strict_session,
+                purpose="read-only allowlist test",
+                allowed_origins=(self.site.origin,),
+                origin_mode="allowlist",
+                task_id=TASK_ID,
+                extension_id=EXTENSION_ID,
+            )
+            with self.assertRaises(BrowserPolicyError):
+                await self.client.navigate(
+                    strict_session, other_site.url(PORTAL_PATH)
+                )
+        finally:
+            await self.client.close_session(open_session)
+            await self.client.close_session(strict_session)
+            other_site.stop()
+
     async def test_fill_reaches_preview_ready_and_stops_before_submit(self) -> None:
         session_id, snapshot = await self.reach_prepared()
         preview = await self.fill(session_id, self.plan(snapshot))
@@ -426,6 +654,14 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
                     session_id, extension_id=EXTENSION_ID
                 )
                 self.assertGreaterEqual(status.blocked_mutating_requests, 1)
+                driver = await self._driver_diagnostics(session_id)
+                self.assertTrue(
+                    any(
+                        item["method"] == "POST"
+                        for item in driver["blocked_request_samples"]
+                    )
+                )
+                self.assertNotIn("?", str(driver["blocked_request_samples"]))
                 await self.broker.cancel_session(session_id, extension_id=EXTENSION_ID)
                 self._sessions.remove(session_id)
 
@@ -763,6 +999,56 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
         _, status = await self.broker.session_status(session_id, extension_id=EXTENSION_ID)
         self.assertEqual(status.click_operations, 1)
 
+    async def test_successful_controls_use_browser_checkbox_radio_and_disabled_semantics(
+        self,
+    ) -> None:
+        session_id, snapshot = await self.reach_prepared_with_successful_controls(
+            consent_checked=True
+        )
+        preview = await self.fill(
+            session_id,
+            self.successful_controls_plan(snapshot, consent_value="true"),
+        )
+        outcome = await self.broker.execute_submit(
+            session_id,
+            task_id=TASK_ID,
+            extension_id=EXTENSION_ID,
+            preview_hash=preview.canonical_payload_hash,  # type: ignore[attr-defined]
+            preview_nonce=preview.nonce,  # type: ignore[attr-defined]
+            action_id="proof.submit",
+        )
+
+        self.assertEqual(outcome.state, BrowserSessionState.SUCCEEDED)
+        self.assertEqual(self.site.submission_count(), 1)
+        submitted = self.site.state.submissions[-1]
+        self.assertEqual(submitted["consent"], "accepted")
+        self.assertEqual(submitted["channel"], "paper")
+        self.assertEqual(submitted["disabled_note"], "")
+
+    async def test_unchecked_checkbox_is_omitted_from_successful_controls(self) -> None:
+        session_id, snapshot = await self.reach_prepared_with_successful_controls(
+            consent_checked=False
+        )
+        preview = await self.fill(
+            session_id,
+            self.successful_controls_plan(snapshot, consent_value="false"),
+        )
+        outcome = await self.broker.execute_submit(
+            session_id,
+            task_id=TASK_ID,
+            extension_id=EXTENSION_ID,
+            preview_hash=preview.canonical_payload_hash,  # type: ignore[attr-defined]
+            preview_nonce=preview.nonce,  # type: ignore[attr-defined]
+            action_id="proof.submit",
+        )
+
+        self.assertEqual(outcome.state, BrowserSessionState.SUCCEEDED)
+        self.assertEqual(self.site.submission_count(), 1)
+        submitted = self.site.state.submissions[-1]
+        self.assertEqual(submitted["consent"], "")
+        self.assertEqual(submitted["channel"], "paper")
+        self.assertEqual(submitted["disabled_note"], "")
+
     async def test_a_lost_submit_without_tracking_evidence_stays_unknown(self) -> None:
         session_id, snapshot = await self.reach_prepared()
         self.site.set_lose_response(True)
@@ -906,6 +1192,162 @@ class BrowserCompanionRealTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)
         self.assertEqual(self.site.submission_count(), 0)
+
+    async def test_an_injected_hidden_field_aborts_the_write(self) -> None:
+        session_id, snapshot = await self.reach_prepared(query="?payloadDrift=1")
+        preview = await self.fill(session_id, self.plan(snapshot))
+        outcome = await self.broker.execute_submit(
+            session_id,
+            task_id=TASK_ID,
+            extension_id=EXTENSION_ID,
+            preview_hash=preview.canonical_payload_hash,  # type: ignore[attr-defined]
+            preview_nonce=preview.nonce,  # type: ignore[attr-defined]
+            action_id="proof.submit",
+        )
+        # The approved payload was rewritten at submit time: the bound write is
+        # aborted, nothing reaches the server and the result stays UNKNOWN.
+        self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(self.site.submission_count(), 0)
+        driver = await self._driver_diagnostics(session_id)
+        self.assertGreaterEqual(driver["payload_mismatches"], 1)
+
+    async def test_a_tracking_redirect_aborts_the_submit_before_the_click(self) -> None:
+        session_id, snapshot = await self.reach_prepared()
+        self.site.set_tracking_redirect(True)
+        preview = await self.fill(session_id, self.plan(snapshot))
+        with self.assertRaises(Exception) as caught:
+            await self.broker.execute_submit(
+                session_id,
+                task_id=TASK_ID,
+                extension_id=EXTENSION_ID,
+                preview_hash=preview.canonical_payload_hash,  # type: ignore[attr-defined]
+                preview_nonce=preview.nonce,  # type: ignore[attr-defined]
+                action_id="proof.submit",
+            )
+        self.assertEqual(
+            getattr(caught.exception, "reason", ""), "TRACKING_URL_MISMATCH"
+        )
+        self.assertEqual(self.site.submission_count(), 0)
+        _, status = await self.broker.session_status(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(status.click_operations, 0)
+
+    async def test_reconcile_never_mints_a_proof_from_a_redirected_page(self) -> None:
+        session_id, snapshot = await self.reach_prepared(query="?fakeReceipt=1")
+        preview = await self.fill(session_id, self.plan(snapshot))
+        outcome = await self.broker.execute_submit(
+            session_id,
+            task_id=TASK_ID,
+            extension_id=EXTENSION_ID,
+            preview_hash=preview.canonical_payload_hash,  # type: ignore[attr-defined]
+            preview_nonce=preview.nonce,  # type: ignore[attr-defined]
+            action_id="proof.submit",
+        )
+        self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)
+        self.site.set_tracking_redirect(True)
+        record = await self.broker.reconcile(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(record.diagnostic_code, "RECONCILE_UNSAFE")
+        self.assertIsNone(record.receipt)
+
+    async def test_companion_is_reachable_immediately_after_its_handshake(self) -> None:
+        for _ in range(3):
+            process = await start_companion()
+            client = LoopbackCompanionClient(
+                base_url=process.url, root_capability=process.capability
+            )
+            try:
+                diagnostics = await client.diagnostics()
+                self.assertEqual(0, diagnostics["session_count"])
+            finally:
+                await client.aclose()
+                await process.stop()
+
+    async def test_static_hidden_token_is_submittable_and_never_exported(self) -> None:
+        from personal_assistant.core.browser import (
+            compute_page_fingerprint,
+            page_structure_document,
+        )
+
+        session_id = await self.reach_authenticated()
+        # Pin the variant page that carries a CSRF-style hidden token.
+        await self.client.navigate(session_id, self.site.url(APP_PATH + "?staticToken=1"))
+        raw = await self.client.snapshot(session_id, scan_text=True)
+        structure = raw["structure"]
+        variant = compute_page_fingerprint(
+            page_structure_document(
+                controls=structure.get("controls", ()),
+                headings=structure.get("headings", ()),
+                links=raw.get("links", ()),
+                forms=structure.get("forms", ()),
+                hidden_fields=structure.get("hidden_fields", ()),
+            )
+        )
+        hidden = [
+            item
+            for item in structure.get("hidden_fields", [])
+            if item.get("name") == "csrf"
+        ]
+        self.assertEqual(1, len(hidden))
+        # Hidden inputs are pinned by name/type only; the token value stays
+        # inside the browser process and never appears in the snapshot.
+        self.assertNotIn("value", hidden[0])
+        import json as _json
+
+        self.assertNotIn("static-token-1", _json.dumps(raw, ensure_ascii=False))
+        await self.broker.register_adapter(
+            _adapter(self.site.origin, (APP_PAGE_FINGERPRINT, variant))
+        )
+        snapshot = await self.navigate(session_id, self.site.url(APP_PATH + "?staticToken=1"))
+        await self.broker.record_discovery(
+            session_id, extension_id=EXTENSION_ID, app_count=5
+        )
+        await self.broker.record_preparation(
+            session_id,
+            extension_id=EXTENSION_ID,
+            adapter_id=ADAPTER_ID,
+            adapter_version=ADAPTER_VERSION,
+            app_id="proof",
+            transaction_id=TRANSACTION_ID,
+            page_fingerprint=snapshot.fingerprint,  # type: ignore[attr-defined]
+            planned_fields=3,
+        )
+        preview = await self.fill(session_id, self.plan(snapshot))
+        outcome = await self.broker.execute_submit(
+            session_id,
+            task_id=TASK_ID,
+            extension_id=EXTENSION_ID,
+            preview_hash=preview.canonical_payload_hash,  # type: ignore[attr-defined]
+            preview_nonce=preview.nonce,  # type: ignore[attr-defined]
+            action_id="proof.submit",
+        )
+        # The static hidden field (never approved) does not break the bound
+        # write, and success still comes from the host tracking proof.
+        self.assertEqual(outcome.state, BrowserSessionState.SUCCEEDED)
+        self.assertEqual(self.site.submission_count(), 1)
+        self.assertTrue(
+            all(
+                field.kind not in {"hidden", "password"}
+                for field in snapshot.fields  # type: ignore[attr-defined]
+            )
+        )
+
+    async def test_a_tracking_query_redirect_never_mints_a_proof(self) -> None:
+        session_id, snapshot = await self.reach_prepared(query="?fakeReceipt=1")
+        preview = await self.fill(session_id, self.plan(snapshot))
+        outcome = await self.broker.execute_submit(
+            session_id,
+            task_id=TASK_ID,
+            extension_id=EXTENSION_ID,
+            preview_hash=preview.canonical_payload_hash,  # type: ignore[attr-defined]
+            preview_nonce=preview.nonce,  # type: ignore[attr-defined]
+            action_id="proof.submit",
+        )
+        self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)
+        self.site.set_tracking_query_redirect(True)
+        record = await self.broker.reconcile(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(record.diagnostic_code, "RECONCILE_UNSAFE")
+        self.assertIsNone(record.receipt)
 
     async def test_tracking_collection_is_bounded_and_host_side(self) -> None:
         self.site.seed_receipt("NJU-2026-0001")

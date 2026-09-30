@@ -43,6 +43,7 @@ class CompanionSession:
     task_id: str
     extension_id: str
     allowed_origins: tuple[str, ...]
+    origin_mode: str
     capability: str
     created_at: float
     expires_at: float
@@ -59,6 +60,7 @@ class CompanionSession:
             "purpose": self.purpose,
             "task_id": self.task_id,
             "extension_id": self.extension_id,
+            "origin_mode": self.origin_mode,
             "expires_at": self.expires_at,
             "revoked": self.revoked,
         }
@@ -111,13 +113,16 @@ class DesktopCompanion:
         session_id: str,
         purpose: str,
         allowed_origins: Sequence[str],
+        origin_mode: str = "allowlist",
         task_id: str,
         extension_id: str,
         token: str,
     ) -> Mapping[str, Any]:
         self._require_root(token)
         origins = tuple(dict.fromkeys(str(item) for item in allowed_origins))
-        if not origins:
+        if origin_mode not in {"allowlist", "open"}:
+            raise CompanionError("ORIGIN_MODE_INVALID", "unknown browser origin mode")
+        if origin_mode == "allowlist" and not origins:
             raise CompanionError("ORIGINS_REQUIRED", "at least one origin is required")
         now = self._now()
         await self._sweep(now)
@@ -128,13 +133,16 @@ class DesktopCompanion:
                 )
             if session_id in self._sessions:
                 raise CompanionError("SESSION_EXISTS", "session id already exists", status=409)
-            driver = self._driver_factory(allowed_origins=origins, **self._driver_options)
+            driver = self._driver_factory(
+                allowed_origins=origins, origin_mode=origin_mode, **self._driver_options
+            )
             session = CompanionSession(
                 session_id=session_id,
                 purpose=purpose[:500],
                 task_id=task_id[:200],
                 extension_id=extension_id[:200],
                 allowed_origins=origins,
+                origin_mode=origin_mode,
                 capability=secrets.token_urlsafe(32),
                 created_at=now,
                 expires_at=now + self._ttl,
@@ -180,7 +188,11 @@ class DesktopCompanion:
         self, session_id: str, *, url: str, login_paths: Sequence[str], token: str
     ) -> Mapping[str, Any]:
         session = await self._require_session(session_id, token)
-        decision = evaluate_navigation(url, allowed_origins=set(session.allowed_origins))
+        decision = evaluate_navigation(
+            url,
+            allowed_origins=set(session.allowed_origins),
+            origin_mode=session.origin_mode,
+        )
         if not decision.allowed:
             raise CompanionError("NAVIGATION_DENIED", decision.reason, status=403)
         try:
@@ -206,6 +218,31 @@ class DesktopCompanion:
                     login_paths=tuple(login_paths),
                 )
             )
+        except Exception as exc:
+            raise self._driver_error(exc) from exc
+
+    async def adopt_opened_page(
+        self, session_id: str, *, token: str
+    ) -> Mapping[str, Any]:
+        session = await self._require_session(session_id, token)
+        try:
+            return dict(await session.driver.adopt_opened_page())
+        except Exception as exc:
+            raise self._driver_error(exc) from exc
+
+    async def select_frame(
+        self, session_id: str, *, origin: str, path: str, token: str
+    ) -> Mapping[str, Any]:
+        session = await self._require_session(session_id, token)
+        decision = evaluate_navigation(
+            origin + path,
+            allowed_origins=set(session.allowed_origins),
+            origin_mode=session.origin_mode,
+        )
+        if not decision.allowed or decision.origin != origin or decision.path != path:
+            raise CompanionError("NAVIGATION_DENIED", decision.reason, status=403)
+        try:
+            return dict(await session.driver.select_frame(origin=origin, path=path))
         except Exception as exc:
             raise self._driver_error(exc) from exc
 
@@ -278,6 +315,8 @@ class DesktopCompanion:
         expected_method: str,
         expected_origin: str,
         expected_path: str,
+        expected_payload_sha256: str,
+        expected_payload_locators: str,
         token: str,
     ) -> Mapping[str, Any]:
         session = await self._require_session(session_id, token)
@@ -298,6 +337,8 @@ class DesktopCompanion:
                     expected_method=expected_method,
                     expected_origin=expected_origin,
                     expected_path=expected_path,
+                    expected_payload_sha256=expected_payload_sha256,
+                    expected_payload_locators=expected_payload_locators,
                 )
             )
         except Exception as exc:
@@ -373,6 +414,11 @@ class DesktopCompanion:
         if not self._token_matches(token, session.capability):
             raise CompanionError("CAPABILITY_INVALID", "invalid capability", status=401)
         return session
+
+    def require_root(self, token: str) -> None:
+        """Public root-capability check (used before parsing request bodies)."""
+
+        self._require_root(token)
 
     def _require_root(self, token: str) -> None:
         if not self._token_matches(token, self._root_capability):

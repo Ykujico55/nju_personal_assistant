@@ -350,7 +350,7 @@ def _snapshot_view(
                 "field_id": item.field_id,
                 "locator": item.locator,
                 "kind": item.kind,
-                "value": item.value,
+                "value": "" if item.kind in {"hidden", "password"} else item.value,
                 "name": item.name,
                 "required": item.required,
                 "readonly": item.readonly,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 
-from personal_assistant.core.extensions.models import ExtensionRecord
+from personal_assistant.core.extensions.models import ExtensionRecord, ExtensionState
 
 
 class InMemoryLifecycleStore:
@@ -24,6 +24,18 @@ class InMemoryLifecycleStore:
                 deepcopy(self._records[key]) for key in sorted(self._records)
             )
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self,
+        record: ExtensionRecord,
+        *,
+        expected: tuple[ExtensionState, str] | None = None,
+    ) -> bool:
         async with self._lock:
+            current = self._records.get(record.manifest.id)
+            if expected is not None and (
+                current is None
+                or (current.state, current.manifest.version) != expected
+            ):
+                return False
             self._records[record.manifest.id] = deepcopy(record)
+            return True

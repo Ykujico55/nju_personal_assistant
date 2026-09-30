@@ -7,6 +7,7 @@ storage state, passwords, verification codes or screenshots.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -42,28 +43,83 @@ def _pairs(value: Any) -> tuple[tuple[str, str], ...]:
     return tuple(pairs)
 
 
+def _too_large_body() -> bytes:
+    return (
+        b'{"error": {"code": "REQUEST_TOO_LARGE", '
+        b'"message": "request body is too large"}}'
+    )
+
+
+async def _send_too_large(send: Any) -> None:
+    body = _too_large_body()
+    await send(
+        {
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})
+
+
+class _BodyLimitMiddleware:
+    """Counts the real received bytes, so chunked bodies cannot bypass the cap."""
+
+    def __init__(self, app: Any, *, limit: int) -> None:
+        self.app = app
+        self.limit = limit
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        declared: int | None = None
+        raw_length = headers.get("content-length")
+        if raw_length is not None:
+            with contextlib.suppress(ValueError):
+                declared = int(raw_length)
+        if declared is not None and declared > self.limit:
+            await _send_too_large(send)
+            return
+        received = 0
+        too_large = False
+
+        async def counting_receive() -> Any:
+            nonlocal received, too_large
+            message = await receive()
+            if message.get("type") == "http.request":
+                received += len(message.get("body", b""))
+                if received > self.limit:
+                    too_large = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message: Any) -> None:
+            if too_large:
+                return
+            await send(message)
+
+        try:
+            await self.app(scope, counting_receive, guarded_send)
+        except Exception:
+            # An oversized body may surface as a disconnect inside the app;
+            # that must become a 413, never a 500.
+            if not too_large:
+                raise
+        if too_large:
+            await _send_too_large(send)
+
+
 def create_companion_app(companion: DesktopCompanion) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-
-    @app.middleware("http")
-    async def _limit_body(request: Request, call_next: Any) -> Any:
-        raw_length = request.headers.get("content-length")
-        if raw_length is not None:
-            try:
-                length = int(raw_length)
-            except ValueError:
-                length = MAX_REQUEST_BODY_BYTES + 1
-            if length > MAX_REQUEST_BODY_BYTES:
-                return JSONResponse(
-                    status_code=413,
-                    content={
-                        "error": {
-                            "code": "REQUEST_TOO_LARGE",
-                            "message": "request body is too large",
-                        }
-                    },
-                )
-        return await call_next(request)
+    app.add_middleware(_BodyLimitMiddleware, limit=MAX_REQUEST_BODY_BYTES)
 
     @app.exception_handler(CompanionError)
     async def _handle(_: Request, exc: CompanionError) -> JSONResponse:
@@ -76,11 +132,13 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
     async def create_session(
         request: Request, authorization: str | None = Header(default=None)
     ) -> Mapping[str, Any]:
+        companion.require_root(_token(authorization))
         body = await request.json()
         return await companion.create_session(
             session_id=str(body.get("session_id", "")),
             purpose=str(body.get("purpose", "")),
             allowed_origins=_strings(body.get("allowed_origins", ())),
+            origin_mode=str(body.get("origin_mode", "allowlist")),
             task_id=str(body.get("task_id", "")),
             extension_id=str(body.get("extension_id", "")),
             token=_token(authorization),
@@ -122,6 +180,29 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
             prohibited_terms=_strings(body.get("prohibited_terms", ())),
             scan_text=bool(body.get("scan_text", False)),
             login_paths=_strings(body.get("login_paths", ())),
+            token=_token(authorization),
+        )
+
+    @app.post("/v1/sessions/{session_id}/adopt-opened-page")
+    async def adopt_opened_page(
+        session_id: str, authorization: str | None = Header(default=None)
+    ) -> Mapping[str, Any]:
+        return await companion.adopt_opened_page(
+            session_id, token=_token(authorization)
+        )
+
+    @app.post("/v1/sessions/{session_id}/select-frame")
+    async def select_frame(
+        session_id: str,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ) -> Mapping[str, Any]:
+        await companion.authorize(session_id, token=_token(authorization))
+        body = await request.json()
+        return await companion.select_frame(
+            session_id,
+            origin=str(body.get("origin", "")),
+            path=str(body.get("path", "")),
             token=_token(authorization),
         )
 
@@ -196,6 +277,8 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
             expected_method=str(body.get("expected_method", "")),
             expected_origin=str(body.get("expected_origin", "")),
             expected_path=str(body.get("expected_path", "")),
+            expected_payload_sha256=str(body.get("expected_payload_sha256", "")),
+            expected_payload_locators=str(body.get("expected_payload_locators", "")),
             token=_token(authorization),
         )
 
@@ -217,6 +300,7 @@ def create_companion_app(companion: DesktopCompanion) -> FastAPI:
     async def revoke(
         request: Request, authorization: str | None = Header(default=None)
     ) -> Mapping[str, Any]:
+        companion.require_root(_token(authorization))
         body = await request.json()
         await companion.revoke(
             session_id=str(body.get("session_id", "")), token=_token(authorization)

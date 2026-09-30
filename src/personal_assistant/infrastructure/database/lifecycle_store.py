@@ -141,7 +141,12 @@ class PostgresLifecycleStore:
             tombstone=row["tombstone"],
         )
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self,
+        record: ExtensionRecord,
+        *,
+        expected: tuple[ExtensionState, str] | None = None,
+    ) -> bool:
         manifest = manifest_to_dict(record.manifest)
         async with self._db.transaction(), self._db.connection() as connection:
             # Serialize concurrent lifecycle operations for the same extension.
@@ -149,6 +154,38 @@ class PostgresLifecycleStore:
                 "SELECT pg_advisory_xact_lock(hashtext($1))",
                 f"extension:{record.manifest.id}",
             )
+            if expected is not None:
+                row = await connection.fetchrow(
+                    """
+                    UPDATE extensions SET
+                        active_version = $2,
+                        lifecycle_state = $3,
+                        retained_data = $4,
+                        registry_generation = registry_generation + 1,
+                        updated_at = now(),
+                        manifest = $5,
+                        manifest_version = $6,
+                        artifact_hash = $7,
+                        install_path = $8,
+                        tombstone = $9
+                    WHERE id = $1
+                      AND lifecycle_state = $10
+                      AND active_version = $11
+                    RETURNING id
+                    """,
+                    record.manifest.id,
+                    record.manifest.version,
+                    record.state.value,
+                    record.data_retained,
+                    manifest,
+                    record.manifest.manifest_version,
+                    record.artifact_hash,
+                    record.install_path,
+                    record.tombstone,
+                    expected[0].value,
+                    expected[1],
+                )
+                return row is not None
             await connection.execute(
                 """
                 INSERT INTO extensions (
@@ -194,6 +231,7 @@ class PostgresLifecycleStore:
                 manifest,
                 record.install_path,
             )
+        return True
 
 
 # Backwards-compatible aliases for the private names used by the F01 test suite.

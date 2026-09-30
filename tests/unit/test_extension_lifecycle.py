@@ -24,7 +24,9 @@ class Store:
     async def get(self, extension_id: str):
         return self.record if extension_id == self.record.manifest.id else None
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self, record: ExtensionRecord, *, expected: object = None
+    ) -> None:
         if record.state is ExtensionState.ENABLED and self.fail_enabled_once:
             self.fail_enabled_once = False
             raise OSError("simulated durable store failure")

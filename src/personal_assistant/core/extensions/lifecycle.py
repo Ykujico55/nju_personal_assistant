@@ -161,7 +161,12 @@ class LifecycleStore(Protocol):
 
     async def all(self) -> Sequence[ExtensionRecord]: ...
 
-    async def save(self, record: ExtensionRecord) -> None: ...
+    async def save(
+        self,
+        record: ExtensionRecord,
+        *,
+        expected: tuple[ExtensionState, str] | None = None,
+    ) -> bool: ...
 
 
 class RuntimeSupervisor(Protocol):

@@ -12,6 +12,7 @@ process-to-process data: redirect it to the host launcher, never to a log file.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import socket
@@ -49,6 +50,7 @@ def build_companion() -> CompanionBoot:
         "test_mode": test_mode,
         "cdp_port": cdp_port,
         "allow_insecure_loopback_tls": _env_flag("PA_COMPANION_ALLOW_INSECURE_TLS"),
+        "allow_navigation_posts": _env_flag("PA_COMPANION_ALLOW_NAVIGATION_POSTS"),
         "baseline_chrome_pids": _snapshot_chrome_pids() if test_mode else (),
     }
     companion = DesktopCompanion(
@@ -79,7 +81,6 @@ async def serve(port: int) -> None:
         "cdp_port": boot.cdp_port,
         "browser": "chromium",
     }
-    print(json.dumps(handshake), flush=True)
     config = uvicorn.Config(
         app,
         host="127.0.0.1",
@@ -88,9 +89,25 @@ async def serve(port: int) -> None:
         access_log=False,
     )
     server = uvicorn.Server(config)
+    serving = asyncio.create_task(server.serve(sockets=[sock]))
     try:
-        await server.serve(sockets=[sock])
+        # The handshake is the readiness signal: only print it once the server
+        # is accepting requests, so the host cannot race the startup.
+        deadline = asyncio.get_running_loop().time() + 10.0
+        while not server.started:
+            if serving.done():
+                serving.result()
+                raise RuntimeError("the companion server exited during startup")
+            if asyncio.get_running_loop().time() > deadline:
+                raise RuntimeError("the companion server did not become ready")
+            await asyncio.sleep(0.05)
+        print(json.dumps(handshake), flush=True)
+        await serving
     finally:
+        if not serving.done():
+            serving.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await serving
         await boot.companion.shutdown()
 
 

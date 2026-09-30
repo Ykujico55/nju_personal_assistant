@@ -1,0 +1,114 @@
+{
+  "actions": [
+    {
+      "html_type": "",
+      "label": "提交",
+      "locator": "act:0",
+      "tag": "button"
+    }
+  ],
+  "adopted_new_tab": true,
+  "captured_at": "2026-09-28T15:16:03.658793+00:00",
+  "controls": [
+    {
+      "disabled": false,
+      "locator": "ctl:0:0",
+      "name": "data.mc",
+      "option_count": 0,
+      "readonly": false,
+      "tag": "input",
+      "type": "text"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:0:1",
+      "name": "data.kssj",
+      "option_count": 0,
+      "readonly": false,
+      "tag": "input",
+      "type": "text"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:0:2",
+      "name": "data.jssj",
+      "option_count": 0,
+      "readonly": false,
+      "tag": "input",
+      "type": "text"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:0:3",
+      "name": "preview-bdx",
+      "option_count": 0,
+      "readonly": false,
+      "tag": "input",
+      "type": "text"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:0:4",
+      "name": "preview-bdx",
+      "option_count": 0,
+      "readonly": false,
+      "tag": "input",
+      "type": "text"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:0:5",
+      "name": "",
+      "option_count": 0,
+      "readonly": true,
+      "tag": "input",
+      "type": "text"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:0:6",
+      "name": "",
+      "option_count": 0,
+      "readonly": true,
+      "tag": "input",
+      "type": "text"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:1:0",
+      "name": "data.shxy.id",
+      "option_count": 64,
+      "readonly": false,
+      "tag": "select",
+      "type": "select"
+    },
+    {
+      "disabled": false,
+      "locator": "ctl:1:1",
+      "name": "",
+      "option_count": 64,
+      "readonly": false,
+      "tag": "select",
+      "type": "select"
+    }
+  ],
+  "fingerprint": "e757d9ea01b5f5f3f72b77c728cfbe88ad9a1eb74184e760cf8c20757371cba9",
+  "forms": [
+    {
+      "action": "",
+      "element_id": "",
+      "method": "get",
+      "name": ""
+    }
+  ],
+  "selected_frame": "/tw/xssq/xssq/create",
+  "structure_hashes": {
+    "controls": "d06a8c7a1d35fa71045d605a8046b466d47fba3205e30abd6609e55663c07b56",
+    "forms": "a24a31a70829f4bfe585251d5fa357af943382692d3b86ea23a1fbe9d23cecf0",
+    "headings": "762f8b7194fa07fdb33a2194a388abc0a31ee73e786f7bebc9cd484fbeb85516",
+    "links": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "submitted": false,
+  "supervised": true,
+  "url": "https://youth.nju.edu.cn/tw/xssq/xssq/create"
+}

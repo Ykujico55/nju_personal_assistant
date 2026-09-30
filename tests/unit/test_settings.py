@@ -44,6 +44,24 @@ def trusted_environment(**overrides: str) -> dict[str, str]:
 
 
 class SettingsTests(unittest.TestCase):
+    def test_browser_origin_mode_is_explicit_and_validated(self) -> None:
+        settings = Settings(**direct_settings_values(browser_origin_mode="open"))
+        self.assertEqual("open", settings.browser_origin_mode)
+        self.assertEqual(
+            "open",
+            Settings(**direct_settings_values()).browser_origin_mode,
+        )
+        with self.assertRaises(ConfigurationError):
+            Settings(**direct_settings_values(browser_origin_mode="anything"))
+        configured = Settings(
+            **direct_settings_values(
+                browser_companion_url="http://127.0.0.1:8123",
+                browser_origin_mode="open",
+                browser_allowed_origins=(),
+            )
+        )
+        self.assertEqual((), configured.browser_allowed_origins)
+
     def test_production_refuses_memory_storage(self) -> None:
         with patch.dict(
             os.environ,
@@ -64,6 +82,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual("memory", settings.storage_backend)
         self.assertEqual("127.0.0.1", settings.admin_host)
         self.assertEqual("127.0.0.1", settings.health_host)
+        self.assertEqual("open", settings.browser_origin_mode)
 
     def test_unauthenticated_public_listener_must_stay_on_loopback(self) -> None:
         with patch.dict(

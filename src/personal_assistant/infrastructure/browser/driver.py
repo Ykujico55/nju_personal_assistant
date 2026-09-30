@@ -4,7 +4,7 @@ This is the only module in the project that imports Playwright.  It runs inside
 the companion process, in the logged-in user's desktop session, with
 ``headless=False``.  The driver:
 
-* allow-lists every HTTP(S) request by exact origin and aborts the rest;
+* checks every request against the selected HTTPS origin mode;
 * blocks every non-GET request while a fill is in progress, so a page cannot
   save a draft during the supervised fill step;
 * reads a bounded, accessibility/DOM structure instead of raw HTML;
@@ -25,11 +25,15 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 from personal_assistant.core.browser import evaluate_navigation
-from personal_assistant.core.browser.models import MAX_FIELD_VALUE_CHARS
+from personal_assistant.core.browser.models import (
+    MAX_FIELD_VALUE_CHARS,
+    form_payload_sha256,
+)
 from personal_assistant.core.browser.policy import scan_text_for_prohibited_terms
 
 ACTION_SELECTOR = "button, input[type=submit], input[type=button]"
@@ -43,6 +47,8 @@ MAX_RECEIPT_CHARS = 500
 MAX_LINKS = 100
 COMMAND_DEADLINE_SECONDS = 30.0
 CLOSE_GRACE_SECONDS = 5.0
+MAX_BLOCKED_REQUEST_SAMPLES = 32
+_DIAGNOSTIC_ENDPOINT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,39}\.(?:do|json)$")
 
 
 class BrowserDriverError(RuntimeError):
@@ -64,6 +70,30 @@ def _origin_of(url: str) -> str:
     if parts.port in (None, 443):
         return f"https://{host}"
     return f"https://{host}:{parts.port}"
+
+
+def _diagnostic_endpoint(url: str) -> tuple[str, str]:
+    """Return a static endpoint name and opaque path ID, never a raw URL."""
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "{redacted}", "0" * 16
+    path = parts.path or "/"
+    leaf = path.rsplit("/", 1)[-1]
+    endpoint = leaf if _DIAGNOSTIC_ENDPOINT.fullmatch(leaf) else "{redacted}"
+    path_id = hashlib.sha256(f"{parts.hostname or ''}{path}".encode()).hexdigest()[:16]
+    return endpoint, path_id
+
+
+def _login_path_matches(path: str, pattern: str) -> bool:
+    """Exact/glob matching for declared login paths (``*`` is explicit)."""
+
+    if not pattern:
+        return False
+    if "*" not in pattern:
+        return path == pattern
+    return fnmatchcase(path, pattern)
 
 
 def _navigation_target_matches(
@@ -158,6 +188,7 @@ class ControlMeta:
     disabled: bool
     options: tuple[str, ...]
     max_length: int
+    option_labels: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -178,6 +209,8 @@ class PlaywrightHeadedDriver:
         self,
         *,
         allowed_origins: Sequence[str],
+        origin_mode: str = "allowlist",
+        allow_navigation_posts: bool = False,
         test_mode: bool = False,
         cdp_port: int | None = None,
         allow_insecure_loopback_tls: bool = False,
@@ -185,11 +218,18 @@ class PlaywrightHeadedDriver:
         baseline_chrome_pids: Sequence[int] = (),
     ) -> None:
         self._allowed_origins = frozenset(allowed_origins)
+        if origin_mode not in {"allowlist", "open"}:
+            raise BrowserDriverError("ORIGIN_MODE_INVALID", "unknown browser origin mode")
+        self._origin_mode = origin_mode
+        self._allow_navigation_posts = allow_navigation_posts
         self._test_mode = test_mode
         self._cdp_port = cdp_port
         self._baseline_chrome_pids = frozenset(int(item) for item in baseline_chrome_pids)
-        self._allow_insecure = bool(allow_insecure_loopback_tls) and all(
-            _is_loopback_origin(origin) for origin in self._allowed_origins
+        self._allow_insecure = (
+            (origin_mode == "allowlist" or test_mode)
+            and bool(allow_insecure_loopback_tls)
+            and bool(self._allowed_origins)
+            and all(_is_loopback_origin(origin) for origin in self._allowed_origins)
         )
         if allow_insecure_loopback_tls and not self._allow_insecure:
             raise BrowserDriverError(
@@ -201,6 +241,7 @@ class PlaywrightHeadedDriver:
         self._browser: Any = None
         self._context: Any = None
         self._page: Any = None
+        self._active_frame: Any = None
         # Every non-GET request is blocked by default.  A one-shot, fully
         # bound allowance is granted only inside the R2 submit critical
         # section; a login challenge is the only other exception and the
@@ -213,16 +254,29 @@ class PlaywrightHeadedDriver:
         self._login_allowance: tuple[str, str, str, int] | None = None
         self._login_armed_target: tuple[str, str, str] | None = None
         self._submit_allowance: tuple[str, str, str, int] | None = None
+        self._submit_payload_sha256: str = ""
+        self._submit_body_sha256: str = ""
+        self._submit_payload_locators: frozenset[str] = frozenset()
         self.allowed_write_requests = 0
+        self.navigation_write_requests = 0
+        self.last_fill_locator = ""
         self.user_auth_requests = 0
+        self.payload_mismatches = 0
         self._control_meta: dict[str, ControlMeta] = {}
         self._control_values: dict[str, str] = {}
+        self._control_submission_pairs: dict[str, tuple[tuple[str, str], ...]] = {}
+        self._hidden_fields: list[dict[str, str]] = []
+        self._hidden_values: dict[str, str] = {}
+        self._hidden_submission_pairs: tuple[tuple[str, str], ...] = ()
         self._action_locators: dict[str, int] = {}
+        self._action_submission_pairs: dict[str, tuple[tuple[str, str], ...]] = {}
         self._last_read: PageRead | None = None
         self._chrome_pids: tuple[int, ...] = ()
         self.headless = False
         self.blocked_origin_requests = 0
         self.blocked_mutating_requests = 0
+        self._blocked_request_samples: dict[tuple[str, str, str, str], int] = {}
+        self._blocked_request_samples_truncated = False
         self.autosave_attempts = 0
         self.navigations = 0
         self.fill_operations = 0
@@ -334,18 +388,36 @@ class PlaywrightHeadedDriver:
         request = route.request
         url = str(request.url)
         method = str(request.method).upper()
-        decision = evaluate_navigation(url, allowed_origins=self._allowed_origins)
+        decision = evaluate_navigation(
+            url, allowed_origins=self._allowed_origins, origin_mode=self._origin_mode
+        )
         if not decision.allowed:
             self.blocked_origin_requests += 1
             await route.abort()
             return
         if method not in GET_METHODS:
+            if self._allow_navigation_posts and not self._mutations_blocked:
+                # Explicit real-site acceptance mode: pages may use POST to
+                # load data before any form value is written.  The first fill
+                # locks this route for the rest of the session.
+                self.navigation_write_requests += 1
+                await route.continue_()
+                return
             allowance = self._submit_allowance
             if (
                 allowance is not None
                 and _allowance_matches(allowance, method, url)
                 and _is_main_frame_document(route.request, self._page)
             ):
+                if not self._verify_bound_payload(route.request):
+                    # The write request must carry exactly the approved payload
+                    # (and no post-click injection); otherwise it is aborted.
+                    self.payload_mismatches += 1
+                    self.blocked_mutating_requests += 1
+                    self._record_blocked_request(request, method, url)
+                    self.autosave_attempts += 1
+                    await route.abort()
+                    return
                 remaining = allowance[3] - 1
                 self._submit_allowance = (
                     (allowance[0], allowance[1], allowance[2], remaining)
@@ -378,15 +450,33 @@ class PlaywrightHeadedDriver:
             # Default: abort.  Page-initiated writes (autosave, SPA drafts,
             # rewrite attempts) are never allowed, before or after a fill.
             self.blocked_mutating_requests += 1
+            self._record_blocked_request(request, method, url)
             self.autosave_attempts += 1
             await route.abort()
             return
         await route.continue_()
 
+    def _record_blocked_request(self, request: Any, method: str, url: str) -> None:
+        safe_method = method if method in {"POST", "PUT", "PATCH", "DELETE"} else "OTHER"
+        resource_type = str(getattr(request, "resource_type", "")).lower()
+        if resource_type not in {"xhr", "fetch", "document"}:
+            resource_type = "other"
+        endpoint, path_id = _diagnostic_endpoint(url)
+        key = (safe_method, resource_type, endpoint, path_id)
+        if key in self._blocked_request_samples:
+            self._blocked_request_samples[key] += 1
+        elif len(self._blocked_request_samples) < MAX_BLOCKED_REQUEST_SAMPLES:
+            self._blocked_request_samples[key] = 1
+        else:
+            self._blocked_request_samples_truncated = True
+
     # --------------------------------------------------------------- commands
 
     async def navigate(self, url: str, *, login_paths: Sequence[str] = ()) -> Mapping[str, Any]:
-        page = self._require_page()
+        page = self._page
+        if page is None:
+            raise BrowserDriverError("BROWSER_UNAVAILABLE", "the browser is not running")
+        self._active_frame = None
         self.navigations += 1
         try:
             async with asyncio.timeout(self._deadline):
@@ -406,6 +496,89 @@ class PlaywrightHeadedDriver:
             "path": urlsplit(current).path or "/",
             "login_page": login_page,
         }
+
+    async def adopt_opened_page(self) -> Mapping[str, Any]:
+        """Select one page opened by the human for read-only capture."""
+
+        self._require_page()
+        if self._context is None:
+            raise BrowserDriverError("BROWSER_UNAVAILABLE", "the browser is not running")
+        candidates = [
+            page
+            for page in self._context.pages
+            if page is not self._page and not page.is_closed()
+        ]
+        if not candidates:
+            return {"adopted": False}
+        if len(candidates) != 1:
+            raise BrowserDriverError(
+                "BROWSER_PAGE_SELECTION_AMBIGUOUS",
+                "more than one user-opened page is present",
+            )
+        page = candidates[0]
+        try:
+            async with asyncio.timeout(self._deadline):
+                await page.wait_for_load_state("domcontentloaded")
+        except Exception as exc:
+            raise BrowserDriverError(
+                "BROWSER_NAVIGATION_FAILED", "the user-opened page did not load"
+            ) from exc
+        url = str(page.url)
+        decision = evaluate_navigation(
+            url, allowed_origins=self._allowed_origins, origin_mode=self._origin_mode
+        )
+        if not decision.allowed:
+            raise BrowserDriverError(
+                "BROWSER_NAVIGATION_DENIED",
+                "the user-opened page is outside the allowed origins",
+            )
+        self._page = page
+        self._active_frame = None
+        self._mutations_blocked = not self._allow_navigation_posts
+        self._login_window = False
+        self._login_allowance = None
+        self._login_armed_target = None
+        self._last_read = None
+        return {"adopted": True}
+
+    async def select_frame(self, *, origin: str, path: str) -> Mapping[str, Any]:
+        """Bind reads and fills to one loaded, allowed child frame."""
+
+        page = self._page
+        if page is None:
+            raise BrowserDriverError("BROWSER_UNAVAILABLE", "the browser is not running")
+        if not path.startswith("/") or "?" in path or "#" in path:
+            raise BrowserDriverError("BROWSER_FRAME_PATH_INVALID", "frame path must be static")
+        if not origin.startswith("https://") and not self._test_mode:
+            raise BrowserDriverError("BROWSER_FRAME_ORIGIN_INVALID", "frame origin must use https")
+        deadline = asyncio.get_running_loop().time() + self._deadline
+        while True:
+            matches = []
+            for frame in page.frames:
+                if frame.parent_frame is None or frame.is_detached():
+                    continue
+                url = str(frame.url)
+                decision = evaluate_navigation(
+                    url, allowed_origins=self._allowed_origins, origin_mode=self._origin_mode
+                )
+                if (
+                    decision.allowed
+                    and _origin_of(url) == origin
+                    and (urlsplit(url).path or "/") == path
+                ):
+                    matches.append(frame)
+            if matches or asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(0.05)
+        if len(matches) != 1:
+            raise BrowserDriverError(
+                "BROWSER_FRAME_SELECTION_AMBIGUOUS" if matches else "BROWSER_FRAME_NOT_FOUND",
+                "expected exactly one loaded frame with the requested path",
+            )
+        self._active_frame = matches[0]
+        self._last_read = None
+        url = str(matches[0].url)
+        return {"selected": True, "url": url, "origin": _origin_of(url), "path": path}
 
     async def snapshot(
         self,
@@ -446,11 +619,18 @@ class PlaywrightHeadedDriver:
                     "type": item.type,
                     "name": item.name,
                     "element_id": item.element_id,
-                    "value": self._control_values.get(item.locator, ""),
+                    # Hidden and password values stay inside the browser
+                    # process: CSRF/SAML tokens must never reach the host RPC.
+                    "value": (
+                        ""
+                        if item.type in {"hidden", "password"}
+                        else self._control_values.get(item.locator, "")
+                    ),
                     "required": item.required,
                     "readonly": item.readonly,
                     "disabled": item.disabled,
                     "options": list(item.options),
+                    "option_labels": list(item.option_labels),
                     "max_length": item.max_length,
                 }
                 for item in read.controls
@@ -460,6 +640,7 @@ class PlaywrightHeadedDriver:
             ],
             "links": links,
             "forms": forms,
+            "hidden_fields": [dict(item) for item in self._hidden_fields],
         }
         return {
             "url": read.url,
@@ -484,44 +665,108 @@ class PlaywrightHeadedDriver:
         self._login_allowance = None
         self._login_armed_target = None
         applied = 0
-        for locator, value in fields:
-            meta = self._control_meta.get(locator)
-            if meta is None:
-                raise BrowserDriverError("BROWSER_UNKNOWN_FIELD", "unknown field locator")
-            if meta.type == "password":
-                raise BrowserDriverError(
-                    "BROWSER_PASSWORD_FIELD", "password fields are never filled"
-                )
-            if meta.disabled:
-                raise BrowserDriverError("BROWSER_FIELD_DISABLED", "the field is disabled")
-            if meta.type == "file":
-                raise BrowserDriverError(
-                    "BROWSER_UPLOAD_FORBIDDEN", "file upload is not allowed"
-                )
-            element = self._control_element(page, meta)
-            try:
-                async with asyncio.timeout(self._deadline):
+        try:
+            async with asyncio.timeout(self._deadline):
+                for locator, value in fields:
+                    self.last_fill_locator = locator
+                    meta = self._control_meta.get(locator)
+                    if meta is None:
+                        raise BrowserDriverError("BROWSER_UNKNOWN_FIELD", "unknown field locator")
+                    if meta.type == "password":
+                        raise BrowserDriverError(
+                            "BROWSER_PASSWORD_FIELD", "password fields are never filled"
+                        )
+                    if meta.disabled:
+                        raise BrowserDriverError("BROWSER_FIELD_DISABLED", "the field is disabled")
+                    if meta.type == "file":
+                        raise BrowserDriverError(
+                            "BROWSER_UPLOAD_FORBIDDEN", "file upload is not allowed"
+                        )
+                    element = self._control_element(page, meta)
                     await self._apply_value(element, meta, value)
-            except TimeoutError as exc:
-                raise BrowserDriverError("BROWSER_TIMEOUT", "field fill timed out") from exc
-            applied += 1
-        # Stay in the FILL phase briefly so queued autosave requests are still
-        # intercepted and aborted.  The next command resets the phase.
-        await asyncio.sleep(0.25)
+                    applied += 1
+                # Keep the FILL phase briefly to intercept queued autosaves.
+                await asyncio.sleep(0.25)
+        except TimeoutError as exc:
+            raise BrowserDriverError("BROWSER_TIMEOUT", "field fill timed out") from exc
         self.fill_operations += 1
         return {"applied": applied}
 
     async def _apply_value(self, element: Any, meta: ControlMeta, value: str) -> None:
         if meta.tag == "select":
-            await element.select_option(value)
+            hidden = not await element.is_visible()
+            mirror = await self._select_mirror(element) if hidden else None
+            before = await self._mirror_text(mirror) if mirror is not None else ""
+            await element.select_option(value, force=hidden)
+            if mirror is not None:
+                await asyncio.sleep(0.1)
+                after = await self._mirror_text(mirror)
+                if after == before or not after or after in {"请选择", "请选择..."}:
+                    await self._choose_visible_select_option(element, mirror, value)
             return
         if meta.type in {"checkbox", "radio"}:
-            if value.lower() in {"true", "1", "yes", "on"}:
+            checked = value.lower() in {"true", "1", "yes", "on"}
+            if checked:
                 await element.check()
-            else:
+            elif meta.type == "checkbox":
                 await element.uncheck()
+            # Browsers do not permit unchecking a radio directly. Selecting a
+            # sibling in the same group performs the false transition; if no
+            # sibling is selected, the post-fill verification fails closed.
             return
         await element.fill(value)
+
+    @staticmethod
+    async def _select_mirror(element: Any) -> Any | None:
+        """Find one visible trigger in the hidden select's nearest field wrapper."""
+
+        parent = element.locator("xpath=..")
+        for _ in range(4):
+            triggers = parent.locator("input[readonly]:visible, [role=combobox]:visible")
+            if await triggers.count() == 1:
+                return triggers.first
+            if await parent.locator("xpath=self::form").count():
+                break
+            parent = parent.locator("xpath=..")
+        return None
+
+    @staticmethod
+    async def _mirror_text(mirror: Any) -> str:
+        try:
+            return str(await mirror.input_value()).strip()
+        except Exception:
+            return str(await mirror.inner_text()).strip()
+
+    async def _choose_visible_select_option(
+        self, element: Any, mirror: Any, value: str
+    ) -> None:
+        options = element.locator("option")
+        label = ""
+        for index in range(min(await options.count(), MAX_CONTROLS)):
+            option = options.nth(index)
+            if str(await option.get_attribute("value") or "") == value:
+                label = _bounded(await option.inner_text(), MAX_ACTION_LABEL)
+                break
+        if not label:
+            raise BrowserDriverError("BROWSER_WIDGET_OPTION_UNKNOWN")
+        await mirror.click()
+        page = self._require_page()
+        candidates = page.get_by_text(label, exact=True)
+        visible: list[Any] = []
+        for _ in range(20):
+            visible = [
+                candidates.nth(index)
+                for index in range(min(await candidates.count(), MAX_ACTIONS))
+                if await candidates.nth(index).is_visible()
+            ]
+            if visible:
+                break
+            await asyncio.sleep(0.1)
+        if len(visible) != 1:
+            raise BrowserDriverError("BROWSER_WIDGET_OPTION_AMBIGUOUS")
+        await visible[0].click()
+        if await element.input_value() != value or not await self._mirror_text(mirror):
+            raise BrowserDriverError("BROWSER_WIDGET_SELECTION_FAILED")
 
     async def find_text(self, query: str) -> Mapping[str, Any]:
         page = self._require_page()
@@ -602,6 +847,8 @@ class PlaywrightHeadedDriver:
         expected_method: str,
         expected_origin: str,
         expected_path: str,
+        expected_payload_sha256: str,
+        expected_payload_locators: str,
     ) -> Mapping[str, Any]:
         page = self._require_page()
         index = self._action_locators.get(locator)
@@ -612,6 +859,52 @@ class PlaywrightHeadedDriver:
             raise BrowserDriverError(
                 "BROWSER_SUBMIT_TARGET_INVALID", "the submit target is not bound"
             )
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_payload_sha256 or ""):
+            raise BrowserDriverError(
+                "BROWSER_SUBMIT_TARGET_INVALID", "the approved payload is not bound"
+            )
+        locators = {
+            item.strip()
+            for item in expected_payload_locators.split(",")
+            if item.strip()
+        }
+        if not locators or any(
+            not re.fullmatch(r"ctl:\d+:\d+", item) for item in locators
+        ):
+            raise BrowserDriverError(
+                "BROWSER_SUBMIT_TARGET_INVALID", "the approved fields are not bound"
+            )
+        if any(
+            locator not in self._control_meta
+            or self._control_meta[locator].disabled
+            or self._control_meta[locator].type in {"password", "file", "submit", "button", "reset"}
+            for locator in locators
+        ):
+            raise BrowserDriverError(
+                "BROWSER_SUBMIT_PAYLOAD_MISMATCH",
+                "an approved field is not a submit-capable form control",
+            )
+        semantic_payload = tuple(
+            (locator, self._control_values.get(locator, ""))
+            for locator in sorted(locators)
+        )
+        if form_payload_sha256(semantic_payload) != expected_payload_sha256:
+            raise BrowserDriverError(
+                "BROWSER_SUBMIT_PAYLOAD_MISMATCH",
+                "the live field values differ from the approved payload",
+            )
+        body_sha256 = form_payload_sha256(
+            tuple(
+                pair
+                for pairs in self._control_submission_pairs.values()
+                for pair in pairs
+            )
+            + self._hidden_submission_pairs
+            + self._action_submission_pairs.get(locator, ())
+        )
+        self._submit_payload_locators = frozenset(locators)
+        self._submit_payload_sha256 = expected_payload_sha256
+        self._submit_body_sha256 = body_sha256
         self._submit_allowance = (method, expected_origin, expected_path, 1)
         self.click_operations += 1
         writes_before = self.allowed_write_requests
@@ -649,9 +942,12 @@ class PlaywrightHeadedDriver:
                 "blocked_during_submit": self.blocked_mutating_requests,
             }
         finally:
-            # The allowance lasts only for the click critical section; the
-            # session stays mutation-blocked afterwards.
+            # The allowance (and its payload binding) lasts only for the click
+            # critical section; the session stays mutation-blocked afterwards.
             self._submit_allowance = None
+            self._submit_payload_sha256 = ""
+            self._submit_body_sha256 = ""
+            self._submit_payload_locators = frozenset()
 
     async def collect_matches(
         self, *, pattern: str, limit: int, url: str = ""
@@ -711,7 +1007,48 @@ class PlaywrightHeadedDriver:
         return {
             "matches": matches,
             "truncated": (not complete) or len(matches) >= limit,
+            "url": str(page.url),
         }
+
+    def _locator_for_name(self, name: str) -> str | None:
+        for locator, meta in self._control_meta.items():
+            if meta.name and meta.name == name:
+                return locator
+        return None
+
+    def _verify_bound_payload(self, request: Any) -> bool:
+        """Prove the real write body carries exactly the approved payload.
+
+        The body never leaves the browser process: only canonical hashes are
+        compared.  Non-urlencoded bodies (e.g. multipart) fail closed.
+        """
+
+        if not self._submit_payload_sha256 or not self._submit_body_sha256:
+            return False
+        content_type = ""
+        with contextlib.suppress(Exception):
+            content_type = str(request.headers.get("content-type", "")).lower()
+        if "application/x-www-form-urlencoded" not in content_type:
+            return False
+        raw = ""
+        with contextlib.suppress(Exception):
+            raw = str(request.post_data or "")
+        try:
+            body_pairs = parse_qsl(raw, keep_blank_values=True)
+        except ValueError:
+            return False
+        # Approval uses semantic values (e.g. checkbox checked=true), while
+        # the HTTP body uses the control's submitted value (e.g. "accepted")
+        # and omits unchecked checkbox/radio controls.  Compare semantic state
+        # by the frozen locator set, then compare the exact successful-control
+        # body template independently.
+        declared = tuple(
+            (locator, self._control_values.get(locator, ""))
+            for locator in sorted(self._submit_payload_locators)
+        )
+        if form_payload_sha256(tuple(declared)) != self._submit_payload_sha256:
+            return False
+        return form_payload_sha256(tuple(body_pairs)) == self._submit_body_sha256
 
     async def _receipt(self, page: Any, receipt_locator: str) -> str | None:
         if not receipt_locator:
@@ -753,6 +1090,7 @@ class PlaywrightHeadedDriver:
         self._browser = None
         self._context = None
         self._page = None
+        self._active_frame = None
         if playwright is not None:
             with contextlib.suppress(Exception):
                 async with asyncio.timeout(CLOSE_GRACE_SECONDS):
@@ -781,12 +1119,33 @@ class PlaywrightHeadedDriver:
             "navigations": self.navigations,
             "blocked_origin_requests": self.blocked_origin_requests,
             "blocked_mutating_requests": self.blocked_mutating_requests,
+            "blocked_request_samples": [
+                {
+                    "method": method,
+                    "resource_type": resource_type,
+                    "endpoint": endpoint,
+                    "path_id": path_id,
+                    "count": count,
+                }
+                for (
+                    method,
+                    resource_type,
+                    endpoint,
+                    path_id,
+                ), count in self._blocked_request_samples.items()
+            ],
+            "blocked_request_samples_truncated": self._blocked_request_samples_truncated,
             "autosave_attempts": self.autosave_attempts,
             "fill_operations": self.fill_operations,
+            "last_fill_locator": self.last_fill_locator,
             "click_operations": self.click_operations,
             "allowed_write_requests": self.allowed_write_requests,
+            "navigation_write_requests": self.navigation_write_requests,
+            "payload_mismatches": self.payload_mismatches,
             "mutations_blocked": self._mutations_blocked,
-            "writes_blocked_by_default": not self._login_window,
+            "writes_blocked_by_default": (
+                not self._login_window and not self._allow_navigation_posts
+            ),
             "test_mode": self._test_mode,
         }
 
@@ -795,6 +1154,10 @@ class PlaywrightHeadedDriver:
     def _require_page(self) -> Any:
         if self._page is None:
             raise BrowserDriverError("BROWSER_UNAVAILABLE", "the browser is not running")
+        if self._active_frame is not None:
+            if self._active_frame.is_detached():
+                raise BrowserDriverError("BROWSER_FRAME_DETACHED", "selected frame was detached")
+            return self._active_frame
         return self._page
 
     async def _observe_login(
@@ -834,10 +1197,7 @@ class PlaywrightHeadedDriver:
     @staticmethod
     def _matches_login_path(page: Any, login_paths: Sequence[str]) -> bool:
         path = urlsplit(str(page.url)).path or "/"
-        for pattern in login_paths:
-            if path == pattern or path.startswith(pattern.rstrip("*")):
-                return True
-        return False
+        return any(_login_path_matches(path, pattern) for pattern in login_paths)
 
     async def _login_form_target(self, page: Any) -> tuple[str, str, str] | None:
         """Freeze the challenge form's exact write target (method/origin/path)."""
@@ -856,7 +1216,12 @@ class PlaywrightHeadedDriver:
                 base = str(page.url)
                 target = urljoin(base, action) if action else base
                 parts = urlsplit(target)
-                if not parts.hostname or _origin_of(target) not in self._allowed_origins:
+                decision = evaluate_navigation(
+                    target,
+                    allowed_origins=self._allowed_origins,
+                    origin_mode=self._origin_mode,
+                )
+                if not decision.allowed:
                     return None
                 return method, _origin_of(target), parts.path or "/"
         return None
@@ -864,7 +1229,7 @@ class PlaywrightHeadedDriver:
     async def _detect_login(self, page: Any, login_paths: Sequence[str]) -> bool:
         path = urlsplit(str(page.url)).path or "/"
         for pattern in login_paths:
-            if path == pattern or path.startswith(pattern.rstrip("*")):
+            if _login_path_matches(path, pattern):
                 return True
         with contextlib.suppress(Exception):
             if await page.locator("input[type=password]").count() > 0:
@@ -891,10 +1256,40 @@ class PlaywrightHeadedDriver:
     async def _read_controls(self, page: Any) -> list[ControlMeta]:
         controls: list[ControlMeta] = []
         groups: tuple[tuple[str, str], ...] = (
+            # Hidden inputs stay out of the positional locator space (adding
+            # one must not shift ctl: indices) but are pinned by name/type in
+            # the fingerprint and by value only inside the payload template.
             ("input", "input:not([type='hidden'])"),
             ("select", "select"),
             ("textarea", "textarea"),
         )
+        self._hidden_fields = []
+        self._hidden_values = {}
+        self._hidden_submission_pairs = ()
+        self._control_values = {}
+        self._control_submission_pairs = {}
+        hidden = page.locator("input[type=hidden]")
+        hidden_count = await hidden.count()
+        for index in range(min(int(hidden_count), MAX_CONTROLS)):
+            handle = hidden.nth(index)
+            name = str(await handle.get_attribute("name") or "").strip()
+            if not name:
+                continue
+            disabled = await handle.is_disabled()
+            element_id = str(await handle.get_attribute("id") or "")
+            self._hidden_fields.append(
+                {
+                    "type": "hidden",
+                    "name": name[:MAX_ACTION_LABEL],
+                    "element_id": element_id[:MAX_ACTION_LABEL],
+                }
+            )
+            value = str(
+                await handle.get_attribute("value") or ""
+            )[:MAX_FIELD_VALUE_CHARS]
+            self._hidden_values[name[:MAX_ACTION_LABEL]] = value
+            if not disabled:
+                self._hidden_submission_pairs += ((name, value),)
         for group_index, (tag, selector) in enumerate(groups):
             element = page.locator(selector)
             count = await element.count()
@@ -907,19 +1302,29 @@ class PlaywrightHeadedDriver:
                 element_id = str(await handle.get_attribute("id") or "")
                 required = (await handle.get_attribute("required")) is not None
                 readonly = (await handle.get_attribute("readonly")) is not None
-                disabled = (await handle.get_attribute("disabled")) is not None
+                disabled = await handle.is_disabled()
                 options: tuple[str, ...] = ()
+                option_labels: tuple[str, ...] = ()
                 if tag == "select":
                     option_elements = handle.locator("option")
                     option_count = await option_elements.count()
                     values: list[str] = []
+                    labels: list[str] = []
                     for option_index in range(min(int(option_count), 64)):
                         option = option_elements.nth(option_index)
                         raw_value = await option.get_attribute("value")
                         if raw_value is None:
                             raw_value = await option.inner_text()
                         values.append(_bounded(raw_value, 100))
+                        labels.append(
+                            _bounded(
+                                await option.get_attribute("label")
+                                or await option.inner_text(),
+                                100,
+                            )
+                        )
                     options = tuple(values)
+                    option_labels = tuple(labels)
                 max_length = 0
                 raw_max: Any = await handle.get_attribute("maxlength")
                 if isinstance(raw_max, str) and raw_max.isdigit():
@@ -939,11 +1344,45 @@ class PlaywrightHeadedDriver:
                         disabled=disabled,
                         options=options,
                         max_length=max_length,
+                        option_labels=option_labels,
                     )
                 )
                 self._control_values[locator] = current
+                self._control_submission_pairs[locator] = self._successful_control_pairs(
+                    name=name,
+                    type_=type_,
+                    value=current,
+                    value_attribute=await handle.get_attribute("value"),
+                    disabled=disabled,
+                )
         self._control_meta = {item.locator: item for item in controls}
         return controls
+
+    @staticmethod
+    def _successful_control_pairs(
+        *,
+        name: str,
+        type_: str,
+        value: str,
+        value_attribute: Any,
+        disabled: bool,
+    ) -> tuple[tuple[str, str], ...]:
+        """Model successful HTML form controls without reading page scripts."""
+
+        normalized_type = type_.lower()
+        if (
+            not name
+            or disabled
+            or normalized_type
+            in {"button", "reset", "submit", "image", "file", "password"}
+        ):
+            return ()
+        if normalized_type in {"checkbox", "radio"}:
+            if value != "true":
+                return ()
+            submitted_value = "on" if value_attribute is None else str(value_attribute)
+            return ((name, submitted_value),)
+        return ((name, value),)
 
     async def _read_value(self, handle: Any, tag: str, type_: str) -> str:
         if type_ == "password":
@@ -975,8 +1414,10 @@ class PlaywrightHeadedDriver:
             raise BrowserDriverError("BROWSER_LIMIT_EXCEEDED", "too many page actions")
         actions: list[Mapping[str, Any]] = []
         self._action_locators = {}
+        self._action_submission_pairs = {}
         for index in range(count):
             handle = element.nth(index)
+            tag = "button" if await handle.locator("xpath=self::button").count() else "input"
             label = _bounded(await handle.inner_text(), MAX_ACTION_LABEL)
             if not label:
                 label = _bounded(await handle.get_attribute("value") or "", MAX_ACTION_LABEL)
@@ -984,7 +1425,25 @@ class PlaywrightHeadedDriver:
             kind = "submit" if item_type == "submit" else "other"
             locator = f"act:{index}"
             self._action_locators[locator] = index
-            actions.append({"locator": locator, "label": label, "kind": kind})
+            name = str(await handle.get_attribute("name") or "")
+            disabled = await handle.is_disabled()
+            # An unnamed <button> defaults to submit, while the selected
+            # input[type=button] controls have an explicit non-submit type.
+            is_submitter = item_type in {"", "submit"}
+            if is_submitter and name and not disabled:
+                value = str(await handle.get_attribute("value") or "")
+                self._action_submission_pairs[locator] = ((name, value),)
+            else:
+                self._action_submission_pairs[locator] = ()
+            actions.append(
+                {
+                    "locator": locator,
+                    "label": label,
+                    "kind": kind,
+                    "tag": tag,
+                    "html_type": item_type,
+                }
+            )
         return actions
 
     async def _read_links(self, page: Any) -> list[Mapping[str, str]]:
@@ -998,7 +1457,11 @@ class PlaywrightHeadedDriver:
             if not href:
                 continue
             absolute = urljoin(base, href)
-            decision = evaluate_navigation(absolute, allowed_origins=self._allowed_origins)
+            decision = evaluate_navigation(
+                absolute,
+                allowed_origins=self._allowed_origins,
+                origin_mode=self._origin_mode,
+            )
             if not decision.allowed:
                 continue
             links.append(
@@ -1071,4 +1534,78 @@ __all__ = [
     "COMMAND_DEADLINE_SECONDS",
     "BrowserDriverError",
     "PlaywrightHeadedDriver",
+    "InteractiveHeadedBrowser",
 ]
+
+
+class InteractiveHeadedBrowser:
+    """A user-controlled browser with ordinary Chromium network behavior.
+
+    The interactive ehall command uses this separate path so application data
+    requests can load normally.  Its final form button is clicked only by the
+    interactive flow after the user clicks the local confirmation page.
+    """
+
+    def __init__(self) -> None:
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._context: Any = None
+        self._page: Any = None
+
+    @property
+    def context(self) -> Any:
+        if self._context is None:
+            raise BrowserDriverError("BROWSER_UNAVAILABLE", "browser has not started")
+        return self._context
+
+    @property
+    def page(self) -> Any:
+        if self._page is None:
+            raise BrowserDriverError("BROWSER_UNAVAILABLE", "browser has not started")
+        return self._page
+
+    async def start(self) -> None:
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:
+            raise BrowserDriverError("BROWSER_UNAVAILABLE", "Playwright is not installed") from exc
+        self._playwright = await async_playwright().start()
+        try:
+            self._browser = await self._playwright.chromium.launch(headless=False)
+            # No request route is installed: ehall uses POST for ordinary page
+            # data loading, and Chromium must send those requests unmodified.
+            self._context = await self._browser.new_context(accept_downloads=False)
+            self._page = await self._context.new_page()
+        except BaseException:
+            await self.close()
+            raise
+
+    async def snapshot_page(self, page: Any) -> Mapping[str, Any]:
+        """Read a page shape through the canonical driver without routing traffic."""
+
+        inspector = PlaywrightHeadedDriver(allowed_origins=(), origin_mode="open")
+        inspector._page = page
+        return await inspector.snapshot()
+
+    async def close(self) -> None:
+        if self._browser is not None:
+            await self._browser.close()
+            self._browser = None
+        if self._playwright is not None:
+            await self._playwright.stop()
+            self._playwright = None
+        self._context = None
+        self._page = None
+
+
+def is_transient_frame_error(exc: Exception) -> bool:
+    """Recognize a Playwright frame disappearing during a navigation scan."""
+
+    try:
+        from playwright.async_api import Error as PlaywrightError
+    except ImportError:
+        return False
+    return isinstance(exc, PlaywrightError) and (
+        "Frame was detached" in str(exc)
+        or "Execution context was destroyed" in str(exc)
+    )

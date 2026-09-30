@@ -21,6 +21,8 @@ from .mail_servers import TlsPair, generate_tls_pair
 
 LOGIN_PATH = "/sso/login"
 PORTAL_PATH = "/portal"
+POPUP_PORTAL_PATH = "/portal/popup"
+FRAME_SHELL_PATH = "/portal/frame-shell"
 APP_PATH = "/apps/proof"
 AUTOSAVE_PATH = "/apps/proof/autosave"
 SUBMIT_PATH = "/apps/proof/submit"
@@ -59,6 +61,8 @@ class MockEhallState:
     logins: int = 0
     lose_response: bool = False
     hide_tracking: bool = False
+    tracking_redirect: bool = False
+    tracking_query_redirect: bool = False
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
@@ -145,6 +149,25 @@ class MockEhallSite:
                         return
                     self._portal_page()
                     return
+                if path == POPUP_PORTAL_PATH:
+                    if not self._logged_in():
+                        self._redirect(LOGIN_PATH)
+                        return
+                    self._send(
+                        200,
+                        f'<html><body><a id="open-popup" target="_blank" '
+                        f'href="{APP_PATH}?gid_=fixture-private-value">打开事务</a></body></html>',
+                    )
+                    return
+                if path == FRAME_SHELL_PATH:
+                    if not self._logged_in():
+                        self._redirect(LOGIN_PATH)
+                        return
+                    self._send(
+                        200,
+                        f'<html><body><iframe src="{APP_PATH}"></iframe></body></html>',
+                    )
+                    return
                 if path == APP_PATH:
                     if not self._logged_in():
                         self._redirect(LOGIN_PATH)
@@ -160,6 +183,12 @@ class MockEhallSite:
                 if path in (STATUS_PATH, TRANSCRIPT_STATUS_PATH):
                     if not self._logged_in():
                         self._redirect(LOGIN_PATH)
+                        return
+                    if state.tracking_redirect:
+                        self._redirect(APP_PATH)
+                        return
+                    if state.tracking_query_redirect and "page" not in query:
+                        self._redirect(STATUS_PATH + "?page=1")
                         return
                     self._status_page(query)
                     return
@@ -318,6 +347,33 @@ class MockEhallSite:
                 huge = ""
                 if "huge" in variant:
                     huge = "<div>" + ("x" * 70000) + "</div>"
+                static_token = ""
+                if "staticToken" in variant:
+                    static_token = (
+                        '<input type="hidden" name="csrf" value="static-token-1">'
+                    )
+                payload_drift = ""
+                if "payloadDrift" in variant:
+                    # Inject an unapproved hidden field at submit time.
+                    payload_drift = (
+                        "<script>document.querySelector('form').addEventListener("
+                        "'submit',function(ev){const i=document.createElement('input');"
+                        "i.type='hidden';i.name='withdraw';i.value='1';"
+                        "ev.target.appendChild(i);});</script>"
+                    )
+                successful_controls = ""
+                if "successfulControls" in variant:
+                    consent_checked = " checked" if "consentChecked" in variant else ""
+                    successful_controls = (
+                        '<label>同意<input type="checkbox" name="consent" '
+                        f'id="consent" value="accepted"{consent_checked}></label>'
+                        '<input type="radio" name="channel" id="channel-email" '
+                        'value="email" checked>'
+                        '<input type="radio" name="channel" id="channel-paper" '
+                        'value="paper">'
+                        '<input type="text" name="disabled_note" id="disabled-note" '
+                        'value="must-not-submit" disabled>'
+                    )
                 fake_receipt = ""
                 if "fakeReceipt" in variant:
                     # DOM-only "success": a receipt appears but no write is sent.
@@ -332,14 +388,15 @@ class MockEhallSite:
                     f"""<!doctype html><html><head><title>在读证明申请</title></head>
 <body><h1>在读证明申请</h1>{warning}{external}{pre_receipt}{huge}
 <form method="post" action="{SUBMIT_PATH}">
+{static_token}
 <label>申请理由 <input type="text" name="reason" id="reason" required maxlength="200"></label>
 {note}
 <label>联系电话 <input type="text" name="phone" id="phone" required maxlength="20"></label>
 <label>领取方式 <select name="delivery" id="delivery">
 <option value="paper">纸质</option><option value="email">电子</option></select></label>
-{extra}
+{extra}{successful_controls}
 <button type="submit" id="submit-proof">提交申请</button>
-</form>{autosave}{double}{swap}{fake_receipt}</body></html>""",
+</form>{autosave}{double}{swap}{fake_receipt}{payload_drift}</body></html>""",
                 )
 
             def _submit(self, query: dict[str, list[str]]) -> None:
@@ -357,6 +414,9 @@ class MockEhallSite:
                             "reason": reason,
                             "phone": phone,
                             "delivery": delivery,
+                            "consent": (form.get("consent") or [""])[0],
+                            "channel": (form.get("channel") or [""])[0],
+                            "disabled_note": (form.get("disabled_note") or [""])[0],
                             "hidden": state.hide_tracking or "hideTracking" in query,
                         }
                     )
@@ -434,6 +494,18 @@ class MockEhallSite:
                 0,
                 {"receipt": receipt, "reason": "seed", "phone": "", "delivery": ""},
             )
+
+    def set_tracking_query_redirect(self, value: bool = True) -> None:
+        """Test-only: the tracking page redirects to itself with a query."""
+
+        with self.state.lock:
+            self.state.tracking_query_redirect = value
+
+    def set_tracking_redirect(self, value: bool = True) -> None:
+        """Test-only: the tracking page redirects to the form page."""
+
+        with self.state.lock:
+            self.state.tracking_redirect = value
 
     def set_hide_tracking(self, value: bool = True) -> None:
         """Test-only: keep recorded submissions off the tracking page."""

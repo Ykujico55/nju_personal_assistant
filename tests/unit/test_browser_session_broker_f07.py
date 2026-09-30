@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from personal_assistant.core.browser import (
     AdapterActionSpec,
@@ -22,6 +24,7 @@ from personal_assistant.core.browser import (
     PreviewExpiredError,
     ProhibitedTransactionError,
 )
+from personal_assistant.core.browser.ports import BrowserSessionRecord
 from personal_assistant.domain.enums import RiskLevel
 from personal_assistant.infrastructure.memory.browser import (
     InMemoryBrowserAdapterStore,
@@ -69,6 +72,7 @@ class BrokerTestCase(unittest.IsolatedAsyncioTestCase):
         *,
         submit_enabled: bool = False,
         allowed_origins: frozenset[str] | None = None,
+        origin_mode: str = "allowlist",
     ) -> tuple[BrowserSessionBroker, FakeCompanion, FakeClock]:
         import itertools
 
@@ -84,6 +88,7 @@ class BrokerTestCase(unittest.IsolatedAsyncioTestCase):
             allowed_origins=allowed_origins
             if allowed_origins is not None
             else frozenset({TEST_ORIGIN}),
+            origin_mode=origin_mode,
             submit_enabled=submit_enabled,
             now=self.clock.now,
             id_factory=lambda: next(self._session_ids),
@@ -155,6 +160,16 @@ class WaitingUserTests(BrokerTestCase):
         session_id = await self.create()
         record = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
         self.assertEqual(record.state, BrowserSessionState.REQUESTED)
+
+    async def test_open_mode_can_create_session_without_host_allowlist(self) -> None:
+        self.make_broker(allowed_origins=frozenset(), origin_mode="open")
+        await self.register()
+        session_id = await self.create()
+        self.assertEqual(
+            "open", self.companion.sessions[session_id]["origin_mode"]
+        )
+        snapshot = await self.navigate(session_id, TEST_ORIGIN + TEST_APP_PATH)
+        self.assertEqual(TEST_ORIGIN, snapshot.origin)  # type: ignore[attr-defined]
 
     async def test_login_page_enters_waiting_user(self) -> None:
         await self.register()
@@ -750,6 +765,43 @@ class SubmitTests(BrokerTestCase):
             await self.submit(session_id, preview_hash, nonce)
         self.assertEqual(len(self.companion.click_calls), 1)
 
+    async def test_malformed_click_result_is_reconciled_without_a_second_click(self) -> None:
+        session_id, preview_hash, nonce = await self.reach_preview()
+        self.companion.malformed_click_result = True
+        self.companion.receipt_appears_after_click = "NJU-2026-0042"
+
+        outcome = await self.submit(session_id, preview_hash, nonce)
+
+        self.assertEqual(outcome.state, BrowserSessionState.SUCCEEDED)  # type: ignore[attr-defined]
+        self.assertEqual(outcome.reference, "NJU-2026-0042")  # type: ignore[attr-defined]
+        self.assertEqual(len(self.companion.click_calls), 1)
+        self.assertEqual(
+            self.companion.collect_urls,
+            [TEST_ORIGIN + TEST_TRACKING_PATH, TEST_ORIGIN + TEST_TRACKING_PATH],
+        )
+
+    async def test_cancelled_click_persists_unknown_and_reconciles_read_only(self) -> None:
+        session_id, preview_hash, nonce = await self.reach_preview()
+        self.companion.click_blocker = asyncio.Event()
+        task = asyncio.create_task(self.submit(session_id, preview_hash, nonce))
+        await asyncio.wait_for(self.companion.click_started.wait(), timeout=1)
+
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        record = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(record.diagnostic_code, "RECONCILE_NOT_FOUND")
+        self.assertEqual(len(self.companion.click_calls), 1)
+        self.assertEqual(
+            self.companion.collect_urls,
+            [TEST_ORIGIN + TEST_TRACKING_PATH, TEST_ORIGIN + TEST_TRACKING_PATH],
+        )
+        with self.assertRaises(BrowserSessionStateError):
+            await self.submit(session_id, preview_hash, nonce)
+        self.assertEqual(len(self.companion.click_calls), 1)
+
     async def test_server_rejection_is_definitive_failure(self) -> None:
         session_id, preview_hash, nonce = await self.reach_preview()
         self.companion.click_outcome = "REJECTED"
@@ -762,6 +814,58 @@ class SubmitTests(BrokerTestCase):
         self.companion.click_outcome = "UNKNOWN"
         outcome = await self.submit(session_id, preview_hash, nonce)
         self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)  # type: ignore[attr-defined]
+
+    async def test_reconciliation_crash_keeps_one_unknown_transition(self) -> None:
+        session_id, preview_hash, nonce = await self.reach_preview()
+        self.companion.click_outcome = "UNKNOWN"
+        with (
+            patch.object(self.sessions, "save", wraps=self.sessions.save) as save,
+            patch.object(self.broker, "reconcile", side_effect=RuntimeError("read failed")),
+        ):
+            outcome = await self.submit(session_id, preview_hash, nonce)
+        self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)  # type: ignore[attr-defined]
+        self.assertEqual(
+            sum(
+                call.args[0].state is BrowserSessionState.UNKNOWN
+                for call in save.await_args_list
+            ),
+            1,
+        )
+        self.assertEqual(len(self.companion.click_calls), 1)
+        record = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
+
+    async def test_cancellation_during_unknown_save_finishes_reconciliation(self) -> None:
+        session_id, preview_hash, nonce = await self.reach_preview()
+        self.companion.click_outcome = "UNKNOWN"
+        save_started = asyncio.Event()
+        finish_save = asyncio.Event()
+        original_save = self.sessions.save
+
+        async def delayed_save(
+            record: BrowserSessionRecord, *, expected_version: int
+        ) -> BrowserSessionRecord:
+            if record.state is BrowserSessionState.UNKNOWN:
+                save_started.set()
+                await finish_save.wait()
+            return await original_save(record, expected_version=expected_version)
+
+        with patch.object(self.sessions, "save", side_effect=delayed_save):
+            task = asyncio.create_task(self.submit(session_id, preview_hash, nonce))
+            await asyncio.wait_for(save_started.wait(), timeout=1)
+            task.cancel()
+            finish_save.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
+
+        record = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(record.diagnostic_code, "RECONCILE_NOT_FOUND")
+        self.assertEqual(len(self.companion.click_calls), 1)
+        self.assertEqual(
+            self.companion.collect_urls,
+            [TEST_ORIGIN + TEST_TRACKING_PATH, TEST_ORIGIN + TEST_TRACKING_PATH],
+        )
 
     async def test_reconciliation_reads_the_tracking_page_and_issues_a_proof(self) -> None:
         session_id, preview_hash, nonce = await self.reach_preview()
@@ -788,8 +892,9 @@ class SubmitTests(BrokerTestCase):
         self.assertNotIn("NJU-2026-0001", record.receipt_baseline)
         # The baseline came from the real tracking page, read in a short-lived
         # tab without touching the supervised form page.
+        self.assertTrue(self.companion.collect_urls)
         self.assertEqual(
-            self.companion.collect_urls, [TEST_ORIGIN + TEST_TRACKING_PATH]
+            set(self.companion.collect_urls), {TEST_ORIGIN + TEST_TRACKING_PATH}
         )
         record = await self.broker.reconcile(session_id, extension_id=EXTENSION_ID)
         self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
@@ -813,6 +918,68 @@ class SubmitTests(BrokerTestCase):
         outcome = await self.submit(session_id, preview_hash, nonce)
         self.assertEqual(outcome.state, BrowserSessionState.UNKNOWN)
         self.assertEqual(len(self.companion.click_calls), 1)
+
+    async def test_reconcile_rejects_a_redirected_tracking_page(self) -> None:
+        session_id, preview_hash, nonce = await self.reach_preview()
+        self.companion.click_outcome = "UNKNOWN"
+        await self.submit(session_id, preview_hash, nonce)
+        self.companion.tracking_matches = ["NJU-2026-0009"]
+        self.companion.collect_url_override = TEST_ORIGIN + TEST_APP_PATH
+        record = await self.broker.reconcile(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(record.diagnostic_code, "RECONCILE_UNSAFE")
+        self.assertIsNone(record.receipt)
+
+    async def test_reconcile_rejects_extra_query_on_the_tracking_page(self) -> None:
+        session_id, preview_hash, nonce = await self.reach_preview()
+        self.companion.click_outcome = "UNKNOWN"
+        await self.submit(session_id, preview_hash, nonce)
+        self.companion.tracking_matches = ["NJU-2026-0009"]
+        self.companion.collect_url_override = (
+            TEST_ORIGIN + TEST_TRACKING_PATH + "?page=1"
+        )
+        record = await self.broker.reconcile(session_id, extension_id=EXTENSION_ID)
+        self.assertEqual(record.state, BrowserSessionState.UNKNOWN)
+        self.assertEqual(record.diagnostic_code, "RECONCILE_UNSAFE")
+
+    async def test_baseline_rejects_a_redirected_tracking_page(self) -> None:
+        session_id, preview_hash, nonce = await self.reach_preview()
+        self.companion.collect_url_override = TEST_ORIGIN + TEST_APP_PATH
+        with self.assertRaises(BrowserPolicyError) as caught:
+            await self.submit(session_id, preview_hash, nonce)
+        self.assertEqual(getattr(caught.exception, "reason", ""), "TRACKING_URL_MISMATCH")
+        self.assertEqual(self.companion.click_calls, [])
+        self.assertEqual(self.companion.activate_calls, [])
+
+    async def test_hidden_values_are_never_returned_to_callers(self) -> None:
+        companion = standard_companion()
+        app = companion.pages[TEST_APP_PATH]
+        app.fields.append(
+            FakeField("ctl:0:9", kind="hidden", name="csrf", value="token-1")
+        )
+        self.make_broker(companion=companion)
+        await self.broker.register_adapter(
+            standard_adapter(
+                allowed_page_fingerprints=(
+                    app_page_fingerprint(),
+                    app_page_fingerprint(
+                        extra_fields=(
+                            FakeField("ctl:0:9", kind="hidden", name="csrf", value=""),
+                        )
+                    ),
+                )
+            )
+        )
+        session_id = await self.create()
+        await self.navigate(session_id, TEST_ORIGIN + TEST_LOGIN_PATH)
+        snapshot = await self.navigate(session_id, TEST_ORIGIN + TEST_APP_PATH)
+        hidden = next(
+            item for item in snapshot.fields if item.locator == "ctl:0:9"  # type: ignore[attr-defined]
+        )
+        self.assertEqual("hidden", hidden.kind)
+        self.assertEqual("", hidden.value)
+        record = await self.broker.get_session(session_id, extension_id=EXTENSION_ID)
+        self.assertNotIn("token-1", repr(record))
 
     async def test_reconciliation_not_found_keeps_unknown(self) -> None:
         session_id, preview_hash, nonce = await self.reach_preview()

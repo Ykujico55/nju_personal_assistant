@@ -2,19 +2,21 @@
 
 本文件面向后续实现模型。开始任何任务前，先阅读 `README.md`、`TODO.md`、`docs/CONTRACTS_AND_INTERFACES.md`、`DESIGN_AND_DEVELOPMENT.md` 中对应章节及 `docs/NEXT_STEPS.md` 中唯一一个待办项。一次只完成一个编号任务；当前只允许推进 `TODO.md` 标为 `NEXT` 的任务。
 
+以下 Tool Gateway、R2/R3、Outbox 和 `UNKNOWN` 规则适用于受监督的宿主工具与 Desktop Companion 链路。F07 另有用户要求保留的本机直接交互入口 `assistantctl ehall`：用户亲自登录后，页面在导航、观察和填写期间照常联网（包括页面自行发起的 POST）；助手仅在准备点击用户指定的最终提交按钮时打开本机确认页并等待确认。该入口不保证确认前没有服务器写入，也不把本机确认页当作绑定完整 payload、材料和后果的权威预览；不得用它替代受监督链路的安全验收。
+
 ## 架构边界
 
 - 依赖方向只能是 `api/infrastructure/workers -> core -> domain`。
 - `extensions/*` 只能依赖公开 `personal_assistant_sdk` 与扩展自身依赖，不能导入 `personal_assistant.core`。
 - 新业务功能只能新增扩展并注册标准槽，禁止在核心出现具体扩展 ID、业务专用路由或业务专用核心表。
-- 外部副作用只能经过 Tool Gateway；禁止从 API 路由、Agent、扩展管理器或模型适配器直接发送邮件/提交表单。
+- 受监督工具链路的外部副作用只能经过 Tool Gateway；禁止从 API 路由、Agent、扩展管理器或模型适配器直接发送邮件/提交表单。本机 `assistantctl ehall` 的浏览器直接交互按上述单独契约运行。
 - 凭据只通过 `SecretHandle` 和宿主代理能力使用。日志、RPC、模型输入、数据库和测试 fixture 中不得出现真实凭据。
 - `venv + worker process` 只隔离依赖和崩溃；所有扩展被视为用户信任代码，不得把它描述成恶意代码沙箱。
 
 ## 状态与安全
 
 - 风险只有 `R0/READ`、`R1/INTERNAL_WRITE`、`R2/EXTERNAL_WRITE`、`R3/PROHIBITED` 四档。
-- R3 永久阻断；R2 必须使用一次性、5 分钟、绑定目标/payload 哈希/扩展版本/nonce 的审批。
+- 受监督工具链路中 R3 永久阻断；R2 必须使用一次性、5 分钟、绑定目标/payload 哈希/扩展版本/nonce 的审批。本机直接交互入口不宣称提供这些保证。
 - payload、目标、附件哈希或扩展版本任一变化，旧审批立即无效。
 - 外部动作结果不明时记录 `UNKNOWN`，绝不自动重试。
 - 队列是 at-least-once；副作用靠幂等键、回执与对账实现 effectively-once。
@@ -25,7 +27,7 @@
 1. 读相关协议、已有测试和相邻实现；不要猜接口。
 2. 先写或更新失败测试，再做最小实现。
 3. 只编辑待办项授权的文件；发现需要跨边界改动时停止并记录原因。
-4. 运行目标测试，再运行全部测试；不得用跳过/删除断言换取绿色。
+4. 小型局部改动只运行改动路径的目标测试和此前相关故障的回归测试；不得用跳过/删除断言换取绿色。跨模块改动、共享状态或审批/Outbox 等关键链路变更，以及阶段验收或发布时，运行全部测试。未运行全量测试时，在报告中说明测试范围与原因。
 5. 更新 `docs/NEXT_STEPS.md` 的任务状态和证据。不要写“已完成”而没有可复现命令。
 6. 报告：改动文件、通过的命令、未实现项、风险和推荐的下一编号任务。
 

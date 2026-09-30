@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01 + F02 + F03 + F04 + F05 completed baseline + F06 in progress / contract v1.6（F02 增补见第 11 节，F03 增补见第 12 节，F04 增补见第 13 节，F05 增补见第 14 节，F06 增补见第 15 节）；F07 实现完成、等待独立验收 / contract v1.7（F07 增补见第 16 节）
+版本：F01–F06 completed baseline；F07 `IN_PROGRESS`，独立复验与真实提交前验收未完成 / contract v1.16（F07 增补见第 16 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -709,9 +709,11 @@ F06 交付 `nju.smail` 扩展与它需要的通用宿主邮件能力：只读 IM
 - **`host.mail.fetch` 帧预算**：宿主按 `MAX_FETCH_RAW_BYTES = 512 KiB` 原始字节预算分批返回；单封超预算时截断并标记 `truncated`，并返回 `batch_limited=true` 表示同一游标下仍有邮件；扩展保留真实宿主错误码（`_safe_code` 不再把 `DATA_RESULT_TOO_LARGE` 等伪装为 `MAIL_UNAVAILABLE`），并按 `last_uid` 继续轮询剩余批次。
 - **受控真实只读验收**：真实 `imap.exmail.qq.com:993` 同步 15 封邮件/15 个事件（INBOX 13 + Sent Messages 2），第二次同步 0 新，`mail_send_actions=0`；服务器侧 `EXAMINE INBOX OK 13` 与容器三种 LIST 探测确认该账号 IMAP 可见邮件即这些；客户端专用密码仅存在于该次进程内存（F09 前不持久化）。`\NoSelect` 属性按大小写不敏感处理，带 `\HasChildren` 的容器会再执行一次只读引用 LIST 枚举子文件夹。回归测试：`tests/integration/test_extension_non_ascii_install_path.py`、`tests/unit/test_extension_rpc_robustness.py`、`tests/integration/test_mail_protocol_f06.py`、`tests/unit/test_mail_host_fetch_budget_f06.py`、`tests/unit/test_smail_sync_f06.py`。
 
-## 16. F07 实施后的契约补充（contract v1.11，IN_PROGRESS，等待独立验收）
+## 16. F07 实施后的契约补充（contract v1.13，IN_PROGRESS，等待独立验收）
 
 F07 交付通用的受监督浏览器基架（`core/browser` + `infrastructure/browser` + 核心迁移 `0007`）与业务扩展 `nju.ehall`。核心没有出现任何校园事务 ID、页面选择器或 NJU 分支；Playwright 只出现在 `infrastructure/browser/driver.py`；扩展只依赖公开 SDK；`0001`–`0006` 逐字节未改。本节与 `tests/contract/test_f07_contract_consistency.py` 共同冻结边界。
+
+本节 16.1–16.4 的页面核验、写请求阻断、Tool Gateway、R2/R3、Outbox 和 `UNKNOWN` 规则专指受监督 Companion + `nju_ehall` 链路。用户要求另保留本机直接交互入口 `assistantctl ehall`：用户亲自登录后，页面在导航、观察、填写期间照常联网，包括页面发起的 POST；助手仅在准备点击用户指定的最终提交按钮时暂停并等待本机确认。该入口不判断其他页面动作是否已完成办理，不保证确认前没有服务器写入；本机确认页只列出脚本记录的已填字段和指定按钮，不是绑定完整 payload、材料及后果的权威预览，也不替代受监督链路的验收。`PA_BROWSER_ORIGIN_MODE=open` 仅关闭 Companion 的 origin 白名单校验，其余受监督规则继续生效，不等于 `assistantctl ehall` 的直接交互入口。
 
 ### 16.1 新增核心类型与端口（`core/browser`）
 
@@ -726,7 +728,7 @@ F07 交付通用的受监督浏览器基架（`core/browser` + `infrastructure/b
 ### 16.2 Desktop Companion 与会话 capability
 
 - Companion 是独立进程，只运行在当前登录用户桌面会话中，只绑定 `127.0.0.1`；host 与 Companion 只通过回环 HTTP 通信。
-- 浏览器强制 `headless=False`；`infrastructure/browser/driver.py` 是唯一导入 Playwright 的模块。driver 不使用 `page.evaluate`、不导出 cookie/storage state、不截图、不建立 profile 备份；每个请求按精确 origin allow-list 拦截，非白名单请求 abort 并计数；fill 阶段阻断全部非 GET/HEAD/OPTIONS，因此填写不可能触发服务器保存。
+- 浏览器强制 `headless=False`；`infrastructure/browser/driver.py` 是唯一导入 Playwright 的模块。driver 不使用 `page.evaluate`、不导出 cookie/storage state、不截图、不建立 profile 备份；`PA_BROWSER_ORIGIN_MODE=allowlist` 时每个请求按精确 origin 白名单拦截，默认 `open` 时不做 origin 白名单校验，两种模式仍执行 URL 结构与写请求规则；fill 阶段阻断全部非 GET/HEAD/OPTIONS，因此该受监督链路的填写不可能触发服务器保存。
 - capability 至少 256 bit（`secrets.token_urlsafe(32)`），绑定会话与用途、TTL ≤1 小时（默认 10 分钟）、可撤销、默认只存内存，进程重启即失效。根 capability 只用于建会话/诊断/撤销；会话 capability 由 host 内存保存，绝不进入扩展、RPC、数据库、日志或 Git。
 - Companion 不接收/保存密码、验证码、二维码、cookie 或 storage state；登录/验证码/扫码/动态验证只由用户在可见浏览器中完成，宿主在等待期间进入 `WAITING_USER` 且不占用后台执行 lease。
 
@@ -752,7 +754,7 @@ F07 交付通用的受监督浏览器基架（`core/browser` + `infrastructure/b
 
 - 新增核心迁移 `0007_f07_browser_sessions.sql`：`browser_sessions`（状态约束、origin/url、适配器与事务、fingerprint、preview JSON/hash/nonce、outcome/receipt/diagnostic、`re_navigations`/`visited_paths`、`owner_id`、`version`、created/updated/expires）与 `browser_adapters`（`(extension_id, adapter_id, adapter_version)` 主键、descriptor JSON、版本）。表内不含 cookie、密码、token、storage state、截图或 trace；`preview`/`receipt` 只保存本契约定义的有界结构。
 - 新增核心迁移 `0008_f07_browser_session_uniqueness.sql`（审计修复）：`browser_sessions` 增加 `receipt_baseline`（点击前跟踪页基线，对账时扣除）并为非终态会话建立 `task_id` 部分唯一索引 `browser_sessions_task_open_unique_idx`，使"每任务单活动会话"成为原子数据库不变量；`0007` 与更早迁移逐字节未改。
-- 新增配置：`PA_BROWSER_COMPANION_URL`（必须 loopback http，半配置 fail closed）、`PA_BROWSER_ALLOWED_ORIGINS`（默认空 = 不打开任何会话；所有 adapter origin 必须是其子集）、`PA_BROWSER_SUBMIT_ENABLED`（默认 false）。Companion root capability 只经 `PA_BROWSER_COMPANION_CAPABILITY` 进程内存注入，不进入 Settings repr、数据库或日志。
+- 新增配置：`PA_BROWSER_COMPANION_URL`（必须 loopback http，半配置 fail closed）、`PA_BROWSER_ALLOWED_ORIGINS`（白名单模式默认空 = 不打开任何会话；所有 adapter origin 必须是其子集；开放模式的修订见 16.16）、`PA_BROWSER_SUBMIT_ENABLED`（默认 false）。Companion root capability 只经 `PA_BROWSER_COMPANION_CAPABILITY` 进程内存注入，不进入 Settings repr、数据库或日志。
 - public/admin lifespan 启动时调用 `BrowserSessionStore.recover_stale_executions`：仅把崩溃遗留的 `EXECUTING` 会话原子转 `UNKNOWN`，绝不恢复点击；重启后队列的 at-least-once 不会造成第二次提交（outbox + 会话状态双重约束）。
 
 ### 16.7 扩展 `nju.ehall` 与有意未实现
@@ -774,6 +776,45 @@ F07 交付通用的受监督浏览器基架（`core/browser` + `infrastructure/b
 - **证据（2026-09-21，第二轮快照，数字已被第三轮 v1.11 结果取代）**：`./scripts/test.ps1` → 1031 passed、119 skipped（含真实 Chromium 21 passed）；真实 PostgreSQL 集合 → 119 passed；`test_cancel_reaps_the_browser_process` 5/5；wheel 209 条目含 `0008`。
 - 有意未实现：真实 ehall 适配器与真实提交验收（`NOT_RUN`，需要用户亲自认证与合法低风险事务）、附件上传、PWA 表单渲染（F08）、Companion 自动启动/服务化与 Win32 Job Object 管护（F09）。
 - 剩余风险：真实站点在"连接被重置且无任何响应字节"的极端情况下可能触发浏览器自身 POST 重试（这不是本系统发起的重试）；因此真实提交必须依赖回执/流程编号并保留 UNKNOWN 对账。真实 SSO 需要把认证 origin 加入用户 allow-list。
+
+### 16.14 第五轮复验缺陷修复（contract v1.14，2026-09-24）
+
+- **扩展生命周期 CAS 比较包版本**：`LifecycleStore.save(expected=(state, version))` 的 `version` 是扩展包版本，对应数据库 `extensions.active_version`；不得比较 `manifest_version`，后者是 Manifest 格式版本。PostgreSQL CAS 失败后，`_quarantine` 重新读取 durable row，只要最新记录仍为 `ENABLED`，就恢复该记录对应的 Registry 槽位，即使它与原记录为同一包版本；缺失或非启用记录保持禁用。真实 PostgreSQL 回归覆盖 `active_version='0.1.0'`、`manifest_version='1'` 的成功 CAS；单元反例覆盖同版本 CAS 失败后恢复 Registry。
+- **浏览器表单成功控件序列化**：审批字段哈希继续绑定 locator 与语义值（checkbox/radio 的 `true/false`）；实际 body 模板按 HTML successful controls 规则生成：unchecked checkbox/radio 被省略，选中控件提交实际 `value`（缺省值为 `on`），disabled 控件（含浏览器判定的继承禁用）不提交，文件/密码/按钮类非提交控件不加入普通控件模板，仅实际 final submitter 可按 name/value 加入。driver 在放行真实 urlencoded POST 前分别核验语义字段哈希与完整请求体哈希；不支持或不一致仍 fail closed。真实 Chromium 本地 HTTPS 回归覆盖勾选/未勾选 checkbox、radio 组切换和 disabled 字段，真实 ehall 交易表单仍未执行。
+
+### 16.15 第五轮复验阻断项修复（contract v1.15，2026-09-24）
+
+- **PostgreSQL quarantine CAS 比较列**：`LifecycleStore.save(expected=(state, package_version))` 必须把 `package_version` 与 `extensions.active_version` 比较；`manifest_version` 是 Manifest 格式版本，禁止用于包版本 CAS。CAS 返回 `False` 后 `_quarantine` 重读 durable row：最新记录仍为 `ENABLED` 时按最新记录恢复 Registry（包括原包版本相同的情况）；缺失或非启用记录不恢复。回归覆盖包版本 `0.1.0`、格式版本 `1` 的真实 PostgreSQL CAS 与同版本 CAS 失败后 Registry 恢复。
+- **验收状态**：2026-09-24 的全量失败快照（`1068 passed / 161 skipped / 5 failed`；PostgreSQL/Worker `123 passed / 1 failed`）已由 2026-09-26 复验取代：`./scripts/test.ps1` 为 `1110 passed / 124 skipped`（含真实 headed Chromium），`./scripts/test-postgres.ps1` 为 `124 passed`，Ruff/Mypy、`pip check`、`git diff --check` 通过。真实 ehall 交易表单/提交尚未运行，F07 继续 `IN_PROGRESS`，不得标记 DONE。详细命令与结果见 `docs/NEXT_STEPS.md` F07 章节。
+
+### 16.16 用户可选的开放 origin 模式（contract v1.16，2026-09-26）
+
+- `PA_BROWSER_ORIGIN_MODE=allowlist|open` 是本机启动配置，默认 `open`。用户通过修改配置并重启宿主/Companion 手动选择；`scripts/ehall_real_acceptance.py capture` 也默认 `open`，可用 `--origin-mode allowlist` 切换。模式在创建会话时传至 `DesktopBrowserPort`、Companion 和 driver，活动会话不得中途切换。未显式传模式的底层旧调用保持 `allowlist`，无需迁移数据库或扩展 Manifest。
+- `allowlist` 沿用精确 HTTPS origin 白名单和适配器 origin 必须是其子集的语义。`open` 不校验宿主或 Companion 的 origin 白名单，因此跨域的 HTTPS SSO/事务页可访问；但 URL 必须仍为格式合法的 HTTPS，拒绝 userinfo、反斜杠、编码穿越及非 HTTPS 重定向，适配器路径、已核验页面指纹、R3 分类、非 GET 默认阻断、R2 一次性审批、最终提交目标和 payload 精确绑定、UNKNOWN 不自动重试均保持。开放模式不等于任意站点可提交。
+- 真实采集的 `CURRENT` 可采用用户新开的唯一标签页，只读选取前复核其 URL 符合当前模式。采集报告和日志去除 URL 动态查询参数与普通控件当前值；带动态查询参数的事务 URL 不得被预览脚本重放，须先实现人工核验的声明式导航。缺少 `origin_mode` 字段的旧 `capture` 报告继续按当时的 `allowlist` 解读。
+- 采集器对默认阻断的非 GET 请求输出有界诊断：方法、资源类型、静态 `.do`/`.json` 端点名、不含查询参数的路径哈希前缀与计数，最多 32 种；请求头、Referer、body、cookie、原始路径和完整 URL 均不得进入诊断或采集报告。诊断只用于区分事务页面加载所需的读取请求与实际写入，不自动授予任何 POST 例外；放行前仍需核验接口语义并遵守风险/审批契约。
+
+### 16.13 第五轮独立验收修复（contract v1.13，2026-09-24）
+
+第五轮独立审计判定 2 个 P1 与 2 个 P2。修复与冻结语义：
+
+- **隐藏/密码控件值永不离开浏览器进程**：driver 把 `input[type=hidden]` 移出定位符空间（新增隐藏控件不会移动既有 `ctl:` 索引），改以 `hidden_fields`（仅 type/name/element_id）进入结构文档与页面指纹；隐藏值只保留在浏览器进程内部用于提交模板哈希。`snapshot` 对隐藏/密码控件的导出值一律为空，核心 `_snapshot_impl` 与宿主 `_snapshot_view` 再做防御性清空。`page_structure_document` 仅在存在隐藏字段时输出 `hidden_fields` 键，既有页面指纹（无隐藏字段）保持不变。
+- **对账/基线双重精确绑定**：`reconcile` 改为**单次** `collect_matches(url=tracking)` 只读标签页读取（消除导航与采集之间的重定向窗口），并用 `_tracking_url_matches` 校验最终 URL 的 origin、path#hash 精确等于声明目标且 **query 为空**；`_tracking_baseline` 使用同一判定（不符即 `TRACKING_URL_MISMATCH`，提交中止、0 次点击）。重定向到其他允许页面或附加查询参数一律 `RECONCILE_UNSAFE`，绝不生成 `host_tracking` 证明。
+- **quarantine 原子 CAS**：`LifecycleStore.save` 新增可选 `expected=(state, package_version)`（内存与 PostgreSQL 实现均为条件写入，返回布尔；PostgreSQL 比较 `active_version`）；`_quarantine` 在核验持久状态后以 CAS 写入 `QUARANTINED`，并发禁用/更新时写入失败且不记录隔离操作，若最新持久行仍为 `ENABLED` 则恢复该行对应的 Registry 注册。
+- **payload 校验按获批字段收窄**：driver 的“声明字段哈希”只覆盖 `expected_payload_locators` 中列出的适配器字段（随 click 传入），静态 hidden/CSRF 等未获批字段不参与该哈希、但必须与点击时全 body 模板哈希一致（注入或改动仍 abort）。successful-control 序列化细节见 16.14。因此带 CSRF 令牌的正常表单可提交（真实 Chromium 反例验证），未批准字段注入/改写仍被阻断。
+
+### 16.12 第四轮独立验收修复（contract v1.12，2026-09-23）
+
+第四轮独立审计判定 3 个 P1（另 1 项由 P1 校准为 P2）与 5 个 P2。修复与冻结语义：
+
+- **真实 POST payload 绑定审批**：新增核心 `form_payload_sha256(pairs)`（排序 key/value 的 canonical SHA-256）。`execute_submit` 用获批预览的全部字段（locator, new_value）计算 `expected_payload_sha256` 并随 `browser.click` 传入 driver；driver 在提交临界区开始时用页面上全部具名控件（含新增纳入指纹的 `input[type=hidden]`）快照出模板哈希，并在 route 放行前对**真实 `request.post_data`** 解析（仅 `application/x-www-form-urlencoded`，multipart 等一律 fail closed）：①声明字段子集哈希必须等于获批哈希；②完整 body 哈希必须等于点击时模板哈希。任一不符即 abort 并计入 `payload_mismatches`。请求正文永不导出浏览器进程，只比较哈希。反例：未批准隐藏字段注入、批准字段改写、multipart、非主框架/后台 fetch。
+- **对账与基线精确绑定 tracking 目标**：`reconcile` 与 `_tracking_baseline` 在读取后校验实际最终 URL 的 origin+path（含 hash）**精确等于** `tracking_path`；重定向到其他允许页面不再可能生成 `host_tracking` 证明，返回 `RECONCILE_UNSAFE`（基线阶段直接以 `TRACKING_URL_MISMATCH` 中止提交，0 次点击）。`collect_matches(url=...)` 返回临时标签页的最终 URL 供宿主校验。
+- **迟到故障不得移除新版 Registry**：`_quarantine` 先重读持久记录，只有 durable 仍为同版本 ENABLED 才 `registry.disable`；禁用后再次重读，若版本在窗口内被并发升级则 `registry.enable` 恢复新版本并放弃隔离写入。反例：旧版本迟到故障（持久层与 Registry 均为 0.2.0）、核验窗口内换版。
+- **登录路径精确/显式 glob 匹配**：`_login_path_matches` 与核心策略一致——不含 `*` 时精确相等，只有显式 `*` 才用 `fnmatchcase`；`/sso/login-evil` 不再获得登录写窗口。
+- **Companion 真实流式 body 限额**：纯 ASGI `_BodyLimitMiddleware` 累计真实接收字节（chunked 无 `Content-Length` 同样在 64 KiB 处返回 413，且超大请求的 disconnect 异常被吸收为 413 而非 500）；`create_session`/`revoke` 在解析 JSON 前先校验 root capability（401）。
+- **握手即就绪**：`companion_entry` 先启动 uvicorn `serve(sockets=[sock])` 并等待 `server.started`，之后才打印握手；宿主收到握手时端口已在接受请求（真实浏览器用例不再有启动竞态失败）。
+- **IPv6 loopback**：客户端重建 base URL 时为含 `:` 的 host 加方括号，`http://[::1]:8765` 不再被拼成非法 URL。
+- **证据校准**：仓库处于已提交状态（HEAD=f3be2cd=origin/main），本轮修复位于工作区未提交改动；文档数字以最近一次实测为准并标注历史快照已被取代；`git diff --check 1ef9ef5..HEAD` 的 LF/CRLF 混用属于已提交历史，未经用户决定不做历史改写（工作区文件统一 LF）。
 
 ### 16.11 第三轮独立验收修复（contract v1.11，2026-09-21）
 

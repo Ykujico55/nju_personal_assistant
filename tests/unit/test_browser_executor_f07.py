@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from personal_assistant.core.approvals import ApprovalService, InMemoryApprovalRepository
 from personal_assistant.core.browser import BrowserSessionBroker
+from personal_assistant.core.browser.ports import BrowserSessionRecord
+from personal_assistant.core.jobs.outbox import SideEffectState
 from personal_assistant.core.tools import ToolGateway, ToolPolicy, ToolRegistry
-from personal_assistant.domain import RiskLevel, ToolCall, ToolDescriptor, ToolOutcomeKind
+from personal_assistant.domain import (
+    ApprovalState,
+    RiskLevel,
+    ToolCall,
+    ToolDescriptor,
+    ToolOutcomeKind,
+)
 from personal_assistant.infrastructure.browser.executor import (
     BROWSER_FILL_CAPABILITY,
     BROWSER_SUBMIT_CAPABILITY,
@@ -371,6 +381,10 @@ class FillGatewayTests(ExecutorTestCase):
 
 
 class SubmitGatewayTests(ExecutorTestCase):
+    def submit_intent_state(self) -> SideEffectState:
+        intents = self.outbox._intents.values()  # noqa: SLF001 - assert durable test state
+        return next(item.state for item in intents if item.tool_id == "ehall.submit")
+
     async def reach_preview(self) -> tuple[str, dict[str, object], dict[str, object]]:
         self.make_gateway()
         session_id, fingerprint = await self.reach_prepared_session()
@@ -420,6 +434,138 @@ class SubmitGatewayTests(ExecutorTestCase):
         _, result = await self.approve_and_submit(arguments)
         self.assertEqual(result.kind, ToolOutcomeKind.OUTCOME_UNKNOWN)
         self.assertEqual(len(self.companion.click_calls), 1)
+
+    async def test_malformed_click_result_is_unknown_through_gateway_and_outbox(self) -> None:
+        session_id, arguments, _ = await self.reach_preview()
+        self.companion.malformed_click_result = True
+
+        approval, result = await self.approve_and_submit(arguments)
+
+        self.assertEqual(result.kind, ToolOutcomeKind.OUTCOME_UNKNOWN)
+        record = await self.sessions.get(session_id)
+        assert record is not None
+        self.assertEqual(record.state.value, "UNKNOWN")
+        self.assertEqual(
+            (await self.approvals.get(approval.approval_id or "")).state,
+            ApprovalState.UNKNOWN,
+        )
+        self.assertEqual(self.submit_intent_state(), SideEffectState.UNKNOWN)
+        self.assertEqual(len(self.companion.click_calls), 1)
+
+    async def test_unknown_save_failure_still_marks_outbox_unknown(self) -> None:
+        session_id, arguments, _ = await self.reach_preview()
+        self.companion.malformed_click_result = True
+        original_save = self.sessions.save
+
+        async def unavailable_save(
+            record: BrowserSessionRecord, *, expected_version: int
+        ) -> BrowserSessionRecord:
+            if record.state.value == "UNKNOWN":
+                raise RuntimeError("session store unavailable")
+            return await original_save(record, expected_version=expected_version)
+
+        with patch.object(self.sessions, "save", side_effect=unavailable_save):
+            _, result = await self.approve_and_submit(arguments)
+
+        self.assertEqual(result.kind, ToolOutcomeKind.OUTCOME_UNKNOWN)
+        self.assertEqual(self.submit_intent_state(), SideEffectState.UNKNOWN)
+        self.assertEqual(len(self.companion.click_calls), 1)
+        await self.broker.recover_stale_sessions()
+        record = await self.sessions.get(session_id)
+        assert record is not None
+        self.assertEqual(record.state.value, "UNKNOWN")
+
+    async def test_cancelled_click_marks_browser_and_outbox_unknown(self) -> None:
+        session_id, arguments, _ = await self.reach_preview()
+        self.companion.click_blocker = asyncio.Event()
+        approval = await self.gateway.invoke(self.call("ehall.submit", arguments))
+        record = await self.approvals.get(approval.approval_id or "")
+        await self.approvals.approve(
+            approval.approval_id or "", nonce=record.nonce, actor_id="owner"
+        )
+        task = asyncio.create_task(
+            self.gateway.invoke(
+                self.call(
+                    "ehall.submit", arguments, approval_id=approval.approval_id
+                )
+            )
+        )
+        await asyncio.wait_for(self.companion.click_started.wait(), timeout=1)
+
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        session = await self.sessions.get(session_id)
+        assert session is not None
+        self.assertEqual(session.state.value, "UNKNOWN")
+        self.assertEqual(
+            (await self.approvals.get(approval.approval_id or "")).state,
+            ApprovalState.UNKNOWN,
+        )
+        self.assertEqual(self.submit_intent_state(), SideEffectState.UNKNOWN)
+        self.assertEqual(len(self.companion.click_calls), 1)
+        self.assertEqual(len(self.companion.collect_urls), 2)
+
+    async def test_cancel_during_success_finalization_keeps_terminal_outbox(self) -> None:
+        session_id, arguments, _ = await self.reach_preview()
+        self.companion.receipt_appears_after_click = "NJU-2026-0042"
+        await self._cancel_during_submit_finalization(arguments)
+
+        session = await self.sessions.get(session_id)
+        assert session is not None
+        self.assertEqual(session.state.value, "SUCCEEDED")
+        self.assertEqual(self.submit_intent_state(), SideEffectState.SUCCEEDED)
+        approval = await self.approvals.get(self._submit_approval_id)
+        self.assertEqual(approval.state, ApprovalState.SUCCEEDED)
+        self.assertEqual(len(self.companion.click_calls), 1)
+
+    async def test_cancel_during_unknown_finalization_keeps_unknown_outbox(self) -> None:
+        session_id, arguments, _ = await self.reach_preview()
+        self.companion.malformed_click_result = True
+        await self._cancel_during_submit_finalization(arguments)
+
+        session = await self.sessions.get(session_id)
+        assert session is not None
+        self.assertEqual(session.state.value, "UNKNOWN")
+        self.assertEqual(self.submit_intent_state(), SideEffectState.UNKNOWN)
+        approval = await self.approvals.get(self._submit_approval_id)
+        self.assertEqual(approval.state, ApprovalState.UNKNOWN)
+        self.assertEqual(len(self.companion.click_calls), 1)
+
+    async def _cancel_during_submit_finalization(
+        self, arguments: dict[str, object]
+    ) -> None:
+        requested = await self.gateway.invoke(self.call("ehall.submit", arguments))
+        self._submit_approval_id = requested.approval_id or ""
+        record = await self.approvals.get(self._submit_approval_id)
+        await self.approvals.approve(
+            self._submit_approval_id, nonce=record.nonce, actor_id="owner"
+        )
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        original_finalize = self.outbox.finalize
+
+        async def delayed_finalize(*args: object, **kwargs: object) -> None:
+            entered.set()
+            await release.wait()
+            await original_finalize(*args, **kwargs)  # type: ignore[arg-type]
+
+        with patch.object(self.outbox, "finalize", side_effect=delayed_finalize):
+            task = asyncio.create_task(
+                self.gateway.invoke(
+                    self.call(
+                        "ehall.submit", arguments, approval_id=self._submit_approval_id
+                    )
+                )
+            )
+            await asyncio.wait_for(entered.wait(), timeout=1)
+            task.cancel()
+            await asyncio.sleep(0)
+            task.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=1)
 
     async def test_companion_timeout_is_outcome_unknown(self) -> None:
         _, arguments, _ = await self.reach_preview()

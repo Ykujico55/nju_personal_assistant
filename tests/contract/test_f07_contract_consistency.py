@@ -358,6 +358,7 @@ class FailClosedDefaultsContract(unittest.TestCase):
     def test_browser_settings_default_to_disabled(self) -> None:
         text = (ROOT / "src" / "personal_assistant" / "settings.py").read_text("utf-8")
         self.assertIn("browser_allowed_origins: tuple[str, ...] = ()", text)
+        self.assertIn('browser_origin_mode: str = "open"', text)
         self.assertIn("browser_submit_enabled: bool = False", text)
         self.assertIn("browser_companion_url: str = \"\"", text)
 
@@ -380,10 +381,38 @@ class FailClosedDefaultsContract(unittest.TestCase):
 
 
 class DocumentationContract(unittest.TestCase):
+    def test_local_ehall_boundary_is_distinct_from_supervised_chain(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text("utf-8")
+        contracts = (ROOT / "docs" / "CONTRACTS_AND_INTERFACES.md").read_text("utf-8")
+        readme = (ROOT / "README.md").read_text("utf-8")
+        for name, text in (("AGENTS", agents), ("CONTRACTS", contracts), ("README", readme)):
+            with self.subTest(document=name):
+                self.assertIn("assistantctl ehall", text)
+                self.assertIn("Tool Gateway", text)
+                self.assertIn("指定的最终提交按钮", text)
+                self.assertIn("确认前没有服务器写入", text)
+        self.assertIn("PA_BROWSER_ORIGIN_MODE=open", contracts)
+        self.assertIn("本机直接交互入口", contracts)
+        self.assertIn("受监督 Companion", readme)
+
+    def test_real_trial_fill_status_is_current(self) -> None:
+        readme = (ROOT / "README.md").read_text("utf-8")
+        next_steps = (ROOT / "docs" / "NEXT_STEPS.md").read_text("utf-8")
+        readme_f07 = readme.split("### ehall 受监督浏览器", 1)[1].split("\n## 验证", 1)[0]
+        next_steps_f07 = next_steps.split("### F07 —", 1)[1].split("### F08 —", 1)[0]
+        for name, text in (("README", readme_f07), ("NEXT_STEPS", next_steps_f07)):
+            with self.subTest(document=name):
+                self.assertIn("真实教室借用已部分试填", text)
+                self.assertIn("权威预览", text)
+                self.assertIn("未验收", text)
+                self.assertIn("IN_PROGRESS", text)
+
     def test_contracts_document_the_f07_section(self) -> None:
         text = (ROOT / "docs" / "CONTRACTS_AND_INTERFACES.md").read_text("utf-8")
         self.assertIn("F07", text)
-        self.assertIn("contract v1.7", text)
+        self.assertIn("contract v1.15", text)
+        self.assertIn("contract v1.16", text)
+        self.assertIn("PA_BROWSER_ORIGIN_MODE", text)
         self.assertIn("BrowserSessionBroker", text)
         self.assertIn("Desktop Companion", text)
 
@@ -395,6 +424,7 @@ class DocumentationContract(unittest.TestCase):
     def test_readme_documents_the_browser_boundary(self) -> None:
         text = (ROOT / "README.md").read_text("utf-8")
         self.assertIn("PA_BROWSER_ALLOWED_ORIGINS", text)
+        self.assertIn("PA_BROWSER_ORIGIN_MODE", text)
         self.assertIn("PA_BROWSER_COMPANION_URL", text)
 
 

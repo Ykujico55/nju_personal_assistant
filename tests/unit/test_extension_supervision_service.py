@@ -233,7 +233,9 @@ class FailingLifecycleStore(InMemoryLifecycleStore):
         super().__init__()
         self.fail_next_enabled_save = False
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self, record: ExtensionRecord, *, expected: object = None
+    ) -> None:
         if self.fail_next_enabled_save and record.state is ExtensionState.ENABLED:
             self.fail_next_enabled_save = False
             raise ExtensionError("lifecycle store write failed")
@@ -536,6 +538,132 @@ class SupervisorServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], list(self.registry.snapshot.capabilities))
         # Other supervisor operations still work after a worker crash.
         self.assertIsNotNone(await self.service.records())
+
+    async def test_late_failure_from_an_old_version_keeps_the_new_registry(self) -> None:
+        await self._install_and_enable(EXAMPLE)
+        old = await self.service.record("example.echo")
+        assert old is not None
+        newer = replace(
+            old,
+            manifest=replace(old.manifest, version="0.2.0"),
+            state=ExtensionState.ENABLED,
+        )
+        await self.store.save(newer)
+        self.registry.enable(newer)
+        await self.service._quarantine(old, RuntimeError("late failure"))
+        durable = await self.service.record("example.echo")
+        self.assertEqual("0.2.0", durable.manifest.version)
+        self.assertEqual(ExtensionState.ENABLED, durable.state)
+        self.assertEqual({"example.echo": "0.2.0"}, self.registry.history[-1])
+
+    async def test_quarantine_restores_a_version_swapped_during_the_window(self) -> None:
+        await self._install_and_enable(EXAMPLE)
+        old = await self.service.record("example.echo")
+        assert old is not None
+        newer = replace(
+            old,
+            manifest=replace(old.manifest, version="0.2.0"),
+            state=ExtensionState.ENABLED,
+        )
+        real_store = self.service._store
+        calls = {"count": 0}
+
+        class _SwappingStore:
+            async def get(inner_self, extension_id: str):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    return old
+                return newer
+
+            def __getattr__(inner_self, name: str):
+                return getattr(real_store, name)
+
+        self.service._store = _SwappingStore()  # type: ignore[assignment]
+        try:
+            await self.service._quarantine(old, RuntimeError("late failure"))
+        finally:
+            self.service._store = real_store
+        self.assertEqual({"example.echo": "0.2.0"}, self.registry.history[-1])
+
+    async def test_quarantine_keeps_a_concurrent_disable(self) -> None:
+        await self._install_and_enable(EXAMPLE)
+        old = await self.service.record("example.echo")
+        assert old is not None
+        disabled = replace(old, state=ExtensionState.DISABLED)
+        real_store = self.service._store
+        calls = {"count": 0}
+        saves: list[object] = []
+
+        class _DisableDuringWindow:
+            async def get(inner_self, extension_id: str):
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    return old
+                return disabled
+
+            async def save(inner_self, record, *, expected=None):
+                saves.append(record)
+                return True
+
+            def __getattr__(inner_self, name: str):
+                return getattr(real_store, name)
+
+        created: list[object] = []
+        original_create = self.operations.create
+
+        async def counting_create(operation):
+            created.append(operation)
+            await original_create(operation)
+
+        self.service._store = _DisableDuringWindow()  # type: ignore[assignment]
+        self.operations.create = counting_create  # type: ignore[method-assign]
+        try:
+            await self.service._quarantine(old, RuntimeError("late failure"))
+        finally:
+            self.service._store = real_store
+            self.operations.create = original_create  # type: ignore[method-assign]
+        self.assertEqual([], saves)
+        self.assertEqual([], created)
+
+    async def test_quarantine_cas_failure_does_not_overwrite(self) -> None:
+        await self._install_and_enable(EXAMPLE)
+        old = await self.service.record("example.echo")
+        assert old is not None
+        real_store = self.service._store
+
+        class _CasFailingStore:
+            async def get(inner_self, extension_id: str):
+                return old
+
+            async def save(inner_self, record, *, expected=None):
+                return False
+
+            def __getattr__(inner_self, name: str):
+                return getattr(real_store, name)
+
+        created: list[object] = []
+        original_create = self.operations.create
+
+        async def counting_create(operation):
+            created.append(operation)
+            await original_create(operation)
+
+        self.service._store = _CasFailingStore()  # type: ignore[assignment]
+        self.operations.create = counting_create  # type: ignore[method-assign]
+        try:
+            await self.service._quarantine(old, RuntimeError("late failure"))
+        finally:
+            self.service._store = real_store
+            self.operations.create = original_create  # type: ignore[method-assign]
+        durable = await self.service.record("example.echo")
+        self.assertEqual(ExtensionState.ENABLED, durable.state)
+        self.assertEqual(
+            "0.1.0",
+            self.registry.snapshot.extensions["example.echo"].manifest.version,
+            "a failed CAS must restore the registration for the latest durable ENABLED row",
+        )
+        self.assertIn("example.echo", self.registry.snapshot.extensions)
+        self.assertEqual([], created)
 
     async def test_enable_publishes_one_complete_snapshot(self) -> None:
         await self._install_and_enable(EXAMPLE)
@@ -1173,7 +1301,9 @@ class FlakyLifecycleStore:
     async def all(self):
         return await self._inner.all()
 
-    async def save(self, record: ExtensionRecord) -> None:
+    async def save(
+        self, record: ExtensionRecord, *, expected: object = None
+    ) -> None:
         if self._predicate(record):
             self.failures += 1
             raise OSError("injected durable store failure")

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -346,6 +348,24 @@ def _attachment_document(attachment: AttachmentPreview) -> dict[str, Any]:
         "sha256": attachment.sha256,
         "media_type": attachment.media_type,
     }
+
+
+def form_payload_sha256(pairs: Sequence[tuple[str, str]]) -> str:
+    """Canonical SHA-256 of a form payload (sorted name/value pairs).
+
+    Both the host (from the approved preview) and the browser driver (from the
+    real ``request.post_data``) compute this hash with the same algorithm, so
+    the write request can be proven to carry exactly the approved payload
+    without ever exporting the body to the host.
+    """
+
+    canonical = [
+        [str(key), str(value)]
+        for key, value in sorted(pairs, key=lambda item: (item[0], item[1]))
+    ]
+    return hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def canonical_preview_sha256(

@@ -113,6 +113,40 @@ class CompanionAuthOrderTests(unittest.TestCase):
         self.assertEqual(413, response.status_code, response.text)
         self.assertEqual("REQUEST_TOO_LARGE", response.json()["error"]["code"])
 
+    def test_chunked_body_without_content_length_is_rejected(self) -> None:
+        # A chunked request has no Content-Length: only counting the real
+        # received bytes can stop it.
+        def chunks():
+            for _ in range(5):
+                yield b"x" * (32 * 1024)
+
+        response = self.client.post(
+            "/v1/sessions",
+            content=chunks(),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.companion.root_capability}",
+            },
+        )
+        self.assertEqual(413, response.status_code, response.text)
+        self.assertEqual("REQUEST_TOO_LARGE", response.json()["error"]["code"])
+
+    def test_create_and_revoke_require_root_before_parsing(self) -> None:
+        for path in ("/v1/sessions", "/v1/revoke"):
+            with self.subTest(path=path):
+                response = self.client.post(
+                    path,
+                    content=b"{not-json",
+                    headers={
+                        "Authorization": "Bearer wrong-capability",
+                        "Content-Type": "application/json",
+                    },
+                )
+                self.assertEqual(401, response.status_code, response.text)
+                self.assertEqual(
+                    "CAPABILITY_INVALID", response.json()["error"]["code"]
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

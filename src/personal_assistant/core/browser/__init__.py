@@ -49,6 +49,7 @@ from personal_assistant.core.browser.models import (
     allowed_browser_transitions,
     canonical_preview_sha256,
     ensure_browser_transition,
+    form_payload_sha256,
 )
 from personal_assistant.core.browser.policy import (
     NavigationDecision,
@@ -137,6 +138,7 @@ __all__ = [
     "allowed_browser_transitions",
     "assess_risk",
     "canonical_preview_sha256",
+    "form_payload_sha256",
     "classify_labels",
     "compute_page_fingerprint",
     "descriptor_from_document",

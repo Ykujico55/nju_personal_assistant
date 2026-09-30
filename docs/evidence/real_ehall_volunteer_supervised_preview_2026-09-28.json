@@ -1,0 +1,64 @@
+{
+  "acceptance_complete": false,
+  "attachments": [],
+  "canonical_payload_hash": "b348a66eb82a570cd7e23061ae3b77acf95373c55c178cec350450a5c2218e4f",
+  "captured_at": "2026-09-28T14:41:20.940929+00:00",
+  "consequences": "页面显示“提交”按钮；具体提交后果和写入目标尚未核实。",
+  "fields": [
+    {
+      "field_id": "name",
+      "label": "名称",
+      "new_value": "自动化测试请勿提交",
+      "old_value": "",
+      "source": "TEMPLATE"
+    },
+    {
+      "field_id": "start",
+      "label": "开始时间",
+      "new_value": "2026-09-27 09:00",
+      "old_value": "",
+      "source": "TEMPLATE"
+    },
+    {
+      "field_id": "end",
+      "label": "结束时间",
+      "new_value": "2026-09-27 10:00",
+      "old_value": "",
+      "source": "TEMPLATE"
+    },
+    {
+      "field_id": "team_role",
+      "label": "团队职务",
+      "new_value": "无",
+      "old_value": "",
+      "source": "TEMPLATE"
+    },
+    {
+      "field_id": "hours",
+      "label": "服务时长",
+      "new_value": "1.0",
+      "old_value": "",
+      "source": "TEMPLATE"
+    },
+    {
+      "field_id": "college",
+      "label": "审核学院",
+      "new_value": "1006",
+      "old_value": "",
+      "source": "TEMPLATE"
+    }
+  ],
+  "missing_fields": [],
+  "mode": "preview-current-volunteer",
+  "page_fingerprint": "11a746dab1560181c5e6c7e08e153d7eadc48d2d691ffc077251f74f30e41f3b",
+  "remaining_gaps": [
+    "real submit target is not verified",
+    "material and post-submit consequences are not verified on the live page"
+  ],
+  "risk": "EXTERNAL_WRITE",
+  "sample_values": true,
+  "state": "PREVIEW_READY",
+  "submitted": false,
+  "supervised": true,
+  "target_bound": false
+}
