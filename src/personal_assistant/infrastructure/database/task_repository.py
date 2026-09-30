@@ -118,6 +118,36 @@ class PostgresTaskRepository:
             raise NotFoundError(f"task not found: {task_id}")
         return _row_to_task(row)
 
+    async def list_recent(
+        self, *, limit: int, before: str | None = None
+    ) -> tuple[Task, ...]:
+        async with self._db.connection() as connection:
+            if before is None:
+                rows = await connection.fetch(
+                    f"SELECT {_TASK_COLUMNS} FROM tasks WHERE owner_id = $1 "
+                    "ORDER BY created_at DESC, id DESC LIMIT $2",
+                    self._owner_id,
+                    limit,
+                )
+            else:
+                cursor = await connection.fetchrow(
+                    "SELECT created_at, id FROM tasks WHERE id = $1 AND owner_id = $2",
+                    before,
+                    self._owner_id,
+                )
+                if cursor is None:
+                    raise NotFoundError(f"task not found: {before}")
+                rows = await connection.fetch(
+                    f"SELECT {_TASK_COLUMNS} FROM tasks WHERE owner_id = $1 "
+                    "AND (created_at, id) < ($2, $3) "
+                    "ORDER BY created_at DESC, id DESC LIMIT $4",
+                    self._owner_id,
+                    cursor["created_at"],
+                    cursor["id"],
+                    limit,
+                )
+        return tuple(_row_to_task(row) for row in rows)
+
     async def save(self, task: Task, *, expected_version: int) -> Task:
         async with self._db.transaction(), self._db.connection() as connection:
             row = await connection.fetchrow(

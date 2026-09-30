@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from personal_assistant.api.dependencies import get_actor, get_container
 from personal_assistant.bootstrap import Container
@@ -12,6 +12,7 @@ from .schemas import (
     TaskDetail,
     TaskMessageCreate,
     TaskMutation,
+    TaskPage,
     TaskView,
 )
 
@@ -25,6 +26,20 @@ def _task_view(task: Task) -> TaskView:
         state=task.state.value,
         version=task.version,
         created_at=task.created_at,
+    )
+
+
+@router.get("", response_model=TaskPage)
+async def list_tasks(
+    limit: int = Query(default=20, ge=1, le=100),
+    before: str | None = Query(default=None, min_length=1, max_length=200),
+    container: Container = Depends(get_container),
+) -> TaskPage:
+    tasks = await container.tasks.list_recent(limit=limit + 1, before=before)
+    items = tasks[:limit]
+    return TaskPage(
+        items=[_task_view(task) for task in items],
+        next_before=items[-1].id if len(tasks) > limit else None,
     )
 
 

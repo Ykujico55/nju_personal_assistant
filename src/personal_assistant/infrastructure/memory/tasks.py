@@ -49,6 +49,23 @@ class InMemoryTaskRepository:
             except KeyError as exc:
                 raise NotFoundError(f"task not found: {task_id}") from exc
 
+    async def list_recent(
+        self, *, limit: int, before: str | None = None
+    ) -> tuple[Task, ...]:
+        async with self._lock:
+            cursor = self._tasks.get(before) if before is not None else None
+            if before is not None and cursor is None:
+                raise NotFoundError(f"task not found: {before}")
+            tasks = sorted(
+                self._tasks.values(), key=lambda task: (task.created_at, task.id), reverse=True
+            )
+            if cursor is not None:
+                tasks = [
+                    task for task in tasks
+                    if (task.created_at, task.id) < (cursor.created_at, cursor.id)
+                ]
+            return tuple(deepcopy(task) for task in tasks[:limit])
+
     async def save(self, task: Task, *, expected_version: int) -> Task:
         async with self._lock:
             current = self._tasks.get(task.id)

@@ -36,6 +36,8 @@ class TaskRepositoryPort(Protocol):
 
     async def get(self, task_id: str) -> Task: ...
 
+    async def list_recent(self, *, limit: int, before: str | None = None) -> tuple[Task, ...]: ...
+
     async def save(self, task: Task, *, expected_version: int) -> Task: ...
 
     async def add_message(
@@ -134,6 +136,13 @@ class TaskService:
 
     async def get(self, task_id: str) -> Task:
         return await self._repository.get(task_id)
+
+    async def list_recent(
+        self, *, limit: int, before: str | None = None
+    ) -> tuple[Task, ...]:
+        if not 1 <= limit <= 101:
+            raise ValidationError("task page size must be between 1 and 101")
+        return await self._repository.list_recent(limit=limit, before=before)
 
     async def messages(self, task_id: str) -> tuple[TaskMessage, ...]:
         return await self._repository.messages(task_id)

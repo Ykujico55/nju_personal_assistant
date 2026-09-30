@@ -30,6 +30,11 @@ class TaskView(BaseModel):
     created_at: datetime
 
 
+class TaskPage(BaseModel):
+    items: list[TaskView]
+    next_before: str | None
+
+
 class MessageView(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

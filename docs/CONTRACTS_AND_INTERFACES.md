@@ -1,6 +1,6 @@
 # 核心契约与接口定义
 
-版本：F01–F06 completed baseline；F07 `IN_PROGRESS`，独立复验与真实提交前验收未完成 / contract v1.16（F07 增补见第 16 节）
+版本：F01–F06 completed baseline；F07 `IN_PROGRESS`；F08.1/F08.2 已通过定向验收 / contract v1.18（F07 增补见第 16 节，F08 见第 17–18 节）
 适用范围：核心、生产适配器、扩展 SDK，以及从 F01 开始的后续实现。
 
 本文将已经存在的代码边界整理为接力契约。关键词“必须”“不得”“仅”具有规范含义。若本文与现有类型签名或测试不一致，实施者必须先记录冲突并做最小兼容修正，不得静默改变风险、审批或状态语义。
@@ -63,6 +63,7 @@ extensions/*                    ->  personal_assistant_sdk
 | 接口 | 契约 |
 |---|---|
 | `POST /api/v1/tasks` | 必须带 `Idempotency-Key`；相同 objective 重放返回同一任务；成功为 202。 |
+| `GET /api/v1/tasks` | 返回最近任务的有界分页；`limit` 默认 20、范围 1–100；`before` 是上一页末项任务 ID，未知游标为 404。按 `(created_at, id)` 降序排列，响应为 `items` 与 `next_before`；仅列出当前 owner 的任务。`Cache-Control: no-store`。 |
 | `GET /api/v1/tasks/{id}` | 返回 Task 与按创建顺序排列的 messages；不存在为 404。 |
 | `POST /api/v1/tasks/{id}/messages` | 必须带幂等键和期望 task version；插入消息与 task version 递增必须原子。 |
 | `POST /api/v1/tasks/{id}/cancel` | 必须带幂等键和期望版本；终态不可取消；并发冲突为 409。 |
@@ -86,6 +87,7 @@ extensions/*                    ->  personal_assistant_sdk
 ```python
 async def create(task: Task, *, idempotency_key: str) -> Task
 async def get(task_id: str) -> Task
+async def list_recent(*, limit: int, before: str | None = None) -> tuple[Task, ...]
 async def save(task: Task, *, expected_version: int) -> Task
 async def add_message(message: TaskMessage, *, expected_version: int,
                       idempotency_key: str) -> tuple[Task, TaskMessage]
@@ -879,3 +881,21 @@ F07 交付通用的受监督浏览器基架（`core/browser` + `infrastructure/b
 - **多事项适配器**：扩展按事务提供多个 adapter JSON，`build_descriptor` 逐个构建并在首次使用时全部注册；`ehall.inspect_transaction` 按 `app_path` 解析 adapter，`ehall.prepare_preview` 按 `transaction_id` 解析；每个 adapter 只有一个事务与一个 final action。
 - **反例与测试**：`tests/unit/test_browser_navigation_f07.py`（校验 5 例、broker 路由/状态/漂移/错路径/未固定指纹/越权落地/多事项选择 9 例、executor 路由 1 例）；真实 Chromium 集成新增“门户按钮路由到指纹固定页”与“落地路径不符拒绝”2 例；真实 Worker/Gateway 链新增 `ehall.open_transaction` 1 例。
 - **仍有意未实现**：模糊指令 → `transaction_id` 的 Agent 路由（低置信度/R2+ 必须用户确认）、手机端审批 UI/Web Push（F08）、真实 ehall hash 路由 adapter 的指纹捕获与替换。
+
+## 17. F08.1 任务读取与连接状态（2026-09-30）
+
+用户明确允许在 F07 保持 `IN_PROGRESS` 时先实施不依赖其真实站点缺口的 F08 部分。本节仅冻结 F08.1 的只读任务视图；没有改变 F07 风险、审批或提交契约。
+
+- `TaskRepositoryPort.list_recent(limit, before)` 在内存和 PostgreSQL 中按 `(created_at, id)` 降序稳定分页。`before` 指向当前 owner 的真实任务，未知或不属于当前 owner 时返回 404；PostgreSQL 仅查询当前 `owner_id`。API 多取一项计算 `next_before`，不返回无界列表，也不新增迁移。
+- `GET /api/v1/tasks` 与既有详情、SSE 响应都由公共安全头设置 `Cache-Control: no-store`。PWA 只用 `fetch(..., cache: "no-store")` 读取任务和消息，DOM 使用 `textContent`，不把正文写入本地存储。
+- 前端把 SSE `open/error` 与设备离线事件用于连接状态。重连时用已见单调事件 ID 请求 `/events?after=...`，随后重新读取列表和所选详情；页面重新打开也重新从服务端读取。连接中断或读取失败必须明确提示状态可能已过期，不声称离线操作已排队或完成。
+- Service Worker 的 v2 缓存只列出 PWA 壳的固定静态路径，fetch 拦截也只匹配这些路径；任务、消息、审批、邮件、表单与其他 API 响应不进入缓存。PWA 不加载扩展提供的 JavaScript；任务详情不产生审批记录。F07 的未绑定真实提交目标及完整材料/后果的试填预览不能由本切片转为手机端可批准动作。
+- F08.1 只用 390px Chromium 浏览器和模拟 SSE 服务验证手机宽度交互；真实 Android/Cloudflare、Web Push、草稿与正式审批流程留给后续编号验收。
+
+## 18. F08.2 任务消息与冲突处理（2026-09-30）
+
+- 手机端消息输入复用既有 `POST /api/v1/tasks/{id}/messages`：请求体为 `{version, content}`，版本取当前显示的服务器任务版本，命令带独立 `Idempotency-Key`。成功只以 API 确认的 `TaskDetail` 更新消息和版本，不以按钮点击或本地排队表示成功。
+- `CONCURRENT_MODIFICATION`/409 后不得自动改用新版本重发；PWA 重读 `GET /tasks/{id}`，显示最新服务器版本及消息，保留输入，并让用户明确再次提交。若重读失败，保留输入并阻止旧版本提交，直到成功读取服务器状态。
+- 设备已知离线时不发命令。请求连接中断或响应丢失时结果为未确认，输入及原版本/幂等键仅保存在当前页面内存；输入暂时只读，用户可手动重试同一请求。即使此时又离线，也不得把此前未确认请求说成“未发送”。不把消息正文写入 CacheStorage、localStorage 或离线命令队列。
+- 即使 HTTP 是 2xx，也须先确认响应是当前任务的完整 `TaskDetail`（任务 ID、递增的服务端版本、可渲染消息结构及本次内容），并完成详情渲染后才释放本次输入和幂等键。`TaskService.add_message` 保存前执行 Python `str.strip()`；PWA 在创建发送尝试时用相同的首尾空白集合固定规范化请求正文，并用该正文比较回执。显示中的原始输入保留至确认；不完整/错任务响应或渲染异常均归类为结果未确认，保持原始输入及规范化请求的内容、版本、键和只读输入，允许显式同键重试，不能改用新键盲发。
+- SSE/定期重读更新所选任务的服务端消息与版本时，正在输入的正文保留在当前页面，消息正文用 `textContent` 渲染。第二次 P1 修复将 Service Worker 静态缓存版本升至 v5，以免继续提供有缺陷的旧 `app.js`；仍只缓存固定静态文件，未新增 API 缓存。此任务不产生审批、Web Push、扩展脚本或 F07 试填的权威预览；真实 Android/Cloudflare 与持久版本化草稿留待 F08.3/F08.6。

@@ -14,6 +14,7 @@
       <p class="eyebrow">LOCAL-FIRST CONTROL PLANE</p>
       <h1>Personal Assistant</h1>
       <p>发起任务、查看扩展，并对精确的外部动作做最终确认。</p>
+      <p id="connection-state" class="connection-state pending" role="status" aria-live="polite">正在连接服务…</p>
     </header>
 
     <main>
@@ -25,6 +26,21 @@
           <button type="submit">加入后台队列</button>
         </form>
         <pre id="task-result" aria-live="polite"></pre>
+      </section>
+
+      <section class="card compact">
+        <div class="section-title">
+          <h2>任务</h2>
+          <button id="refresh-tasks" class="secondary" type="button">刷新状态</button>
+        </div>
+        <p id="task-list-error" class="read-error" role="alert" hidden></p>
+        <div class="task-columns">
+          <div>
+            <ul id="task-list" class="task-list" aria-label="任务列表"></ul>
+            <button id="more-tasks" class="secondary" type="button" hidden>加载更早任务</button>
+          </div>
+          <div id="task-detail" class="task-detail" aria-live="polite">选择任务查看详情。</div>
+        </div>
       </section>
 
       <section class="card">
@@ -54,14 +70,9 @@
         <ul id="extensions"></ul>
       </section>
 
-      <section class="card compact">
-        <h2>实时事件</h2>
-        <ol id="events"></ol>
-      </section>
     </main>
 
     <footer>扩展安装、升级与卸载只能在本机 Admin API / CLI 完成。</footer>
     <script src="./app.js" defer></script>
   </body>
 </html>
-

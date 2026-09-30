@@ -57,6 +57,7 @@ from personal_assistant.core.tasks import TaskService
 from personal_assistant.core.tools import ToolGateway, ToolPolicy, ToolRegistry
 from personal_assistant.domain import (
     ConcurrentModificationError,
+    NotFoundError,
     RiskLevel,
     TaskRun,
     TaskState,
@@ -345,6 +346,29 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
         assert recovered_extension is not None
         self.assertEqual(ExtensionState.ENABLED, recovered_extension.state)
         self.assertEqual("demo.weather.get", recovered_extension.manifest.tools[0].id)
+
+    async def test_f08_recent_tasks_are_paginated_after_reconnect_and_owner_scoped(self) -> None:
+        adapters = await self.migrate()
+        service = self.task_service(adapters)
+        first = await service.create(objective="first", idempotency_key="f08-first")
+        second = await service.create(objective="second", idempotency_key="f08-second")
+        third = await service.create(objective="third", idempotency_key="f08-third")
+
+        await adapters.close()
+        rebuilt = await self.migrate()
+        recent = await rebuilt.task_repository.list_recent(limit=2)
+        self.assertEqual([third.id, second.id], [task.id for task in recent])
+        older = await rebuilt.task_repository.list_recent(limit=2, before=second.id)
+        self.assertEqual([first.id], [task.id for task in older])
+
+        from personal_assistant.infrastructure.database.task_repository import (
+            PostgresTaskRepository,
+        )
+
+        other_owner = PostgresTaskRepository(rebuilt.database, owner_id="another-owner")
+        self.assertEqual((), await other_owner.list_recent(limit=10))
+        with self.assertRaises(NotFoundError):
+            await other_owner.list_recent(limit=10, before=second.id)
 
     # -- queue lease semantics ---------------------------------------------
     async def test_observation_with_json_null_value_is_persisted(self) -> None:

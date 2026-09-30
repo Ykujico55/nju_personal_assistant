@@ -68,6 +68,26 @@ button.danger { background: #a62936; }
 .section-title { justify-content: space-between; }
 .section-title button { margin-top: 0; }
 .warning { padding: .75rem; border-left: .3rem solid #d18a00; background: #fff4d8; }
+.connection-state { display: inline-block; padding: .55rem .8rem; border-radius: 999px; font-weight: 650; }
+.connection-state.pending { background: #fff4d8; color: #614200; }
+.connection-state.online { background: #daf3e5; color: #125735; }
+.connection-state.offline { background: #ffe3e4; color: #85202b; }
+.read-error { color: #85202b; }
+.task-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 1.25rem; }
+.task-list { list-style: none; margin: 0; padding: 0; }
+.task-list button { width: 100%; margin: .35rem 0; text-align: left; background: #f0f4fa; color: #17233b; font-weight: 500; }
+.task-list button[aria-current="true"] { outline: 2px solid #2457a6; background: #e3eeff; }
+.task-list button span { display: block; overflow-wrap: anywhere; }
+.task-list button small { display: block; margin-top: .35rem; color: #55637a; }
+.task-detail { min-height: 10rem; border-left: 1px solid #d8dee9; padding-left: 1.25rem; overflow-wrap: anywhere; }
+.task-detail h3 { margin-top: 0; }
+.task-detail p { white-space: pre-wrap; }
+.task-detail ol { padding-left: 1.3rem; }
+.task-detail-content { overflow-wrap: anywhere; }
+#task-message-form { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #d8dee9; }
+#task-message-version { margin: .5rem 0 0; color: #55637a; font-size: .85rem; }
+#task-message-form button { width: 100%; }
+#task-message-status { min-height: 1.5rem; font-weight: 600; }
 pre { overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: .82rem; }
 li { margin: .5rem 0; }
 footer { padding: 2rem 0 3rem; color: #66738a; font-size: .85rem; }
@@ -77,5 +97,6 @@ footer { padding: 2rem 0 3rem; color: #66738a; font-size: .85rem; }
   main { grid-template-columns: 1fr; }
   .inline { align-items: stretch; flex-direction: column; }
   .inline button { width: 100%; }
+  .task-columns { grid-template-columns: 1fr; }
+  .task-detail { border-left: 0; border-top: 1px solid #d8dee9; padding: 1rem 0 0; }
 }
-
