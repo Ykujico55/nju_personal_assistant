@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-assistant-nju-smail"
-version = "0.1.0"
+version = "0.2.0"
 description = "NJU smail extension: read-only IMAP sync, versioned drafts, controlled SMTP"
 requires-python = ">=3.12,<3.14"
 dependencies = ["personal-assistant-extension-sdk==1.0.0"]

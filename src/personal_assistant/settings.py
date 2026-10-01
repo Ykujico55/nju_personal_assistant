@@ -6,6 +6,8 @@ Environment loading is intentionally left to the process manager or uvicorn's
 
 from __future__ import annotations
 
+import base64
+import binascii
 import ipaddress
 import os
 import re
@@ -29,6 +31,37 @@ _PROVIDER_ID = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 _SECRET_HANDLE_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _MAX_MODEL_TIMEOUT_SECONDS = 600.0
 _MAX_BROWSER_ORIGINS = 16
+_MAX_PUSH_ORIGINS = 8
+
+
+def normalize_push_public_key(raw: str) -> str:
+    value = raw.strip()
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (binascii.Error, ValueError) as exc:
+        raise ConfigurationError("PA_PUSH_VAPID_PUBLIC_KEY is invalid") from exc
+    if len(decoded) != 65 or decoded[0] != 4 or len(value) > 90:
+        raise ConfigurationError("PA_PUSH_VAPID_PUBLIC_KEY must be a P-256 public point")
+    return value
+
+
+def normalize_push_origins(values: tuple[str, ...]) -> tuple[str, ...]:
+    if len(values) > _MAX_PUSH_ORIGINS:
+        raise ConfigurationError("PA_PUSH_ALLOWED_ORIGINS has too many entries")
+    normalized: list[str] = []
+    for raw in values:
+        origin = normalize_public_origin(raw)
+        host = urlsplit(origin).hostname or ""
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if host == "localhost" or "." not in host:
+                raise ConfigurationError("push origins must be public DNS names") from None
+        else:
+            raise ConfigurationError("push origins must not be IP addresses")
+        if origin not in normalized:
+            normalized.append(origin)
+    return tuple(normalized)
 
 
 def normalize_browser_origins(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -358,6 +391,9 @@ class Settings:
     browser_allowed_origins: tuple[str, ...] = ()
     browser_origin_mode: str = "open"
     browser_submit_enabled: bool = False
+    push_vapid_public_key: str | None = None
+    push_vapid_secret_handle: str | None = None
+    push_allowed_origins: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         # Every construction path (from_env, direct construction, replace)
@@ -460,6 +496,22 @@ class Settings:
         object.__setattr__(
             self, "browser_origin_mode", self.browser_origin_mode.strip().lower()
         )
+        if self.push_vapid_public_key is not None:
+            object.__setattr__(
+                self, "push_vapid_public_key",
+                normalize_push_public_key(self.push_vapid_public_key),
+            )
+        if self.push_vapid_secret_handle is not None:
+            object.__setattr__(
+                self, "push_vapid_secret_handle",
+                normalize_secret_handle_id(
+                    self.push_vapid_secret_handle, field_name="PA_PUSH_VAPID_SECRET_HANDLE"
+                ),
+            )
+        object.__setattr__(
+            self, "push_allowed_origins",
+            normalize_push_origins(tuple(self.push_allowed_origins)),
+        )
         self.validate()
 
     @classmethod
@@ -526,10 +578,23 @@ class Settings:
                 "PA_BROWSER_ORIGIN_MODE", "open"
             ),
             browser_submit_enabled=_env_bool("PA_BROWSER_SUBMIT_ENABLED", False),
+            push_vapid_public_key=os.getenv("PA_PUSH_VAPID_PUBLIC_KEY") or None,
+            push_vapid_secret_handle=os.getenv("PA_PUSH_VAPID_SECRET_HANDLE") or None,
+            push_allowed_origins=tuple(
+                value.strip()
+                for value in os.getenv("PA_PUSH_ALLOWED_ORIGINS", "").split(",")
+                if value.strip()
+            ),
         )
         return settings
 
     def validate(self) -> None:
+        if bool(self.push_vapid_public_key) != bool(self.push_vapid_secret_handle):
+            raise ConfigurationError("Web Push requires both VAPID key fields")
+        if self.push_vapid_public_key and not self.push_allowed_origins:
+            raise ConfigurationError("Web Push requires PA_PUSH_ALLOWED_ORIGINS")
+        if self.push_allowed_origins and not self.push_vapid_public_key:
+            raise ConfigurationError("push origins require VAPID configuration")
         if self.environment not in {"development", "test", "production"}:
             raise ConfigurationError("PA_ENVIRONMENT must be development, test or production")
         if self.storage_backend not in {"memory", "postgres"}:

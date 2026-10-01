@@ -1,5 +1,7 @@
 # nju.smail extension
 
+版本 0.2.0 新增只读 `smail.send.preview` 工具：助手核对当前草稿 MIME 工件并向手机端提供审批材料；该工具不发送邮件，也不写发送台账。已安装 0.1.0 的用户需经本机确认流程显式升级，旧审批不会改绑到新版本。
+
 Read-only IMAP synchronization, thread/contact/attachment provenance, versioned
 reply drafts and controlled SMTP send for the `nju.smail` account.
 

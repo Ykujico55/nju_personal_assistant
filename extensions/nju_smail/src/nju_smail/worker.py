@@ -184,6 +184,13 @@ class SmailExtension:
                 output_schema=_load_json("schemas/send-output.json"),
             ),
             ToolDescriptor(
+                id="smail.send.preview",
+                risk=RiskLevel.READ,
+                description="Read the bound current draft artifact for host approval review.",
+                input_schema=_load_json("schemas/send-input.json"),
+                output_schema=_load_json("schemas/send-output.json"),
+            ),
+            ToolDescriptor(
                 id="smail.send_status",
                 risk=RiskLevel.INTERNAL_WRITE,
                 description=(
@@ -234,6 +241,9 @@ class SmailExtension:
                     ),
                 ),
             )
+        if tool_id == "smail.send.preview":
+            send = await self._require_send()
+            return ToolResult(outcome=Outcome.SUCCEEDED, output=await send.preview(arguments))
         if tool_id == "smail.send_status":
             send = await self._require_send()
             return ToolResult(
@@ -519,7 +529,7 @@ def _result_view(row: Mapping[str, Any], runtime: RuntimeContext | None) -> dict
         "sensitivity": SENSITIVITY,
         "trust": TRUST,
         "extension_id": runtime.extension_id if runtime else "nju.smail",
-        "extension_version": runtime.extension_version if runtime else "0.1.0",
+        "extension_version": runtime.extension_version if runtime else "0.2.0",
     }
 
 
@@ -541,7 +551,7 @@ def _evidence(row: Mapping[str, Any], runtime: RuntimeContext | None) -> Evidenc
             "sensitivity": SENSITIVITY,
             "trust": TRUST,
             "extension_id": runtime.extension_id if runtime else "nju.smail",
-            "extension_version": runtime.extension_version if runtime else "0.1.0",
+            "extension_version": runtime.extension_version if runtime else "0.2.0",
             "status": "CURRENT",
         },
     )

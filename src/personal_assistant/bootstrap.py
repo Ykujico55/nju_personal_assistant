@@ -56,6 +56,7 @@ from personal_assistant.core.models import (
 )
 from personal_assistant.core.secrets import SecretHandle, SecretStorePort
 from personal_assistant.core.tasks import TaskService
+from personal_assistant.core.tasks.form_drafts import FormDraftService
 from personal_assistant.core.tasks.service import EventStreamPort
 from personal_assistant.core.tools import ToolGateway, ToolPolicy, ToolRegistry
 from personal_assistant.infrastructure.browser.companion_client import LoopbackCompanionClient
@@ -73,9 +74,11 @@ from personal_assistant.infrastructure.database.browser_store import (
     PostgresBrowserAdapterStore,
     PostgresBrowserSessionStore,
 )
+from personal_assistant.infrastructure.database.form_drafts import PostgresFormDraftStore
 from personal_assistant.infrastructure.database.mail_ledger import (
     PostgresMailDeliveryLedger,
 )
+from personal_assistant.infrastructure.database.push import PostgresPushSubscriptionStore
 from personal_assistant.infrastructure.extensions import (
     CompatibleVersionOperator,
     FileExtensionConfigStore,
@@ -116,12 +119,16 @@ from personal_assistant.infrastructure.memory import (
     InMemoryVersionCatalog,
     UnavailableExtensionDataAccess,
 )
+from personal_assistant.infrastructure.memory.form_drafts import InMemoryFormDraftStore
+from personal_assistant.infrastructure.memory.push import InMemoryPushSubscriptionStore
 from personal_assistant.infrastructure.models import (
     OllamaChatProvider,
     OllamaConfig,
     OpenAICompatibleChatProvider,
     OpenAICompatibleConfig,
 )
+from personal_assistant.infrastructure.push.service import PushService
+from personal_assistant.infrastructure.push.transport import HttpWebPushSender
 from personal_assistant.infrastructure.secrets import UnavailableSecretStore
 from personal_assistant.infrastructure.storage import NullStorageLifecycle, StorageLifecycle
 from personal_assistant.infrastructure.tools import CapabilityRoutingExecutor
@@ -132,6 +139,8 @@ from personal_assistant.settings import ConfigurationError, Settings
 class Container:
     settings: Settings
     tasks: TaskService
+    form_drafts: FormDraftService
+    push: PushService
     approvals: ApprovalService
     extension_registry: ExtensionRegistry
     extension_supervisor: ExtensionSupervisorService
@@ -179,9 +188,11 @@ class Container:
     async def aclose(self) -> None:
         """Release adapter-owned transports; storage keeps its own lifecycle."""
 
+        await self.extension_supervisor.stop_all()
         if self.model_router is not None:
             await self.model_router.aclose()
         await self.mail_broker.aclose()
+        await self.push.aclose()
         if self.browser_broker is not None:
             await self.browser_broker.aclose()
         with contextlib.suppress(Exception):
@@ -449,15 +460,27 @@ def _build_postgres_container(
         owners=mail_owners,
     )
     tool_registry = ToolRegistry()
+    tasks = TaskService(
+        repository=adapters.task_repository,
+        queue=adapters.job_queue,
+        audit=adapters.audit_writer,
+        events=adapters.event_stream,
+        unit_of_work=adapters.database,
+    )
+    push = PushService(
+        store=PostgresPushSubscriptionStore(adapters.database),
+        secrets=credential_store,
+        sender=HttpWebPushSender(),
+        owner_id=adapters.config.owner_id,
+        public_key=settings.push_vapid_public_key,
+        secret_handle_id=settings.push_vapid_secret_handle,
+        allowed_origins=settings.push_allowed_origins,
+    )
     return Container(
         settings=settings,
-        tasks=TaskService(
-            repository=adapters.task_repository,
-            queue=adapters.job_queue,
-            audit=adapters.audit_writer,
-            events=adapters.event_stream,
-            unit_of_work=adapters.database,
-        ),
+        tasks=tasks,
+        form_drafts=FormDraftService(tasks, PostgresFormDraftStore(adapters.database)),
+        push=push,
         approvals=approvals,
         extension_registry=registry,
         extension_supervisor=supervisor,
@@ -503,6 +526,7 @@ def _build_postgres_container(
                 browser_actions=browser_actions,
             ),
             outbox=adapters.side_effect_outbox,
+            pending_notifier=push if settings.push_vapid_public_key else None,
         ),
     )
 
@@ -586,14 +610,26 @@ def _build_memory_container(
         owners=mail_owners,
     )
     tool_registry = ToolRegistry()
+    tasks = TaskService(
+        repository=task_repository,
+        queue=queue,
+        audit=audit,
+        events=events,
+    )
+    push = PushService(
+        store=InMemoryPushSubscriptionStore(),
+        secrets=credential_store,
+        sender=HttpWebPushSender(),
+        owner_id=os.getenv("PA_OWNER_ID", "owner").strip() or "owner",
+        public_key=settings.push_vapid_public_key,
+        secret_handle_id=settings.push_vapid_secret_handle,
+        allowed_origins=settings.push_allowed_origins,
+    )
     return Container(
         settings=settings,
-        tasks=TaskService(
-            repository=task_repository,
-            queue=queue,
-            audit=audit,
-            events=events,
-        ),
+        tasks=tasks,
+        form_drafts=FormDraftService(tasks, InMemoryFormDraftStore()),
+        push=push,
         approvals=approvals,
         extension_registry=registry,
         extension_supervisor=supervisor,
@@ -639,6 +675,7 @@ def _build_memory_container(
                 browser_actions=browser_actions,
             ),
             outbox=memory_outbox,
+            pending_notifier=push if settings.push_vapid_public_key else None,
         ),
     )
 

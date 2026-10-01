@@ -50,6 +50,31 @@ class TaskDetail(BaseModel):
     messages: list[MessageView]
 
 
+class FormDraftCreate(BaseModel):
+    extension_id: str = Field(min_length=1, max_length=128)
+    form_id: str = Field(min_length=1, max_length=128)
+
+
+class FormDraftUpdate(BaseModel):
+    version: int = Field(ge=1)
+    values: dict[str, Any]
+
+
+class FormDraftView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    extension_id: str
+    extension_version: str
+    form_id: str
+    json_schema: dict[str, Any]
+    ui_schema: dict[str, Any]
+    values: dict[str, Any]
+    sources: dict[str, str]
+    version: int
+    updated_at: datetime
+
+
 class ApprovalDecision(BaseModel):
     nonce: str = Field(min_length=1, max_length=512)
 
@@ -58,13 +83,23 @@ class RejectDecision(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
+class ApprovalReviewView(BaseModel):
+    kind: Literal["MAIL", "EHALL", "UNSUPPORTED"]
+    ready: bool
+    reason: str | None = None
+    details: dict[str, Any] | None = None
+
+
 class ApprovalView(BaseModel):
     id: str
     state: str
     action: dict[str, Any]
+    action_fingerprint: str
+    created_at: datetime
     nonce: str | None
     expires_at: datetime
     version: int
+    review: ApprovalReviewView
 
 
 class DisclosureFieldInput(BaseModel):

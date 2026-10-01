@@ -63,6 +63,9 @@ namespaces = true
   "migrations/0006_f06_mail_transport.sql",
   "migrations/0007_f07_browser_sessions.sql",
   "migrations/0008_f07_browser_session_uniqueness.sql",
+  "migrations/0009_f08_form_drafts.sql",
+  "migrations/0010_f08_push_subscriptions.sql",
+  "migrations/0011_f08_push_subscription_commands.sql",
 ]
 
 [tool.pytest.ini_options]

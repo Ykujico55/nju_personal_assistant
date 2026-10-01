@@ -145,6 +145,7 @@ class FakeRuntime:
         self.stop_all_called = 0
         self.drain_report: dict[str, Any] | None = None
         self.fail_drain = False
+        self.form_override: list[dict[str, Any]] | None = None
 
     async def start(self, record: ExtensionRecord) -> None:
         version = record.manifest.version
@@ -194,6 +195,23 @@ class FakeRuntime:
             raise RpcCallError(-32091, "worker exited unexpectedly")
         self.invocations.append((extension_id, tool_id, arguments))
         return {"outcome": "SUCCEEDED", "output": {"echo": arguments.get("text", "")}}
+
+    async def list_forms(self, extension_id: str) -> list[dict[str, Any]]:
+        if extension_id not in self.active:
+            raise RpcCallError(-32090, "worker is not running")
+        if self.form_override is not None:
+            return self.form_override
+        return [
+            {
+                "id": "example.echo_settings",
+                "json_schema": {
+                    "type": "object",
+                    "properties": {"prefix": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+                "ui_schema": {},
+            }
+        ]
 
 
 class BlockingInvokeRuntime(FakeRuntime):
@@ -342,6 +360,24 @@ class SupervisorServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], self.installer.installed)
         self.assertEqual([], self.verifier.verified)
         self.assertEqual(0, len(self.registry.snapshot.capabilities))
+
+    async def test_form_catalog_only_reads_enabled_declared_worker_descriptors(self) -> None:
+        self.assertEqual((), await self.service.list_forms())
+        await self._install_and_enable(EXAMPLE)
+        forms = await self.service.list_forms()
+        self.assertEqual("example.echo_settings", forms[0]["id"])
+        self.assertEqual("example.echo", forms[0]["extension_id"])
+        self.assertEqual("0.1.0", forms[0]["extension_version"])
+        self.runtime.form_override = [{"id": "undeclared", "json_schema": {}, "ui_schema": {}}]
+        with self.assertRaisesRegex(ExtensionOperationError, "form list differs"):
+            await self.service.list_forms()
+
+    async def test_form_catalog_starts_an_enabled_worker_in_public_process(self) -> None:
+        await self._install_and_enable(EXAMPLE)
+        self.runtime.active.clear()  # independent public process after restart
+        forms = await self.service.list_forms()
+        self.assertEqual("example.echo_settings", forms[0]["id"])
+        self.assertEqual("0.1.0", self.runtime.active["example.echo"])
 
     async def test_recover_rejects_leftover_staging_and_quarantines_missing_paths(self) -> None:
         manifest = ManifestParser().parse(EXAMPLE)

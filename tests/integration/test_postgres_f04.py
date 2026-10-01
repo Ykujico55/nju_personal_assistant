@@ -74,6 +74,9 @@ MIGRATION_NAMES = (
     "0006_f06_mail_transport.sql",
     "0007_f07_browser_sessions.sql",
     "0008_f07_browser_session_uniqueness.sql",
+    "0009_f08_form_drafts.sql",
+    "0010_f08_push_subscriptions.sql",
+    "0011_f08_push_subscription_commands.sql",
 )
 
 
@@ -219,6 +222,9 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
                 "0006_f06_mail_transport",
                 "0007_f07_browser_sessions",
                 "0008_f07_browser_session_uniqueness",
+                "0009_f08_form_drafts",
+                "0010_f08_push_subscriptions",
+                "0011_f08_push_subscription_commands",
             ),
             applied,
         )
@@ -239,6 +245,18 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             _file_checksum("0008_f07_browser_session_uniqueness.sql"),
             by_version["0008_f07_browser_session_uniqueness"],
+        )
+        self.assertEqual(
+            _file_checksum("0009_f08_form_drafts.sql"),
+            by_version["0009_f08_form_drafts"],
+        )
+        self.assertEqual(
+            _file_checksum("0010_f08_push_subscriptions.sql"),
+            by_version["0010_f08_push_subscriptions"],
+        )
+        self.assertEqual(
+            _file_checksum("0011_f08_push_subscription_commands.sql"),
+            by_version["0011_f08_push_subscription_commands"],
         )
 
     async def test_0005_checksum_drift_is_rejected(self) -> None:

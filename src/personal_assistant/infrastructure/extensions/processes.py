@@ -144,7 +144,11 @@ class ProcessRuntimeSupervisor:
         async with lock:
             self._require_capabilities(record.manifest)
             existing = self._workers.get(extension_id)
-            if existing is not None and existing.client.running:
+            if (
+                existing is not None
+                and existing.client.running
+                and existing.manifest.version == record.manifest.version
+            ):
                 return
             if existing is not None:
                 await existing.close()
@@ -354,6 +358,15 @@ class ProcessRuntimeSupervisor:
             context,
             timeout_seconds=deadline_seconds,
         )
+
+    async def list_forms(self, extension_id: str) -> list[Mapping[str, Any]]:
+        worker = self._workers.get(extension_id)
+        if worker is None or not worker.client.running:
+            raise RpcCallError(-32090, "extension worker is not running")
+        result = await worker.call_slot("form.list", {}, timeout_seconds=5.0)
+        if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+            raise RpcCallError(-32094, "form.list result must be a list of objects")
+        return result
 
     def diagnostics(self, extension_id: str) -> tuple[str, ...]:
         worker = self._workers.get(extension_id)

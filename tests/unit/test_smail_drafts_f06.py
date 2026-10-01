@@ -350,6 +350,18 @@ class DraftVersionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(["friend@example.test"], output["to"])
         self.assertEqual(prepared["account_fingerprint"], output["account_fingerprint"])
 
+    async def test_review_reads_exact_current_mime_without_preparing_action(self) -> None:
+        prepared = await self._prepare(body="Approval body <script>do not run</script>")
+        output = await self.send.preview(send_arguments(prepared))
+        self.assertEqual(prepared["mime_artifact_id"], output["mime_artifact_id"])
+        self.assertEqual(prepared["mime_sha256"], output["mime_sha256"])
+        self.assertEqual({}, self.store.actions)
+        self.assertEqual(1, len(self.artifacts.blobs))
+        await self._prepare(body="edited", draft_id=prepared["draft_id"])
+        with self.assertRaises(MailConfigError) as captured:
+            await self.send.preview(send_arguments(prepared))
+        self.assertEqual("SMAL_DRAFT_CHANGED", captured.exception.code)
+
     async def test_edited_draft_makes_the_old_version_unusable(self) -> None:
         prepared = await self._prepare(body="one")
         await self._prepare(body="two", draft_id=prepared["draft_id"])

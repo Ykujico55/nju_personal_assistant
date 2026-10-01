@@ -33,6 +33,7 @@ REQUIRED_TOOL_RISKS = {
     "smail.search": "READ",
     "smail.prepare_reply": "INTERNAL_WRITE",
     "smail.send": "EXTERNAL_WRITE",
+    "smail.send.preview": "READ",
     "smail.sync": "INTERNAL_WRITE",
     "smail.send_status": "INTERNAL_WRITE",
     "smail.reconcile_send": "INTERNAL_WRITE",
@@ -55,6 +56,17 @@ class ManifestContract(unittest.TestCase):
             for item in self.manifest["tools"]
         }
         self.assertEqual(REQUIRED_TOOL_RISKS, risks)
+
+    def test_preview_release_is_upgradeable_from_existing_0_1_0(self) -> None:
+        with (EXTENSION / "pyproject.toml").open("rb") as stream:
+            package = tomllib.load(stream)
+        self.assertEqual("0.2.0", self.manifest["version"])
+        self.assertEqual(self.manifest["version"], package["project"]["version"])
+        preview = next(
+            item for item in self.manifest["tools"] if item["id"] == "smail.send.preview"
+        )
+        self.assertEqual("READ", preview["risk"])
+        self.assertNotIn("mail.send", preview.get("capabilities", []))
 
     def test_send_tool_declares_the_host_capability(self) -> None:
         tools = {item["id"]: item for item in self.manifest["tools"]}

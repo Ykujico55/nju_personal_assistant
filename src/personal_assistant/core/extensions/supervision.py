@@ -95,6 +95,8 @@ class ExtensionInvoker(Protocol):
 class ExtensionRuntime(RuntimeSupervisor, ExtensionInvoker, Protocol):
     """Runtime ports required by the supervisor service."""
 
+    async def list_forms(self, extension_id: str) -> list[Mapping[str, Any]]: ...
+
 
 class ExtensionSupervisorService:
     def __init__(
@@ -319,6 +321,44 @@ class ExtensionSupervisorService:
 
     async def record(self, extension_id: str) -> ExtensionRecord | None:
         return await self._store.get(extension_id)
+
+    async def list_forms(self) -> tuple[dict[str, Any], ...]:
+        """Read declared form descriptors from enabled Workers, never executable UI."""
+
+        forms: list[dict[str, Any]] = []
+        for record in await self._store.all():
+            if record.state is not ExtensionState.ENABLED or record.manifest is None:
+                continue
+            declared = set(record.manifest.forms)
+            if not declared:
+                continue
+            # The public API may run in a separate process from Admin.  An
+            # ENABLED record already represents the user's install/enable
+            # authorization; start that exact installed version on demand.
+            await self._runtime.start(record)
+            returned = await self._runtime.list_forms(record.manifest.id)
+            if {item.get("id") for item in returned} != declared:
+                raise ExtensionOperationError(
+                    "FORM_SCHEMA_DRIFT", "form list differs from manifest"
+                )
+            for item in returned:
+                if (
+                    not isinstance(item.get("json_schema"), dict)
+                    or not isinstance(item.get("ui_schema", {}), dict)
+                ):
+                    raise ExtensionOperationError(
+                        "FORM_SCHEMA_DRIFT", "form descriptor is incomplete"
+                    )
+                forms.append(
+                    {
+                        "extension_id": record.manifest.id,
+                        "extension_version": record.manifest.version,
+                        "id": item["id"],
+                        "json_schema": item["json_schema"],
+                        "ui_schema": item.get("ui_schema", {}),
+                    }
+                )
+        return tuple(forms)
 
     async def invoke_tool(
         self,

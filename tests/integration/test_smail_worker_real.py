@@ -11,6 +11,7 @@ Requires ``PA_TEST_DATABASE_URL``.  No real mailbox is contacted.
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import hashlib
 import os
@@ -19,16 +20,23 @@ import tempfile
 import unittest
 import uuid
 import zipfile
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
+import httpx
 
+from personal_assistant.app import create_app
 from personal_assistant.bootstrap import Container, build_container
+from personal_assistant.core.extensions.artifact_access import (
+    HOST_ARTIFACT_PUT,
+    ExtensionArtifactContext,
+)
 from personal_assistant.core.extensions.lifecycle import InstallationConfirmation
 from personal_assistant.core.mail import MailAccountRecord
-from personal_assistant.domain import ToolCall, ToolOutcomeKind
+from personal_assistant.domain import AttachmentDigest, ToolCall, ToolOutcomeKind
 from personal_assistant.infrastructure.memory import InMemorySecretStore
 from personal_assistant.settings import Settings
 from tests.support.mail_servers import (
@@ -214,7 +222,7 @@ class SmailCompositionRootTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_production_gateway_install_sync_draft_send_uninstall(self) -> None:
         supervisor = self.container.extension_supervisor
-        artifact = self._zip_artifact(self.tmp / "nju-smail-0.1.0.zip")
+        artifact = self._zip_artifact(self.tmp / "nju-smail-0.2.0.zip")
         preview = await supervisor.inspect(str(artifact))
         self.assertEqual(EXTENSION_ID, preview.extension_id)
         operation = await supervisor.begin_install(
@@ -253,6 +261,17 @@ class SmailCompositionRootTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("SUCCEEDED", synced["outcome"], synced)
             self.assertEqual(1, synced["output"]["new_messages"])
 
+            attachment_bytes = b"%PDF-1.4\nimportant material\n%%EOF\n"
+            attachment_digest = hashlib.sha256(attachment_bytes).hexdigest()
+            artifact = await self.container.extension_artifacts.handle(
+                HOST_ARTIFACT_PUT,
+                {
+                    "data_base64": base64.b64encode(attachment_bytes).decode("ascii"),
+                    "media_type": "application/pdf",
+                    "sensitivity": "PERSONAL",
+                },
+                context=ExtensionArtifactContext(EXTENSION_ID, "0.2.0"),
+            )
             draft = await supervisor.invoke_tool(
                 EXTENSION_ID,
                 "smail.prepare_reply",
@@ -261,6 +280,13 @@ class SmailCompositionRootTests(unittest.IsolatedAsyncioTestCase):
                     "to": [GOOD],
                     "subject": "Re: Welcome",
                     "body_text": "A controlled reply",
+                    "attachments": [{
+                        "filename": "important.pdf",
+                        "media_type": "application/pdf",
+                        "sha256": attachment_digest,
+                        "size_bytes": len(attachment_bytes),
+                        "artifact_id": artifact["id"],
+                    }],
                 },
                 task_id="task-f06-root",
                 run_id="run-f06-root",
@@ -286,29 +312,73 @@ class SmailCompositionRootTests(unittest.IsolatedAsyncioTestCase):
                 "attachment_hashes": list(output["attachment_hashes"]),
             }
             descriptor = self.container.tool_registry.snapshot().resolve(
-                "smail.send", "0.1.0"
+                "smail.send", "0.2.0"
             )
             self.assertIn("mail.send", descriptor.required_capabilities)
+            preview_descriptor = self.container.tool_registry.snapshot().resolve(
+                "smail.send.preview", "0.2.0"
+            )
+            prepared_call = await self.container.mail_send_executor.prepare_call(
+                descriptor, preview_descriptor, arguments,
+                task_id="task-f06-root",
+                workflow_allowed_tools=frozenset({"smail.send"}),
+                granted_capabilities=frozenset({"mail.send"}),
+            )
+            expected_attachment = AttachmentDigest(
+                "important.pdf", attachment_digest, len(attachment_bytes)
+            )
+            self.assertEqual((expected_attachment,), prepared_call.attachments)
 
             def tool_call(approval_id: str | None) -> ToolCall:
-                return ToolCall(
-                    tool_id="smail.send",
-                    tool_version=descriptor.version,
-                    task_id="task-f06-root",
-                    arguments=arguments,
-                    target={"account_id": "nju"},
-                    workflow_allowed_tools=frozenset({"smail.send"}),
-                    granted_capabilities=frozenset({"mail.send"}),
-                    approval_id=approval_id,
-                    idempotency_key=output["local_action_id"],
-                )
+                return replace(prepared_call, approval_id=approval_id)
 
             needed = await self.container.tool_gateway.invoke(tool_call(None))
             self.assertEqual(ToolOutcomeKind.APPROVAL_REQUIRED, needed.kind)
             approval = await self.container.approvals.get(needed.approval_id or "")
-            await self.container.approvals.approve(
-                approval.id, nonce=approval.nonce, actor_id="owner"
+            self.assertEqual(
+                [{"name": expected_attachment.name,
+                  "sha256": expected_attachment.sha256,
+                  "size_bytes": expected_attachment.size_bytes}],
+                approval.action["attachments"],
             )
+            # F08.4: the phone talks only to the assistant API. The assistant
+            # asks the real Worker for the current artifact and verifies MIME
+            # before exposing a read-only review; viewing/approval never sends.
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(
+                    app=create_app(settings=self.settings, container=self.container)
+                ),
+                base_url="http://assistant.test",
+            ) as client:
+                review = await client.get(f"/api/v1/approvals/{approval.id}")
+                self.assertEqual(200, review.status_code, review.text)
+                self.assertEqual("no-store", review.headers["cache-control"])
+                self.assertTrue(review.json()["review"]["ready"], review.text)
+                self.assertEqual("MAIL", review.json()["review"]["kind"])
+                self.assertEqual(
+                    approval.action["attachments"],
+                    review.json()["review"]["details"]["attachments"],
+                )
+                self.assertIn(
+                    "A controlled reply", review.json()["review"]["details"]["body_text"]
+                )
+                self.assertEqual(
+                    output["mime_sha256"],
+                    review.json()["review"]["details"]["mime_sha256"],
+                )
+                self.assertEqual([], self.smtp_state.messages)
+                self.assertEqual(
+                    [],
+                    await self._sql("SELECT local_action_id FROM mail_delivery_actions"),
+                )
+                approved = await client.post(
+                    f"/api/v1/approvals/{approval.id}/approve",
+                    json={"nonce": review.json()["nonce"]},
+                    headers={"Idempotency-Key": "f08-review-approval-1"},
+                )
+                self.assertEqual(200, approved.status_code, approved.text)
+                self.assertEqual("APPROVED", approved.json()["state"])
+                self.assertEqual([], self.smtp_state.messages)
             outcome = await self.container.tool_gateway.invoke(tool_call(approval.id))
             self.assertEqual(ToolOutcomeKind.SUCCESS, outcome.kind, outcome.message)
             self.assertEqual(1, len(self.smtp_state.messages), outcome.result)

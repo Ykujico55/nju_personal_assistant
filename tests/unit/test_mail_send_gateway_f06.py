@@ -28,6 +28,7 @@ from personal_assistant.core.mail import (
 from personal_assistant.core.tools import ToolGateway, ToolPolicy, ToolRegistry
 from personal_assistant.domain import (
     ApprovalState,
+    AttachmentDigest,
     RiskLevel,
     ToolCall,
     ToolDescriptor,
@@ -278,7 +279,8 @@ def descriptor() -> ToolDescriptor:
 
 
 def send_payload(
-    *, body: str = "Body", local_action_id: str = LOCAL_ACTION
+    *, body: str = "Body", local_action_id: str = LOCAL_ACTION,
+    attachments: tuple[tuple[str, str, bytes], ...] = (),
 ) -> tuple[dict[str, Any], bytes]:
     message_id = f"<smail.{local_action_id}@example.test>"
     raw = build_message_bytes(
@@ -289,6 +291,7 @@ def send_payload(
         bcc_addresses=(RECIPIENTS[1],),
         subject="Hello",
         body_text=body,
+        attachments=attachments,
     )
     digest = hashlib.sha256(raw).hexdigest()
     arguments = {
@@ -306,7 +309,7 @@ def send_payload(
         "subject": "Hello",
         "mime_sha256": digest,
         "mime_artifact_id": f"art-{digest[:8]}",
-        "attachment_hashes": [],
+        "attachment_hashes": [hashlib.sha256(data).hexdigest() for _, _, data in attachments],
     }
     return arguments, raw
 
@@ -377,6 +380,101 @@ class MailSendGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ToolOutcomeKind.APPROVAL_REQUIRED, outcome.kind)
         self.assertEqual(0, self.invoker.calls)
         self.assertEqual([], self.broker.sent)
+        self.assertEqual({}, self.ledger.records)
+
+    async def test_review_reads_bound_mime_without_dispatch_or_ledger_write(self) -> None:
+        arguments, raw = send_payload()
+        self.artifacts.blobs[arguments["mime_artifact_id"]] = raw
+        preview = await self.executor.review(
+            descriptor(),
+            ToolDescriptor(
+                id="smail.send.preview",
+                version="1",
+                extension_id="nju.smail",
+                extension_version="0.1.0",
+                risk=RiskLevel.READ,
+                input_schema={},
+                output_schema={},
+            ),
+            arguments,
+            task_id="task-1",
+        )
+        self.assertIn("Body", preview["body_text"])
+        self.assertEqual(arguments["mime_sha256"], preview["mime_sha256"])
+        self.assertEqual([], self.broker.sent)
+        self.assertEqual({}, self.ledger.records)
+
+    async def test_prepare_call_binds_verified_attachment_material(self) -> None:
+        attachment_bytes = b"%PDF-1.4\nimportant material\n%%EOF\n"
+        arguments, raw = send_payload(
+            attachments=(("important.pdf", "application/pdf", attachment_bytes),)
+        )
+        self.artifacts.blobs[arguments["mime_artifact_id"]] = raw
+        preview_descriptor = ToolDescriptor(
+            id="smail.send.preview", version="1", extension_id="nju.smail",
+            extension_version="0.1.0", risk=RiskLevel.READ,
+            input_schema={}, output_schema={},
+        )
+        prepared = await self.executor.prepare_call(
+            descriptor(), preview_descriptor, arguments,
+            task_id="task-1",
+            granted_capabilities=frozenset({"mail.send"}),
+            workflow_allowed_tools=frozenset({"smail.send"}),
+        )
+        self.assertEqual(
+            (AttachmentDigest(
+                "important.pdf",
+                hashlib.sha256(attachment_bytes).hexdigest(),
+                len(attachment_bytes),
+            ),),
+            prepared.attachments,
+        )
+        self.assertEqual({"account_id": "nju"}, prepared.target)
+        self.assertEqual(LOCAL_ACTION, prepared.idempotency_key)
+        self.assertEqual([], self.broker.sent)
+        self.assertEqual({}, self.ledger.records)
+
+    async def test_review_rejects_changed_mime_before_approval(self) -> None:
+        arguments, raw = send_payload()
+        self.artifacts.blobs[arguments["mime_artifact_id"]] = raw + b"altered"
+        with self.assertRaisesRegex(Exception, "integrity"):
+            await self.executor.review(
+                descriptor(),
+                ToolDescriptor(
+                    id="smail.send.preview",
+                    version="1",
+                    extension_id="nju.smail",
+                    extension_version="0.1.0",
+                    risk=RiskLevel.READ,
+                    input_schema={},
+                    output_schema={},
+                ),
+                arguments,
+                task_id="task-1",
+            )
+        self.assertEqual([], self.broker.sent)
+        self.assertEqual({}, self.ledger.records)
+
+    async def test_review_tool_cannot_request_send_capability(self) -> None:
+        arguments, raw = send_payload()
+        self.artifacts.blobs[arguments["mime_artifact_id"]] = raw
+        with self.assertRaisesRegex(Exception, "read-only review tool"):
+            await self.executor.review(
+                descriptor(),
+                ToolDescriptor(
+                    id="smail.send.preview",
+                    version="1",
+                    extension_id="nju.smail",
+                    extension_version="0.1.0",
+                    risk=RiskLevel.READ,
+                    input_schema={},
+                    output_schema={},
+                    required_capabilities=frozenset({"mail.send"}),
+                ),
+                arguments,
+                task_id="task-1",
+            )
+        self.assertEqual(0, self.invoker.calls)
         self.assertEqual({}, self.ledger.records)
 
     async def test_approved_send_durably_executes_then_transmits(self) -> None:

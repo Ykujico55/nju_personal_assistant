@@ -1,7 +1,7 @@
 manifest_version = "1"
 id = "nju.smail"
 name = "NJU smail"
-version = "0.1.0"
+version = "0.2.0"
 core_api = ">=1,<2"
 python = ">=3.12,<3.14"
 entrypoint = "nju_smail.worker:create_extension"
@@ -41,6 +41,12 @@ risk = "EXTERNAL_WRITE"
 input_schema = "schemas/send-input.json"
 output_schema = "schemas/send-output.json"
 capabilities = ["mail.send"]
+
+[[tools]]
+id = "smail.send.preview"
+risk = "READ"
+input_schema = "schemas/send-input.json"
+output_schema = "schemas/send-output.json"
 
 [[tools]]
 id = "smail.send_status"

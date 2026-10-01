@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import hashlib
 import threading
 import time
@@ -47,9 +48,10 @@ from personal_assistant.core.tools.gateway import (
     ToolExecutionContext,
     UserActionRequiredError,
 )
-from personal_assistant.domain.models import ToolDescriptor
+from personal_assistant.domain.enums import RiskLevel
+from personal_assistant.domain.models import AttachmentDigest, ToolCall, ToolDescriptor
 
-from .mime import parse_envelope
+from .mime import parse_envelope, parse_message
 from .owners import MailExecutionOwnerRegistry
 
 MAIL_SEND_CAPABILITY = "mail.send"
@@ -121,6 +123,102 @@ class MailSendExecutor:
         # Stable per-executor owner: lets the ledger distinguish a live dispatch
         # from a crashed one without a second caller burning the first.
         self._owner_id = f"mail-send-{uuid4().hex}"
+
+    async def prepare_call(
+        self,
+        descriptor: ToolDescriptor,
+        preview_descriptor: ToolDescriptor,
+        arguments: Mapping[str, Any],
+        *,
+        task_id: str,
+        granted_capabilities: frozenset[str],
+        workflow_allowed_tools: frozenset[str],
+    ) -> ToolCall:
+        """Bind a send candidate to the current, host-verified MIME material."""
+
+        details = await self.review(
+            descriptor, preview_descriptor, arguments, task_id=task_id
+        )
+        return ToolCall(
+            tool_id=descriptor.id,
+            tool_version=descriptor.version,
+            arguments=copy.deepcopy(dict(arguments)),
+            task_id=task_id,
+            target={"account_id": details["account_id"]},
+            attachments=tuple(
+                AttachmentDigest(
+                    name=item["name"],
+                    sha256=item["sha256"],
+                    size_bytes=item["size_bytes"],
+                )
+                for item in details["attachments"]
+            ),
+            granted_capabilities=granted_capabilities,
+            workflow_allowed_tools=workflow_allowed_tools,
+            idempotency_key=arguments["local_action_id"],
+        )
+
+    async def review(
+        self,
+        descriptor: ToolDescriptor,
+        preview_descriptor: ToolDescriptor,
+        arguments: Mapping[str, Any],
+        *,
+        task_id: str,
+    ) -> Mapping[str, Any]:
+        """Read verified MIME for the owner without preparing or sending it."""
+
+        if (
+            MAIL_SEND_CAPABILITY not in descriptor.required_capabilities
+            or descriptor.risk is not RiskLevel.EXTERNAL_WRITE
+            or preview_descriptor.id != f"{descriptor.id}.preview"
+            or preview_descriptor.risk is not RiskLevel.READ
+            or MAIL_SEND_CAPABILITY in preview_descriptor.required_capabilities
+            or preview_descriptor.extension_id != descriptor.extension_id
+            or preview_descriptor.extension_version != descriptor.extension_version
+            or preview_descriptor.version != descriptor.version
+        ):
+            raise DefinitiveToolFailure("the read-only review tool does not match the send")
+        action_id = arguments.get("local_action_id")
+        if not isinstance(action_id, str):
+            raise DefinitiveToolFailure("the send action id is missing")
+        context = ToolExecutionContext(
+            attempt_id=f"approval-review-{uuid4().hex}",
+            task_id=task_id,
+            idempotency_key=action_id,
+            approval_id=None,
+        )
+        expectations = _expectations(arguments, context)
+        account = await self._resolve_account(expectations)
+        if account.address.lower() != expectations.from_address.lower():
+            raise DefinitiveToolFailure("the sender does not match the registered account")
+        if not account.send_enabled or not self._broker.send_available:
+            raise DefinitiveToolFailure("mail sending is unavailable")
+        if self._policy is not None:
+            for recipient in (*expectations.to, *expectations.cc, *expectations.bcc):
+                if not self._policy.recipient_allowed(recipient):
+                    raise DefinitiveToolFailure("recipient is not on the controlled test allowlist")
+        materialized = await self._materialize(preview_descriptor, arguments, context)
+        mime_bytes = await self._verify_bytes(materialized, expectations)
+        _verify_envelope(mime_bytes, materialized, expectations)
+        parsed = parse_message(mime_bytes)
+        if parsed.truncated:
+            raise DefinitiveToolFailure("the complete message cannot be shown")
+        await self._reconfirm_account(expectations)
+        return {
+            "account_id": expectations.account_id,
+            "from_address": expectations.from_address,
+            "to": list(expectations.to),
+            "cc": list(expectations.cc),
+            "bcc": list(expectations.bcc),
+            "subject": expectations.subject,
+            "body_text": parsed.body_text,
+            "mime_sha256": expectations.mime_sha256,
+            "attachments": [
+                {"name": item.filename, "sha256": item.sha256, "size_bytes": item.size_bytes}
+                for item in parsed.attachments
+            ],
+        }
 
     async def execute(
         self,

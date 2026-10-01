@@ -13,6 +13,7 @@ Run with::
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import shutil
 import tempfile
@@ -24,6 +25,8 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import asyncpg
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from personal_assistant.core.agent.checkpoint import Observation
 from personal_assistant.core.agent.engine import (
@@ -54,6 +57,7 @@ from personal_assistant.core.jobs import (
     SideEffectState,
 )
 from personal_assistant.core.tasks import TaskService
+from personal_assistant.core.tasks.form_drafts import FormDraftService
 from personal_assistant.core.tools import ToolGateway, ToolPolicy, ToolRegistry
 from personal_assistant.domain import (
     ConcurrentModificationError,
@@ -74,6 +78,10 @@ from personal_assistant.infrastructure.database import (
     PostgresAdapters,
     build_postgres_adapters,
 )
+from personal_assistant.infrastructure.database.form_drafts import PostgresFormDraftStore
+from personal_assistant.infrastructure.database.push import PostgresPushSubscriptionStore
+from personal_assistant.infrastructure.memory import InMemorySecretStore
+from personal_assistant.infrastructure.push.service import PushService
 
 BASE_URL = os.getenv("PA_TEST_DATABASE_URL")
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
@@ -138,6 +146,136 @@ class _Executor:
 
 @unittest.skipUnless(BASE_URL, "set PA_TEST_DATABASE_URL to run real PostgreSQL tests")
 class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
+    async def test_push_command_replay_conflict_and_revoke_survive_reconnect(self) -> None:
+        def encoded(raw: bytes) -> str:
+            return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+        class Sender:
+            async def send(self, **_kwargs: Any) -> str:
+                raise AssertionError("subscription commands must not deliver")
+
+            async def aclose(self) -> None:
+                pass
+
+        secrets = InMemorySecretStore()
+        handle = await secrets.put(
+            name="push-command", kind="push_vapid_private",
+            value=encoded((7).to_bytes(32, "big")),
+        )
+        public = encoded(ec.derive_private_key(7, ec.SECP256R1())
+                         .public_key().public_bytes(
+                             Encoding.X962, PublicFormat.UncompressedPoint
+                         ))
+        browser_key = encoded(ec.derive_private_key(11, ec.SECP256R1())
+                              .public_key().public_bytes(
+                                  Encoding.X962, PublicFormat.UncompressedPoint
+                              ))
+        endpoint = "https://push.example.test/send/command"
+        first = await self.migrate()
+        original = PushService(
+            store=PostgresPushSubscriptionStore(first.database), secrets=secrets,
+            sender=Sender(), owner_id="owner", public_key=public,
+            secret_handle_id=handle.id,
+            allowed_origins=("https://push.example.test",),
+        )
+        receipt = await original.subscribe(
+            endpoint, browser_key, encoded(b"a" * 16), key="push-command-1"
+        )
+        before = (await self._fetch(
+            first, "SELECT sealed FROM push_subscriptions WHERE id=$1", receipt.id
+        ))[0]["sealed"]
+        await first.close()
+
+        second = await self.migrate()
+        reconnected = PushService(
+            store=PostgresPushSubscriptionStore(second.database), secrets=secrets,
+            sender=Sender(), owner_id="owner", public_key=public,
+            secret_handle_id=handle.id,
+            allowed_origins=("https://other.example.test",),
+        )
+        self.assertEqual(receipt, await reconnected.subscribe(
+            endpoint, browser_key, encoded(b"a" * 16), key="push-command-1"
+        ))
+        with self.assertRaises(ConcurrentModificationError):
+            await reconnected.subscribe(
+                endpoint, browser_key, encoded(b"b" * 16), key="push-command-1"
+            )
+        after = (await self._fetch(
+            second, "SELECT sealed FROM push_subscriptions WHERE id=$1", receipt.id
+        ))[0]["sealed"]
+        self.assertEqual(before, after)
+        await reconnected.revoke(receipt.id)
+        self.assertEqual(receipt, await reconnected.subscribe(
+            endpoint, browser_key, encoded(b"a" * 16), key="push-command-1"
+        ))
+        self.assertFalse(await reconnected.status(receipt.id))
+        commands = await self._fetch(
+            second, "SELECT request_sha256 FROM push_subscription_commands"
+        )
+        self.assertEqual(1, len(commands))
+        self.assertEqual(64, len(commands[0]["request_sha256"]))
+
+    async def test_push_subscription_sealed_and_restored_after_database_reconnect(self) -> None:
+        def encoded(raw: bytes) -> str:
+            return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+        class Sender:
+            def __init__(self) -> None:
+                self.payloads: list[bytes] = []
+
+            async def send(self, **kwargs: Any) -> str:
+                self.payloads.append(kwargs["payload"])
+                return "accepted"
+
+            async def aclose(self) -> None:
+                pass
+
+        private = ec.derive_private_key(7, ec.SECP256R1())
+        public = encoded(private.public_key().public_bytes(
+            Encoding.X962, PublicFormat.UncompressedPoint
+        ))
+        secrets = InMemorySecretStore()
+        handle = await secrets.put(
+            name="push-vapid", kind="push_vapid_private",
+            value=encoded((7).to_bytes(32, "big")),
+        )
+        sender = Sender()
+        first = await self.migrate()
+        service = PushService(
+            store=PostgresPushSubscriptionStore(first.database), secrets=secrets,
+            sender=sender, owner_id="owner", public_key=public,
+            secret_handle_id=handle.id,
+            allowed_origins=("https://push.example.test",),
+        )
+        endpoint = "https://push.example.test/send/secret-token"
+        browser_key = encoded(ec.derive_private_key(11, ec.SECP256R1())
+                              .public_key().public_bytes(
+                                  Encoding.X962, PublicFormat.UncompressedPoint
+                              ))
+        auth = encoded(b"b" * 16)
+        record = await service.subscribe(endpoint, browser_key, auth)
+        row = (await self._fetch(first, "SELECT sealed FROM push_subscriptions"))[0]
+        sealed = bytes(row["sealed"])
+        self.assertNotIn(endpoint.encode(), sealed)
+        self.assertNotIn(browser_key.encode(), sealed)
+        self.assertNotIn(auth.encode(), sealed)
+        await first.close()
+
+        second = await self.migrate()
+        restored = PushService(
+            store=PostgresPushSubscriptionStore(second.database), secrets=secrets,
+            sender=sender, owner_id="owner", public_key=public,
+            secret_handle_id=handle.id,
+            allowed_origins=("https://push.example.test",),
+        )
+        self.assertTrue(await restored.status(record.id))
+        report = await restored.notify_pending(task_id="task_1", risk="R2")
+        self.assertEqual(1, report.accepted)
+        self.assertEqual(b'{"kind":"pending","risk":"R2","task_id":"task_1"}',
+                         sender.payloads[0])
+        await restored.revoke(record.id)
+        self.assertFalse(await restored.status(record.id))
+
     async def asyncSetUp(self) -> None:
         base = _dsn(BASE_URL or "")
         base_name = urlsplit(base).path.lstrip("/")
@@ -229,6 +367,9 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0006_f06_mail_transport",
                 "0007_f07_browser_sessions",
                 "0008_f07_browser_session_uniqueness",
+                "0009_f08_form_drafts",
+                "0010_f08_push_subscriptions",
+                "0011_f08_push_subscription_commands",
             ),
             applied,
         )
@@ -245,6 +386,9 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0006_f06_mail_transport",
                 "0007_f07_browser_sessions",
                 "0008_f07_browser_session_uniqueness",
+                "0009_f08_form_drafts",
+                "0010_f08_push_subscriptions",
+                "0011_f08_push_subscription_commands",
             ],
             [r["version"] for r in rows],
         )
@@ -268,13 +412,16 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0006_f06_mail_transport",
                 "0007_f07_browser_sessions",
                 "0008_f07_browser_session_uniqueness",
+                "0009_f08_form_drafts",
+                "0010_f08_push_subscriptions",
+                "0011_f08_push_subscription_commands",
             ),
             await second.startup(),
         )
         versions = await self._fetchval(
             second, "SELECT count(*) FROM schema_migrations"
         )
-        self.assertEqual(8, versions)
+        self.assertEqual(11, versions)
 
     async def test_checksum_drift_is_rejected(self) -> None:
         await self.migrate()
@@ -356,10 +503,15 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
 
         await adapters.close()
         rebuilt = await self.migrate()
+        expected = sorted(
+            [await rebuilt.task_repository.get(task.id) for task in (first, second, third)],
+            key=lambda task: (task.created_at, task.id),
+            reverse=True,
+        )
         recent = await rebuilt.task_repository.list_recent(limit=2)
-        self.assertEqual([third.id, second.id], [task.id for task in recent])
-        older = await rebuilt.task_repository.list_recent(limit=2, before=second.id)
-        self.assertEqual([first.id], [task.id for task in older])
+        self.assertEqual([task.id for task in expected[:2]], [task.id for task in recent])
+        older = await rebuilt.task_repository.list_recent(limit=2, before=expected[1].id)
+        self.assertEqual([expected[2].id], [task.id for task in older])
 
         from personal_assistant.infrastructure.database.task_repository import (
             PostgresTaskRepository,
@@ -368,7 +520,47 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
         other_owner = PostgresTaskRepository(rebuilt.database, owner_id="another-owner")
         self.assertEqual((), await other_owner.list_recent(limit=10))
         with self.assertRaises(NotFoundError):
-            await other_owner.list_recent(limit=10, before=second.id)
+            await other_owner.list_recent(limit=10, before=expected[1].id)
+
+    async def test_f08_form_draft_seed_bool_retry_conflicts_after_reconnect(self) -> None:
+        adapters = await self.migrate()
+        task = await self.task_service(adapters).create(
+            objective="typed form draft", idempotency_key="f08-typed-task"
+        )
+        form = {
+            "extension_id": "example.echo", "extension_version": "1.0.0",
+            "id": "example.count",
+            "json_schema": {
+                "type": "object", "properties": {"count": {"type": "integer"}},
+                "additionalProperties": False,
+            },
+            "ui_schema": {},
+        }
+        service = FormDraftService(
+            self.task_service(adapters), PostgresFormDraftStore(adapters.database)
+        )
+        original = await service.create(
+            task.id, form, key="f08-typed-seed",
+            initial_values={"count": 1}, initial_sources={"count": "EVIDENCE"},
+        )
+        await adapters.close()
+        rebuilt = await self.migrate()
+        restored = FormDraftService(
+            self.task_service(rebuilt), PostgresFormDraftStore(rebuilt.database)
+        )
+        replay = await restored.create(
+            task.id, form, key="f08-typed-seed",
+            initial_values={"count": 1}, initial_sources={"count": "EVIDENCE"},
+        )
+        self.assertEqual(original, replay)
+        with self.assertRaises(ConcurrentModificationError):
+            await restored.create(
+                task.id, form, key="f08-typed-seed",
+                initial_values={"count": True}, initial_sources={"count": "EVIDENCE"},
+            )
+        saved = await restored.get(task.id)
+        self.assertIs(type(saved.values["count"]), int)
+        self.assertEqual(1, saved.version)
 
     # -- queue lease semantics ---------------------------------------------
     async def test_observation_with_json_null_value_is_persisted(self) -> None:

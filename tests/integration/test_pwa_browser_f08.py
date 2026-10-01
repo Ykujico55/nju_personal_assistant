@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -42,6 +43,13 @@ class _State:
         self.message_keys: dict[str, tuple[str, str]] = {}
         self.drop_next_message_response = False
         self.next_message_response: object | None = None
+        self.push_subscriptions: dict[str, str] = {}
+        self.push_reconfigure_ids: set[str] = set()
+        self.push_enabled = True
+        self.push_posts: list[str] = []
+        self.push_keys: list[str] = []
+        self.drop_next_push_response = False
+        self.next_push_response: object | None = None
 
 
 class _Site(BaseHTTPRequestHandler):
@@ -61,6 +69,21 @@ class _Site(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         url = urlsplit(self.path)
+        if url.path == "/api/v1/push/config":
+            self._json({
+                "enabled": self.state.push_enabled,
+                "public_key": "B" + "A" * 86 if self.state.push_enabled else None,
+            })
+            return
+        if url.path.startswith("/api/v1/push/subscriptions/"):
+            identifier = url.path.rsplit("/", 1)[-1]
+            self._json({
+                "id": identifier,
+                "active": identifier in self.state.push_subscriptions
+                and identifier not in self.state.push_reconfigure_ids,
+                "reconfigure_required": identifier in self.state.push_reconfigure_ids,
+            })
+            return
         if url.path == "/api/v1/tasks":
             parameters = parse_qs(url.query)
             tasks = list(reversed(self.state.tasks))
@@ -118,6 +141,25 @@ class _Site(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         url = urlsplit(self.path)
+        if url.path == "/api/v1/push/subscriptions":
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            endpoint = payload["endpoint"]
+            identifier = hashlib.sha256(endpoint.encode()).hexdigest()
+            self.state.push_posts.append(endpoint)
+            self.state.push_keys.append(self.headers.get("Idempotency-Key", ""))
+            self.state.push_subscriptions[identifier] = endpoint
+            if self.state.drop_next_push_response:
+                self.state.drop_next_push_response = False
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+                return
+            if self.state.next_push_response is not None:
+                response = self.state.next_push_response
+                self.state.next_push_response = None
+                self._json(response, 201)
+                return
+            self._json({"id": identifier, "created_at": NOW}, 201)
+            return
         if not url.path.startswith("/api/v1/tasks/") or not url.path.endswith("/messages"):
             self.send_error(404)
             return
@@ -172,9 +214,262 @@ class _Site(BaseHTTPRequestHandler):
             return
         self._json({"task": task, "messages": self.state.messages[task_id]})
 
+    def do_DELETE(self) -> None:
+        url = urlsplit(self.path)
+        if url.path.startswith("/api/v1/push/subscriptions/"):
+            self.state.push_subscriptions.pop(url.path.rsplit("/", 1)[-1], None)
+            self.send_response(204)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        self.send_error(404)
+
 
 @unittest.skipUnless(PLAYWRIGHT_AVAILABLE, "install the optional browser extra")
 class PwaBrowserF08Tests(unittest.TestCase):
+    def test_410_revocation_replaces_stale_browser_subscription(self) -> None:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import expect, sync_playwright
+
+        old_endpoint = "https://push.example.test/send/expired"
+        new_endpoint = "https://push.example.test/send/replacement"
+        old_id = hashlib.sha256(old_endpoint.encode()).hexdigest()
+        new_id = hashlib.sha256(new_endpoint.encode()).hexdigest()
+        state = _State()
+        state.push_subscriptions[old_id] = old_endpoint
+        handler = type("PwaPush410Handler", (_Site,), {"state": state})
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with sync_playwright() as playwright:
+                try:
+                    browser = playwright.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    if os.name != "nt" or "spawn EFTYPE" not in str(exc):
+                        raise
+                    browser = playwright.chromium.launch(headless=True, channel="chrome")
+                try:
+                    context = browser.new_context(viewport={"width": 390, "height": 844})
+                    context.add_init_script(f"""
+                        const probe = {{
+                          current: null, subscribeCalls: 0, unsubscribeCalls: 0,
+                          failUnsubscribe: false, keepOldAfterUnsubscribe: false
+                        }};
+                        const oldEndpoint = {json.dumps(old_endpoint)};
+                        const newEndpoint = {json.dumps(new_endpoint)};
+                        const makeSubscription = (endpoint) => ({{
+                          endpoint,
+                          toJSON: () => ({{endpoint, keys: {{
+                            p256dh: 'browser-key', auth: 'browser-auth'
+                          }}}}),
+                          unsubscribe: async () => {{
+                            probe.unsubscribeCalls += 1;
+                            if (probe.failUnsubscribe) return false;
+                            if (!probe.keepOldAfterUnsubscribe) probe.current = null;
+                            return true;
+                          }}
+                        }});
+                        probe.current = makeSubscription(oldEndpoint);
+                        window.__pushProbe = probe;
+                        const registration = {{pushManager: {{
+                          getSubscription: async () => probe.current,
+                          subscribe: async () => {{
+                            probe.subscribeCalls += 1;
+                            probe.current = makeSubscription(newEndpoint);
+                            return probe.current;
+                          }}
+                        }}}};
+                        Object.defineProperty(window, 'Notification', {{value: {{
+                          permission: 'default', requestPermission: async () => 'granted'
+                        }}}});
+                        Object.defineProperty(navigator, 'serviceWorker', {{value: {{
+                          register: async () => registration,
+                          ready: Promise.resolve(registration)
+                        }}}});
+                    """)
+                    page = context.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_port}/ui/")
+                    expect(page.locator("#push-status")).to_contain_text("已订阅")
+                    # The host's 410 handling revoked this record; the browser still has it.
+                    state.push_subscriptions.pop(old_id)
+                    page.locator("#push-refresh").click()
+                    expect(page.locator("#push-status")).to_contain_text("未订阅")
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("已订阅")
+                    self.assertEqual([new_endpoint], state.push_posts)
+                    self.assertEqual({new_id: new_endpoint}, state.push_subscriptions)
+                    self.assertEqual(
+                        {"unsubscribeCalls": 1, "subscribeCalls": 1},
+                        page.evaluate("""() => ({
+                          unsubscribeCalls: window.__pushProbe.unsubscribeCalls,
+                          subscribeCalls: window.__pushProbe.subscribeCalls
+                        })"""),
+                    )
+
+                    state.push_subscriptions.pop(new_id)
+                    page.evaluate("window.__pushProbe.failUnsubscribe = true")
+                    page.locator("#push-refresh").click()
+                    expect(page.locator("#push-status")).to_contain_text("未订阅")
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("无法清理")
+                    self.assertEqual([new_endpoint], state.push_posts)
+                    self.assertEqual(
+                        1, page.evaluate("window.__pushProbe.subscribeCalls")
+                    )
+                    page.evaluate("""() => {
+                      window.__pushProbe.failUnsubscribe = false;
+                      window.__pushProbe.keepOldAfterUnsubscribe = true;
+                    }""")
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("无法清理")
+                    self.assertEqual([new_endpoint], state.push_posts)
+                    self.assertEqual(
+                        1, page.evaluate("window.__pushProbe.subscribeCalls")
+                    )
+                    page.evaluate("window.__pushProbe.keepOldAfterUnsubscribe = false")
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("已失效端点")
+                    self.assertEqual([new_endpoint], state.push_posts)
+                    self.assertEqual(
+                        2, page.evaluate("window.__pushProbe.subscribeCalls")
+                    )
+                finally:
+                    browser.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_push_subscription_lost_receipt_retry_revoke_and_no_sensitive_cache(self) -> None:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import expect, sync_playwright
+
+        state = _State()
+        handler = type("PwaPushHandler", (_Site,), {"state": state})
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with sync_playwright() as playwright:
+                try:
+                    browser = playwright.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    if os.name != "nt" or "spawn EFTYPE" not in str(exc):
+                        raise
+                    browser = playwright.chromium.launch(headless=True, channel="chrome")
+                try:
+                    context = browser.new_context(viewport={"width": 390, "height": 844})
+                    browser_subscription = {
+                        "endpoint": "https://push.example.test/send/stale"
+                    }
+                    context.expose_function(
+                        "mockPushGet", lambda: browser_subscription["endpoint"]
+                    )
+                    context.expose_function(
+                        "mockPushSet",
+                        lambda endpoint: browser_subscription.__setitem__("endpoint", endpoint),
+                    )
+                    context.add_init_script("""
+                        const endpoint = 'https://push.example.test/send/opaque';
+                        const probe = { unsubscribeCalls: 0, subscribeCalls: 0 };
+                        const makeSubscription = (value) => ({
+                          endpoint: value,
+                          toJSON: () => ({endpoint: value, keys: {
+                            p256dh: 'browser-key', auth: 'browser-auth'
+                          }}),
+                          unsubscribe: async () => {
+                            probe.unsubscribeCalls += 1;
+                            await window.mockPushSet(null);
+                            return true;
+                          }
+                        });
+                        window.__pushProbe = probe;
+                        const registration = {pushManager: {
+                          getSubscription: async () => {
+                            const value = await window.mockPushGet();
+                            return value ? makeSubscription(value) : null;
+                          },
+                          subscribe: async () => {
+                            probe.subscribeCalls += 1;
+                            await window.mockPushSet(endpoint);
+                            return makeSubscription(endpoint);
+                          }
+                        }};
+                        Object.defineProperty(window, 'Notification', {value: {
+                          permission: 'default', requestPermission: async () => 'granted'
+                        }});
+                        Object.defineProperty(navigator, 'serviceWorker', {value: {
+                          register: async () => registration,
+                          ready: Promise.resolve(registration)
+                        }});
+                    """)
+                    page = context.new_page()
+                    state.drop_next_push_response = True
+                    page.goto(f"http://127.0.0.1:{server.server_port}/ui/")
+                    expect(page.locator("#push-status")).to_contain_text("未订阅")
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("结果未确认")
+                    self.assertEqual(1, len(state.push_posts))
+                    first_identifier = next(iter(state.push_subscriptions))
+                    state.push_reconfigure_ids.add(first_identifier)
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("需重新配置")
+                    expect(page.locator("#push-enable")).to_be_disabled()
+                    state.push_reconfigure_ids.clear()
+                    page.locator("#push-refresh").click()
+                    expect(page.locator("#push-status")).to_contain_text("已订阅")
+                    self.assertEqual(2, len(state.push_posts))
+                    self.assertEqual(state.push_posts[0], state.push_posts[1])
+                    self.assertEqual(state.push_keys[0], state.push_keys[1])
+                    self.assertEqual(1, len(state.push_subscriptions))
+                    page.reload()
+                    expect(page.locator("#push-status")).to_contain_text("已订阅")
+                    identifier = next(iter(state.push_subscriptions))
+                    state.push_reconfigure_ids.add(identifier)
+                    page.locator("#push-refresh").click()
+                    expect(page.locator("#push-status")).to_contain_text("需重新配置")
+                    expect(page.locator("#push-enable")).to_be_disabled()
+                    expect(page.locator("#push-disable")).to_be_enabled()
+                    state.push_enabled = False
+                    page.locator("#push-refresh").click()
+                    expect(page.locator("#push-status")).to_contain_text("需重新配置")
+                    expect(page.locator("#push-disable")).to_be_enabled()
+                    state.push_enabled = True
+                    state.push_reconfigure_ids.clear()
+                    page.locator("#push-refresh").click()
+                    expect(page.locator("#push-status")).to_contain_text("已订阅")
+                    page.locator("#push-disable").click()
+                    expect(page.locator("#push-status")).to_contain_text("未订阅")
+                    self.assertEqual({}, state.push_subscriptions)
+                    state.next_push_response = {"id": "0" * 64, "created_at": NOW}
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("结果未确认")
+                    page.locator("#push-enable").click()
+                    expect(page.locator("#push-status")).to_contain_text("已订阅")
+                    self.assertEqual(state.push_keys[2], state.push_keys[3])
+                    self.assertEqual(1, len(state.push_subscriptions))
+                    page.goto(f"http://127.0.0.1:{server.server_port}/ui/?task=task_1")
+                    expect(page.locator("#task-detail")).to_have_attribute("data-task-id", "task_1")
+                    cached = page.evaluate("""async () => {
+                      const urls = [];
+                      for (const name of await caches.keys()) {
+                        const cache = await caches.open(name);
+                        for (const request of await cache.keys()) urls.push(request.url);
+                      }
+                      return urls;
+                    }""")
+                    self.assertTrue(all("/api/" not in url for url in cached))
+                    self.assertTrue(all("push.example.test" not in url for url in cached))
+                finally:
+                    browser.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_task_list_detail_live_update_reconnect_and_static_cache(self) -> None:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import expect, sync_playwright

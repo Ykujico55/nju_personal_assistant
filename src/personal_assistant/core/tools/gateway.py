@@ -101,6 +101,10 @@ class InvocationAudit(Protocol):
     async def append(self, event: InvocationAuditEvent) -> None: ...
 
 
+class PendingNotifier(Protocol):
+    async def notify_pending(self, *, task_id: str, risk: str) -> object: ...
+
+
 async def _finish_terminal_recording(awaitable: Awaitable[None]) -> None:
     """Finish a started terminal write before propagating caller cancellation."""
 
@@ -151,6 +155,7 @@ class ToolGateway:
         executor: ToolExecutor,
         audit: InvocationAudit | None = None,
         outbox: SideEffectOutboxPort | None = None,
+        pending_notifier: PendingNotifier | None = None,
     ) -> None:
         self._registry = registry
         self._policy = policy
@@ -158,6 +163,7 @@ class ToolGateway:
         self._executor = executor
         self._audit = audit or InMemoryInvocationAudit()
         self._outbox = outbox
+        self._pending_notifier = pending_notifier
 
     @property
     def outbox(self) -> SideEffectOutboxPort | None:
@@ -180,11 +186,19 @@ class ToolGateway:
         if is_external and call.approval_id is None:
             assert binding is not None
             approval = await self._approvals.prepare(binding)
+            notice = "exact approval is required before this action"
+            if self._pending_notifier is not None:
+                try:
+                    await self._pending_notifier.notify_pending(
+                        task_id=call.task_id, risk="R2"
+                    )
+                except Exception:  # noqa: BLE001 - push delivery must not undo prepared approval
+                    notice += "; notification delivery is unconfirmed"
             return ToolOutcome(
                 ToolOutcomeKind.APPROVAL_REQUIRED,
                 approval_id=approval.id,
                 reference_id=approval.id,
-                message="exact approval is required before this action",
+                message=notice,
             )
 
         intent: SideEffectIntent | None = None

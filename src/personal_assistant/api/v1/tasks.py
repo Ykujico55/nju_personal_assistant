@@ -4,9 +4,12 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from personal_assistant.api.dependencies import get_actor, get_container
 from personal_assistant.bootstrap import Container
-from personal_assistant.domain import Task
+from personal_assistant.domain import NotFoundError, Task
 
 from .schemas import (
+    FormDraftCreate,
+    FormDraftUpdate,
+    FormDraftView,
     MessageView,
     TaskCreate,
     TaskDetail,
@@ -17,6 +20,60 @@ from .schemas import (
 )
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+@router.get("/{task_id}/form-draft", response_model=FormDraftView)
+async def get_form_draft(
+    task_id: str,
+    container: Container = Depends(get_container),
+) -> FormDraftView:
+    return FormDraftView.model_validate(await container.form_drafts.get(task_id))
+
+
+@router.post("/{task_id}/form-draft", response_model=FormDraftView, status_code=201)
+async def create_form_draft(
+    task_id: str,
+    payload: FormDraftCreate,
+    request: Request,
+    container: Container = Depends(get_container),
+) -> FormDraftView:
+    replay = await container.form_drafts.replay_create(
+        task_id, payload.extension_id, payload.form_id, key=request.state.idempotency_key
+    )
+    if replay is not None:
+        return FormDraftView.model_validate(replay)
+    forms = await container.extension_supervisor.list_forms()
+    form = next(
+        (
+            item for item in forms
+            if item["extension_id"] == payload.extension_id and item["id"] == payload.form_id
+        ),
+        None,
+    )
+    if form is None:
+        replay = await container.form_drafts.replay_create(
+            task_id, payload.extension_id, payload.form_id, key=request.state.idempotency_key
+        )
+        if replay is not None:
+            return FormDraftView.model_validate(replay)
+        raise NotFoundError("form is not available from an enabled extension")
+    saved = await container.form_drafts.create(
+        task_id, form, key=request.state.idempotency_key
+    )
+    return FormDraftView.model_validate(saved)
+
+
+@router.put("/{task_id}/form-draft", response_model=FormDraftView)
+async def update_form_draft(
+    task_id: str,
+    payload: FormDraftUpdate,
+    request: Request,
+    container: Container = Depends(get_container),
+) -> FormDraftView:
+    saved = await container.form_drafts.replace(
+        task_id, payload.values, version=payload.version, key=request.state.idempotency_key
+    )
+    return FormDraftView.model_validate(saved)
 
 
 def _task_view(task: Task) -> TaskView:

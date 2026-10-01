@@ -44,6 +44,17 @@
       </section>
 
       <section class="card">
+        <h2>手机通知</h2>
+        <p>通知只提示待处理任务和风险等级；详情需打开助手查看。</p>
+        <p id="push-status" role="status" aria-live="polite">正在检查订阅…</p>
+        <div class="inline">
+          <button id="push-enable" type="button" disabled>开启通知</button>
+          <button id="push-disable" class="secondary" type="button" disabled>关闭通知</button>
+          <button id="push-refresh" class="secondary" type="button">重读订阅状态</button>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>待确认动作</h2>
         <form id="approval-form">
           <label for="approval-id">Approval ID</label>
@@ -53,11 +64,15 @@
           </div>
         </form>
         <div id="approval-preview" hidden>
-          <p class="warning">确认只对下方精确内容生效；任何编辑都会使它失效。</p>
+          <p class="warning">审批只记录你的确认，不直接发送邮件或提交网页。请核对助手验证的完整内容。</p>
+          <p id="approval-status" role="status" aria-live="polite"></p>
+          <h3>实际邮件内容</h3>
+          <pre id="approval-material"></pre>
+          <h3>审批绑定快照</h3>
           <pre id="approval-action"></pre>
           <div class="inline">
-            <button id="approve-button" type="button">确认此动作</button>
-            <button id="reject-button" type="button" class="danger">拒绝</button>
+            <button id="approve-button" type="button" disabled>确认此动作</button>
+            <button id="reject-button" type="button" class="danger" disabled>拒绝</button>
           </div>
         </div>
       </section>

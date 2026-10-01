@@ -2,7 +2,7 @@
 
 状态只使用 `DONE / NEXT / IN_PROGRESS / WAITING / BLOCKED`。每个 Agent 一次只推进一个编号；完成后写入可复现的命令与结果，不得顺手开始下一项。
 
-2026-09-30 排期例外：用户明确允许 F07 尚未 DONE 时先实施不依赖其剩余真实站点验收的 F08 子任务。F08.1 已通过用户定向验收；F08.2 的不完整 2xx 响应与首尾空白回执误判两项 P1 修复于 2026-10-01 通过定向独立复验，标为 `DONE`。F08.3 为唯一 `NEXT`；F07 与 F08 整体保持 `IN_PROGRESS`，不启动 F07 真实提交或阶段 10 自动路由。
+2026-09-30 排期例外：用户明确允许 F07 尚未 DONE 时先实施不依赖其剩余真实站点验收的 F08 子任务。F08.1–F08.5 已分别通过约定范围的独立验收并标为 `DONE`；F08.6「安全与真机验收」为唯一 `NEXT`，尚未启动。F07 与 F08 整体保持 `IN_PROGRESS`；不得把 F07 试填预览变成可批准的权威预览，不启动 F07 真实提交或阶段 10 自动路由。
 
 ## 已完成
 
@@ -87,7 +87,10 @@
 
 F05–F10 和两条最终 E2E 的完整范围见 `docs/NEXT_STEPS.md`。F02–F06 均已完成独立验收；F07 与 F08 均为 `IN_PROGRESS`，F08.1/F08.2 已通过定向验收。
 
-- [ ] **F08 — PWA 与 Web Push（IN_PROGRESS）**：按用户的排期例外拆为独立子任务。**F08.1 DONE**：新增有界任务列表 API（PostgreSQL/内存同序分页）、手机宽度 PWA 任务列表/详情、SSE 连接与断线重读、静态资源白名单缓存；不提供 F07 试填预览的审批入口。**F08.2 DONE**：基于现有消息 API 提交补充内容，显示服务端版本；409 重读且保留草稿。两项复审 P1 均已补反例并修复：仅在校验并渲染当前任务完整响应后清除输入与键；请求正文与回执均按任务服务的 `strip()` 形式比较，未知结果保留原始草稿与规范化请求绑定，仅同键手动重试。2026-10-01 定向独立复验通过，命令见 `docs/NEXT_STEPS.md`。**F08.3 NEXT**：Schema 表单、来源与版本化草稿。正式审批、Web Push 和真实 Android/Cloudflare 验收仍为后续任务。
+- [ ] **F08 — PWA 与 Web Push（IN_PROGRESS）**：按用户的排期例外拆为独立子任务。**F08.1–F08.5 DONE**：任务列表/详情、连接状态、消息交互、Schema 表单、来源与版本化草稿、已有审批记录的手机核对与批准，以及订阅/撤销与最小元数据 Web Push，均已通过各自约定范围的独立验收。F08.4 邮件路径核对当前草稿、真实 MIME 与完整附件清单；F07 ehall 试填记录在公共 API 与页面均不可批准。**F08.6 NEXT**：Android/Cloudflare/真实 Push 服务的安全与真机验收，尚未启动；F07 与 F08 整体继续 `IN_PROGRESS`。独立验收与当前验证边界见下方及 `docs/NEXT_STEPS.md`。
+  - 2026-10-01 F08.4 独立验收 P2 附件清单缺口修复：审批 GET/POST 现始终对比持久快照与实际 MIME 附件清单，包括空清单；宿主 `MailSendExecutor.prepare_call` 从当前草稿经 Worker 只读物化、MIME 核验后填充 `ToolCall.attachments`。先红后绿的 API 反例覆盖空/非空双向、名称/大小/哈希不一致，真实 PostgreSQL + Worker 用例覆盖带附件草稿到持久审批、手机预览与模拟 SMTP。实施者定向 API/单元 **31 passed、2 warnings**，真实 Worker **1 passed**；上行 1218/128 与 128/1 是修复前历史结果，不能充作修复后全量结果。应用户要求中止已启动的全量与 PostgreSQL 脚本。用户随后独立复验 API、邮件单元、390px 浏览器和契约 **39 passed**，真实 Worker＋临时 PostgreSQL＋模拟 TLS SMTP **1 passed**，Ruff/Mypy/`git diff --check` 通过；据此 **F08.4 DONE**，**F08.5 IN_PROGRESS，唯一当前项**。产品 Agent 自动创建邮件审批尚未接线，不在 F08.4 验收范围。F08 整体及 F07 仍为 `IN_PROGRESS`。精确命令与边界见 `docs/NEXT_STEPS.md`。
+  - 真实 Worker 用例已纳入 `scripts/test-postgres.ps1` 的显式文件列表，后续运行该脚本将覆盖该链路；本轮只定向复测该用例，没有运行整个脚本。精确命令和边界见 `docs/NEXT_STEPS.md`。
+  - **F08.5 修复与验收（2026-10-02，DONE）**：助手公共 API 提供设备订阅、状态与撤销；订阅端点和浏览器密钥经宿主加密后持久化，受信 Push 服务 origin 显式配置。Gateway 持久准备 R2 审批后发送只含待处理提示、`R2` 和非敏感任务 ID 的一次性加密通知；浏览器需用户主动授权，通知点击只打开助手任务页。白名单、旧密钥隔离、同键重放及 Push 服务 410 后复用失效浏览器端点的缺口均经反例修复和独立定向复验。410 后仅在服务端确认无有效记录且无结果未确认的原请求时，解除并核验旧浏览器订阅，再创建新端点；无法清理或重获旧端点不重报已订阅。Service Worker v11 仍只缓存固定静态资源。独立定向 **45 passed、2 warnings**；修复后 `./scripts/test.ps1` **1236 passed、130 skipped、6 warnings**，Ruff/Mypy（228 files）通过；`./scripts/test-postgres.ps1` **130 passed、1 warning**。真实 Android、Cloudflare、真实 Push 服务和产品 Agent 自动发起邮件动作均未验收；默认生产 `SecretStore` 仍由 F09 补齐。精确命令与边界见 `docs/NEXT_STEPS.md`。**F08.5 DONE，F08.6 NEXT；F08 与 F07 整体继续 `IN_PROGRESS`。**
 - **F07 延期边界不变**：一次登录自动路由和七字段合成值试填烟测已有用户确认，未点击真实最终提交；正式真实事务 Adapter、绑定实际提交目标和完整材料/后果的受监督权威预览、正式 Gateway/Outbox 实站链路仍未验收。因暂无确有需要的事务，真实完整填报延期，不制造申请。
 
 - [ ] **后续组合扩展规划（F07 导航基础已实现；PWA 远程确认属 F08，邮件/模型路由属阶段 10）**：用户只完成 SSO；助手接手后由模糊指令路由到目标事项、填报、生成权威预览，用户远程批准后提交。所需增量：适配器“导航动作”声明（绑定页面指纹/期望落地 origin+path，打开事项按写操作定级）、多事项/多页指纹、Agent 模糊指令路由（低置信度/R2+ 必须用户确认）、远程批准 UI/Web Push（F08 依赖）。真实站点只读采集证据：大厅为 SPA、卡片无 `<a href>`，当前契约只允许点击唯一 final submit，故自动进入事项尚未实现；CAS `service=` 开放重定向误判与 Companion `status` 缺 url/login_page 两个真实缺陷已在本轮修复。完整差距、契约增量与验收反例见 `docs/NEXT_STEPS.md` F07 章节。首版已交付：声明式导航动作（`kind="navigate"` + `transaction_id` + `navigates_to_path`）、宿主 `execute_navigation`（状态/动作 label/落地路径/事务指纹四重校验，漂移即 `SAFETY_PAUSED`）、`browser.navigate` capability 与 `ehall.open_transaction`（INTERNAL_WRITE）、`DesktopBrowserPort.activate`/Companion `/activate`/driver `activate_navigation`、按事务拆分的多 adapter（`proof.json` + `transcript.json`，首次使用全部注册）；证据：导航单元 15 passed、真实 Chromium +2、真实 Worker/Gateway +1，详见 `CONTRACTS_AND_INTERFACES.md` 第 16.9 节。

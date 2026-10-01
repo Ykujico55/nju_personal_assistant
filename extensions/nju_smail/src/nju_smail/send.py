@@ -49,6 +49,21 @@ class SendService:
         self._host_mail = host_mail
 
     async def materialize(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        output = await self.preview(arguments)
+        envelope_digest = canonical_sha256(dict(arguments))
+        await self._store.prepare_action(
+            local_action_id=_required_text(arguments, "local_action_id"),
+            account_id=str(output["account_id"]),
+            draft_id=str(output["draft_id"]),
+            draft_version=int(output["draft_version"]),
+            message_id=_required_text(arguments, "message_id"),
+            envelope_digest=envelope_digest,
+        )
+        return output
+
+    async def preview(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Inspect the exact current version without writing an action row."""
+
         account, draft_id, draft_version = await self._send_identity(arguments)
         draft = await self._store.get_draft(draft_id)
         if draft is None:
@@ -62,15 +77,6 @@ class SendService:
         if version is None:
             raise MailConfigError("SMAL_DRAFT_UNKNOWN", "the draft version does not exist")
         self._verify(arguments, version)
-        envelope_digest = canonical_sha256(dict(arguments))
-        await self._store.prepare_action(
-            local_action_id=_required_text(arguments, "local_action_id"),
-            account_id=account.account_id,
-            draft_id=draft_id,
-            draft_version=draft_version,
-            message_id=_required_text(arguments, "message_id"),
-            envelope_digest=envelope_digest,
-        )
         manifest = _manifest(version)
         return {
             "draft_id": draft_id,

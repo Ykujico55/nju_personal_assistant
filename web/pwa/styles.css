@@ -41,7 +41,7 @@ main {
 
 .compact { grid-column: 1 / -1; }
 label { display: block; margin-bottom: .45rem; font-weight: 650; }
-textarea, input {
+textarea, input, select {
   width: 100%;
   border: 1px solid #aab5c8;
   border-radius: .65rem;
@@ -88,6 +88,14 @@ button.danger { background: #a62936; }
 #task-message-version { margin: .5rem 0 0; color: #55637a; font-size: .85rem; }
 #task-message-form button { width: 100%; }
 #task-message-status { min-height: 1.5rem; font-weight: 600; }
+#form-draft-panel { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #d8dee9; }
+#form-draft-status { min-height: 1.5rem; font-weight: 600; }
+#form-draft-version { color: #55637a; font-size: .85rem; }
+.form-field { margin: 1rem 0; }
+.field-source { display: block; margin-top: .3rem; color: #55637a; }
+#form-draft button { width: 100%; }
+#form-draft-conflict { border-left: .3rem solid #d18a00; padding: .5rem .8rem; background: #fff4d8; }
+#form-draft-conflict button { width: 100%; }
 pre { overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: .82rem; }
 li { margin: .5rem 0; }
 footer { padding: 2rem 0 3rem; color: #66738a; font-size: .85rem; }
