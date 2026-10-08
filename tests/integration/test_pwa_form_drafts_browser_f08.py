@@ -47,7 +47,11 @@ class _FormState(_State):
         self.posts: list[dict[str, object]] = []
         self.receipts: dict[str, dict[str, object]] = {}
         self.drop_next_response = False
+        self.hold_next_response = False
+        self.put_committed = threading.Event()
+        self.release_put_receipt = threading.Event()
         self.incomplete_next_response = False
+        self.draft_read_status: int | None = None
         self.conflict_status = 409
         self.next_put_status: int | None = None
         self.lock = threading.Lock()
@@ -63,7 +67,12 @@ class _FormSite(_Site):
 
     def do_GET(self) -> None:
         if urlsplit(self.path).path == "/api/v1/tasks/task_1/form-draft":
-            if self.state.draft is None:
+            if self.state.draft_read_status is not None:
+                self._json(
+                    {"error": {"message": "draft temporarily unavailable"}},
+                    self.state.draft_read_status,
+                )
+            elif self.state.draft is None:
                 self._json({"error": {"message": "not found"}}, 404)
             else:
                 self._json(self.state.draft)
@@ -138,6 +147,13 @@ class _FormSite(_Site):
                 }
                 receipt = dict(self.state.draft)
                 self.state.receipts[key] = receipt
+        if self.state.hold_next_response:
+            self.state.hold_next_response = False
+            self.state.put_committed.set()
+            if not self.state.release_put_receipt.wait(timeout=15):
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+                return
         if self.state.drop_next_response:
             self.state.drop_next_response = False
             self.connection.shutdown(socket.SHUT_RDWR)
@@ -406,5 +422,202 @@ class PwaFormDraftBrowserTests(unittest.TestCase):
             page.locator('#form-draft button[type="submit"]').click()
             expect(page.locator("#form-draft-status")).to_contain_text("已保存")
             self.assertEqual("corrected answer", state.draft["values"]["material"])
+
+        self._run(state, check)
+
+
+    def _check_old_receipt_after_newer_draft_choice(
+        self, *, keep_local: bool = False, hold_receipt: bool = False
+    ) -> None:
+        from playwright.sync_api import expect
+
+        state = _FormState()
+        state.hold_next_response = hold_receipt
+        state.drop_next_response = not hold_receipt
+
+        def check(page: object, context: object) -> None:
+            material = page.locator('[data-field="material"] input')
+            save = page.locator('#form-draft button[type="submit"]')
+            status = page.locator("#form-draft-status")
+            material.fill("phone original save")
+            save.click()
+            try:
+                if hold_receipt:
+                    self.assertTrue(state.put_committed.wait(timeout=5), "PUT did not commit")
+                    expect(status).to_contain_text("正在保存")
+                    expect(save).to_be_disabled()
+                else:
+                    expect(status).to_contain_text("结果未确认")
+                    expect(save).to_have_text("重试同一保存请求")
+                self.assertEqual(2, state.draft["version"])
+                original = dict(state.posts[0])
+                other_values = {**state.draft["values"], "material": "other device version 3"}
+                address = urlsplit(page.url)
+                response = context.request.put(
+                    f"{address.scheme}://{address.netloc}/api/v1/tasks/task_1/form-draft",
+                    data={"version": 2, "values": other_values},
+                    headers={"Idempotency-Key": "other-device-save"},
+                )
+                self.assertEqual(200, response.status)
+                self.assertEqual(3, response.json()["version"])
+                self.assertEqual(2, len(state.receipts))
+                page.locator("#refresh-tasks").click()
+                expect(page.locator("#form-draft-server-version")).to_contain_text(
+                    "服务器版本：3"
+                )
+                if keep_local:
+                    page.locator("#form-draft-use-version").click()
+                else:
+                    page.locator(
+                        '#form-draft-conflict button:has-text("使用服务器草稿")'
+                    ).click()
+                expect(page.locator("#form-draft-version")).to_have_text("草稿基准版本：3")
+                expected_value = "phone original save" if keep_local else "other device version 3"
+                expect(material).to_have_value(expected_value)
+                expect(page.locator("#form-draft-conflict")).to_be_hidden()
+                if not hold_receipt:
+                    expect(save).to_have_text("重试同一保存请求")
+                    save.click()
+            finally:
+                state.release_put_receipt.set()
+            expect(status).not_to_contain_text("正在保存")
+            expect(page.locator("#form-draft-version")).to_have_text("草稿基准版本：3")
+            expect(material).to_have_value(expected_value)
+            expect(status).to_contain_text("原保存请求已确认")
+            expect(material).not_to_have_attribute("readonly", "")
+            expect(page.locator("#form-draft-conflict")).to_be_hidden()
+            self.assertEqual(3, state.draft["version"])
+            self.assertEqual(other_values, state.draft["values"])
+            self.assertEqual(2, len(state.receipts))
+            self.assertEqual(2 if hold_receipt else 3, len(state.posts))
+            if not hold_receipt:
+                self.assertEqual(original, state.posts[-1])
+            save.click()
+            if keep_local:
+                expect(status).to_contain_text("草稿已保存，服务器版本 4")
+                self.assertEqual(4, state.draft["version"])
+                self.assertEqual("phone original save", state.draft["values"]["material"])
+                self.assertEqual(3, state.posts[-1]["version"])
+                self.assertNotEqual(original["key"], state.posts[-1]["key"])
+                self.assertEqual(3, len(state.receipts))
+            else:
+                expect(status).to_contain_text("没有未保存更改")
+                self.assertEqual(2 if hold_receipt else 3, len(state.posts))
+                page.reload()
+                page.locator('#task-list button[data-task-id="task_1"]').click()
+                expect(page.locator("#form-draft-version")).to_have_text("草稿基准版本：3")
+                expect(material).to_have_value("other device version 3")
+
+        self._run(state, check)
+
+    def test_replayed_receipt_keeps_adopted_newer_server_draft(self) -> None:
+        self._check_old_receipt_after_newer_draft_choice()
+
+    def test_late_receipt_keeps_adopted_newer_server_draft(self) -> None:
+        self._check_old_receipt_after_newer_draft_choice(hold_receipt=True)
+
+    def test_replayed_receipt_keeps_local_choice_on_newer_draft_version(self) -> None:
+        self._check_old_receipt_after_newer_draft_choice(keep_local=True)
+
+    def test_lost_receipt_retry_survives_failed_draft_reread(self) -> None:
+        from playwright.sync_api import expect
+
+        state = _FormState()
+
+        def check(page: object, _context: object) -> None:
+            material = page.locator('[data-field="material"] input')
+            material.fill("retained lost receipt answer")
+            state.hold_next_response = True
+            state.drop_next_response = True
+            page.locator('#form-draft button[type="submit"]').click()
+            try:
+                self.assertTrue(state.put_committed.wait(timeout=5), "PUT did not commit")
+                state.draft_read_status = 503
+                with page.expect_response(
+                    lambda response: response.url.endswith("/tasks/task_1/form-draft")
+                    and response.status == 503
+                ):
+                    page.locator("#refresh-tasks").click()
+                expect(material).to_have_value("retained lost receipt answer")
+                expect(material).to_have_attribute("readonly", "")
+                expect(page.locator("#form-draft-version")).to_contain_text("1")
+                expect(page.locator('#form-draft button[type="submit"]')).to_be_disabled()
+                expect(page.locator("#form-draft-status")).to_contain_text("正在保存")
+                self.assertEqual(1, len(state.posts))
+            finally:
+                state.release_put_receipt.set()
+            expect(page.locator("#form-draft-status")).to_contain_text("结果未确认")
+            self.assertEqual(2, state.draft["version"])
+            self.assertEqual(1, len(state.receipts))
+
+            state.draft_read_status = 503
+            with page.expect_response(
+                lambda response: response.url.endswith("/tasks/task_1/form-draft")
+                and response.status == 503
+            ):
+                page.locator("#refresh-tasks").click()
+            expect(material).to_have_value("retained lost receipt answer")
+            expect(material).to_have_attribute("readonly", "")
+            expect(page.locator("#form-draft-version")).to_contain_text("1")
+            retry = page.locator('#form-draft button[type="submit"]')
+            expect(retry).to_have_text("重试同一保存请求")
+            expect(page.locator("#form-draft-status")).to_contain_text("结果未确认")
+            self.assertEqual(1, len(state.posts))
+
+            state.draft_read_status = None
+            page.locator("#refresh-tasks").click()
+            expect(page.locator("#form-draft-server-version")).to_contain_text("2")
+            expect(retry).to_have_text("重试同一保存请求")
+            page.locator("#form-draft-use-version").click()
+            retry.click()
+            expect(page.locator("#form-draft-status")).to_contain_text("已保存")
+            self.assertEqual(2, len(state.posts))
+            self.assertEqual(state.posts[0], state.posts[1])
+            self.assertEqual(1, len(state.receipts))
+            self.assertEqual(2, state.draft["version"])
+
+        self._run(state, check)
+
+    def test_unsaved_input_survives_failed_network_read_but_rejects_bad_schema(self) -> None:
+        from playwright.sync_api import expect
+
+        state = _FormState()
+
+        def check(page: object, context: object) -> None:
+            material = page.locator('[data-field="material"] input')
+            material.fill("retained unsaved answer")
+
+            def fail_read(route: object) -> None:
+                if route.request.method == "GET":
+                    route.abort()
+                else:
+                    route.continue_()
+
+            pattern = "**/api/v1/tasks/task_1/form-draft"
+            context.route(pattern, fail_read)
+            with page.expect_event(
+                "requestfailed",
+                predicate=lambda request: request.url.endswith("/tasks/task_1/form-draft")
+                and request.method == "GET",
+            ):
+                page.locator("#refresh-tasks").click()
+            expect(material).to_have_value("retained unsaved answer")
+            expect(material).not_to_have_attribute("readonly", "")
+            expect(page.locator("#form-draft-version")).to_contain_text("1")
+            expect(page.locator("#form-draft-status")).to_contain_text("未保存")
+            self.assertEqual([], state.posts)
+
+            context.unroute(pattern, fail_read)
+            page.locator('#form-draft button[type="submit"]').click()
+            expect(page.locator("#form-draft-status")).to_contain_text("已保存")
+            self.assertEqual(2, state.draft["version"])
+            self.assertEqual("retained unsaved answer", state.draft["values"]["material"])
+
+            material.fill("must not save against unsupported schema")
+            state.draft = _draft({**state.draft["json_schema"], "$ref": "https://evil.invalid/a.js"})
+            page.locator("#refresh-tasks").click()
+            expect(page.locator("#form-draft-status")).to_contain_text("不支持")
+            expect(page.locator("#form-draft input")).to_have_count(0)
+            self.assertEqual(1, len(state.posts))
 
         self._run(state, check)

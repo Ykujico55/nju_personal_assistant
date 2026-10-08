@@ -11,6 +11,7 @@ def create_app() -> FastAPI:
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        redirect_slashes=False,
     )
 
     @application.get("/healthz")
@@ -21,4 +22,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

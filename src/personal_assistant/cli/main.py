@@ -20,6 +20,11 @@ from typing import Any
 from uuid import uuid4
 
 from personal_assistant.cli.scaffold import scaffold_extension
+from personal_assistant.cli.secret_commands import (
+    SecretSafeArgumentParser,
+    add_secret_commands,
+    run_secret_command,
+)
 from personal_assistant.core.extensions import ExtensionRegistry
 from personal_assistant.settings import Settings
 
@@ -196,10 +201,11 @@ def _install_or_upgrade(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="assistantctl")
+    parser = SecretSafeArgumentParser(prog="assistantctl")
     parser.add_argument("--admin-url", default="http://127.0.0.1:8001")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor")
+    add_secret_commands(commands)
     ehall = commands.add_parser("ehall", help="manually validate ehall navigation and filling")
     ehall.add_argument(
         "instruction",
@@ -241,6 +247,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "secret":
+        return run_secret_command(args)
     if args.command == "doctor":
         return _doctor()
     if args.command == "ehall":

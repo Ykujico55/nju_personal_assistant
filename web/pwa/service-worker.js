@@ -1,4 +1,4 @@
-const CACHE = "assistant-static-v11";
+const CACHE = "assistant-static-v15";
 const STATIC = ["/ui/", "/ui/styles.css", "/ui/app.js", "/ui/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

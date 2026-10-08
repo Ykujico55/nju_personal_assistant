@@ -20,6 +20,41 @@ PWA_ROOT = Path(__file__).resolve().parents[2] / "web" / "pwa"
 NOW = datetime.now(UTC).isoformat()
 PLAYWRIGHT_AVAILABLE = find_spec("playwright") is not None
 
+# Fixed historical v11 fixture: install it before testing the current source assets.
+_LEGACY_MANIFEST = {
+    "name": "Personal Assistant",
+    "short_name": "Assistant",
+    "description": "Local-first personal assistant control plane",
+    "start_url": "/ui/",
+    "scope": "/ui/",
+    "display": "standalone",
+    "background_color": "#eef1f5",
+    "theme_color": "#17233b",
+}
+_LEGACY_SERVICE_WORKER = r"""
+const CACHE = "assistant-static-v11";
+const STATIC = ["/ui/", "/ui/styles.css", "/ui/app.js", "/ui/manifest.webmanifest"];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(STATIC)));
+  self.skipWaiting();
+});
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))),
+    ),
+  );
+  self.clients.claim();
+});
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin || !STATIC.includes(url.pathname)) return;
+  if (event.request.method !== "GET") return;
+  event.respondWith(caches.match(event.request).then((cached) => cached || fetch(event.request)));
+});
+"""
+
 
 def _task(task_id: str, objective: str) -> dict[str, object]:
     return {
@@ -50,6 +85,7 @@ class _State:
         self.push_keys: list[str] = []
         self.drop_next_push_response = False
         self.next_push_response: object | None = None
+        self.legacy_static = False
 
 
 class _Site(BaseHTTPRequestHandler):
@@ -127,12 +163,23 @@ class _Site(BaseHTTPRequestHandler):
             "/ui/styles.css": ("styles.css", "text/css"),
             "/ui/manifest.webmanifest": ("manifest.webmanifest", "application/manifest+json"),
             "/ui/service-worker.js": ("service-worker.js", "text/javascript"),
+            "/ui/icon-192.png": ("icon-192.png", "image/png"),
+            "/ui/icon-512.png": ("icon-512.png", "image/png"),
         }.get(url.path)
         if static is None:
             self.send_error(404)
             return
         filename, media_type = static
-        body = (PWA_ROOT / filename).read_bytes()
+        if self.state.legacy_static and filename == "manifest.webmanifest":
+            body = json.dumps(_LEGACY_MANIFEST).encode("utf-8")
+        elif self.state.legacy_static and filename == "service-worker.js":
+            body = _LEGACY_SERVICE_WORKER.encode("utf-8")
+        else:
+            path = PWA_ROOT / filename
+            if not path.is_file():
+                self.send_error(404)
+                return
+            body = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", media_type)
         self.send_header("Content-Length", str(len(body)))
@@ -227,6 +274,147 @@ class _Site(BaseHTTPRequestHandler):
 
 @unittest.skipUnless(PLAYWRIGHT_AVAILABLE, "install the optional browser extra")
 class PwaBrowserF08Tests(unittest.TestCase):
+
+    def test_manifest_upgrade_replaces_v11_and_decodes_installation_icons(self) -> None:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import expect, sync_playwright
+
+        private_objective = "private installation check task objective"
+        private_message = "private installation check message body"
+        state = _State()
+        state.legacy_static = True
+        state.tasks = [_task("task_install", private_objective)]
+        state.messages["task_install"] = [{
+            "id": "message_install",
+            "task_id": "task_install",
+            "actor": "user",
+            "content": private_message,
+            "created_at": NOW,
+        }]
+        handler = type("PwaManifestUpgradeHandler", (_Site,), {"state": state})
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with sync_playwright() as playwright:
+                try:
+                    browser = playwright.chromium.launch(headless=True)
+                except PlaywrightError as exc:
+                    if os.name != "nt" or "spawn EFTYPE" not in str(exc):
+                        raise
+                    browser = playwright.chromium.launch(headless=True, channel="chrome")
+                try:
+                    context = browser.new_context(viewport={"width": 390, "height": 844})
+                    page = context.new_page()
+                    page.goto(f"http://127.0.0.1:{server.server_port}/ui/")
+                    expect(page.locator("#connection-state")).to_contain_text(
+                        "事件连接已建立"
+                    )
+                    expect(page.locator("#task-detail")).to_contain_text(private_message)
+                    page.evaluate("async () => { await navigator.serviceWorker.ready; }")
+                    page.wait_for_function(
+                        "navigator.serviceWorker.controller !== null", timeout=5000
+                    )
+                    # Reload ensures the installed historical worker controls the page.
+                    page.reload()
+                    self.assertTrue(page.evaluate(
+                        "navigator.serviceWorker.controller.scriptURL"
+                        ".endsWith('/ui/service-worker.js')"
+                    ))
+                    legacy = page.evaluate("""async () => ({
+                        names: await caches.keys(),
+                        manifest: await (await fetch(
+                          './manifest.webmanifest', {cache: 'no-store'}
+                        )).json()
+                    })""")
+                    self.assertEqual(["assistant-static-v11"], legacy["names"])
+                    self.assertNotIn("icons", legacy["manifest"])
+
+                    state.legacy_static = False
+                    page.evaluate("""async () => {
+                        const registration = await navigator.serviceWorker.ready;
+                        await registration.update();
+                    }""")
+                    page.evaluate("""async () => {
+                        const deadline = performance.now() + 5000;
+                        while (performance.now() < deadline) {
+                          const names = await caches.keys();
+                          if (names.length === 1 && !names.includes('assistant-static-v11')) {
+                            return;
+                          }
+                          await new Promise((resolve) => setTimeout(resolve, 25));
+                        }
+                        throw new Error(
+                          'Historical v11 cache was not replaced within five seconds'
+                        );
+                    }""")
+                    page.reload()
+                    expect(page.locator("#task-detail")).to_contain_text(private_message)
+                    current = page.evaluate("""async () => {
+                        const manifestUrl = new URL('./manifest.webmanifest', location.href);
+                        const manifest = await (await fetch(
+                          manifestUrl, {cache: 'no-store'}
+                        )).json();
+                        const dimensions = [];
+                        for (const size of ['192x192', '512x512']) {
+                          const icon = (manifest.icons || []).find(
+                            (item) => item.sizes === size && item.type === 'image/png'
+                          );
+                          if (!icon) throw new Error('Required installation icon is missing');
+                          const url = new URL(icon.src, manifestUrl);
+                          if (url.origin !== location.origin || !url.pathname.startsWith('/ui/')) {
+                            throw new Error('Installation icon is not a local static resource');
+                          }
+                          const image = new Image();
+                          image.src = url.href;
+                          await image.decode();
+                          dimensions.push({
+                            size, width: image.naturalWidth, height: image.naturalHeight
+                          });
+                        }
+                        const names = await caches.keys();
+                        const urls = [];
+                        const bodies = [];
+                        for (const name of names) {
+                          const cache = await caches.open(name);
+                          for (const request of await cache.keys()) {
+                            urls.push(new URL(request.url).pathname);
+                            bodies.push(await (await cache.match(request)).text());
+                          }
+                        }
+                        return {
+                          dimensions, names, urls, bodies: bodies.join('\\n'),
+                          storage: JSON.stringify({
+                            local: {...localStorage}, session: {...sessionStorage}
+                          })
+                        };
+                    }""")
+                    self.assertEqual(
+                        [
+                            {"size": "192x192", "width": 192, "height": 192},
+                            {"size": "512x512", "width": 512, "height": 512},
+                        ],
+                        current["dimensions"],
+                    )
+                    self.assertEqual(1, len(current["names"]))
+                    self.assertNotIn("assistant-static-v11", current["names"])
+                    expected_paths = {
+                        "/ui/", "/ui/styles.css", "/ui/app.js", "/ui/manifest.webmanifest"
+                    }
+                    self.assertEqual(expected_paths, set(current["urls"]))
+                    self.assertEqual(len(expected_paths), len(current["urls"]))
+                    self.assertTrue(all("/api/" not in url for url in current["urls"]))
+                    for private_value in (private_objective, private_message):
+                        self.assertNotIn(private_value, current["bodies"])
+                        self.assertNotIn(private_value, current["storage"])
+                finally:
+                    browser.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_410_revocation_replaces_stale_browser_subscription(self) -> None:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import expect, sync_playwright

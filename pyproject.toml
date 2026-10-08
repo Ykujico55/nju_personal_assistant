@@ -52,6 +52,8 @@ namespaces = true
   "web/pwa/app.js",
   "web/pwa/manifest.webmanifest",
   "web/pwa/service-worker.js",
+  "web/pwa/icon-192.png",
+  "web/pwa/icon-512.png",
 ]
 "share/personal-assistant/config" = ["config/policies.yaml", "config/retention.yaml"]
 "share/personal-assistant/migrations" = [

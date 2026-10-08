@@ -97,7 +97,10 @@ async function loadTasks({ append = false } = {}) {
     }
   } catch (failure) {
     if (requestId !== listRequest) return;
-    error.textContent = `无法读取最新任务：${failure.message}。已有列表可能已过期。`;
+    const reason = failure.status === 503 && failure.code === "CLOUDFLARE_ACCESS_UNAVAILABLE"
+      ? "助手暂时无法校验登录；请保持本页在前台并联网，页面会自动重读任务，暂时无需退出重新登录"
+      : failure.message;
+    error.textContent = `无法读取最新任务：${reason}。已有列表可能已过期。`;
     error.hidden = false;
   }
 }
@@ -488,11 +491,13 @@ function renderFormDraft(taskId) {
 
 async function loadFormDraft(taskId) {
   if (selectedTaskId !== taskId) return;
+  const edit = formEdit(taskId);
+  let receivedDraft = false;
   try {
     const draft = await jsonRequest(`${api}/tasks/${encodeURIComponent(taskId)}/form-draft`);
+    receivedDraft = true;
     if (selectedTaskId !== taskId) return;
     validateDraftDescriptor(draft, taskId);
-    const edit = formEdit(taskId);
     if (edit.dirty || edit.attempt || edit.conflict) {
       if (draft.version !== edit.server?.version) {
         edit.remote = draft;
@@ -506,7 +511,17 @@ async function loadFormDraft(taskId) {
     renderFormDraft(taskId);
   } catch (failure) {
     if (selectedTaskId !== taskId) return;
-    if (failure.status === 404) {
+    const transientReadFailure = !receivedDraft &&
+      (failure.status === undefined || failure.status === 408 || failure.status >= 500);
+    if (transientReadFailure && edit.server && (edit.dirty || edit.attempt || edit.conflict)) {
+      const readError = `最新草稿读取失败：${failure.message}。`;
+      edit.notice = edit.attempt?.state === "unknown"
+        ? `${readError}保存结果未确认；本机输入与原版本、幂等键已保留，只能手动重试同一请求。`
+        : edit.attempt?.state === "sending"
+          ? `${readError}正在保存；本机输入与原请求已保留，等待保存回执。`
+          : `${readError}本机输入未保存，已保留；恢复连接后请重读服务器版本。`;
+      renderFormDraft(taskId);
+    } else if (failure.status === 404) {
       void showFormCatalog(taskId);
     } else {
       document.querySelector("#form-draft-body").replaceChildren();
@@ -633,12 +648,28 @@ async function saveFormDraft(taskId) {
         receipt.version !== attempt.version + 1 || !sameFormValues(receipt.values, attempt.values)) {
       throw new Error("服务端返回的草稿回执不完整");
     }
-    edit.server = receipt;
-    edit.values = structuredClone(receipt.values);
+    const previous = { ...edit };
+    // A replay confirms the original command, not the latest draft snapshot.
+    const currentVersion = Math.max(edit.server.version, edit.remote?.version ?? 0);
+    if (currentVersion > receipt.version) {
+      const remaining = edit.conflict ? "请显式处理服务器新版与本机输入的冲突。" :
+        edit.dirty ? "当前输入尚未保存。" : "当前显示的服务器草稿保持不变。";
+      edit.notice = `原保存请求已确认（版本 ${receipt.version}）；已知服务器版本 ${currentVersion}。${remaining}`;
+    } else {
+      edit.server = receipt;
+      edit.values = structuredClone(receipt.values);
+      edit.dirty = false;
+      edit.remote = null;
+      edit.conflict = false;
+      edit.notice = `草稿已保存，服务器版本 ${receipt.version}。`;
+    }
     edit.attempt = null;
-    edit.dirty = false;
-    edit.notice = `草稿已保存，服务器版本 ${receipt.version}。`;
-    renderFormDraft(taskId);
+    try {
+      renderFormDraft(taskId);
+    } catch (failure) {
+      Object.assign(edit, previous);
+      throw failure;
+    }
   } catch (failure) {
     if (failure.status === 409 || failure.status === 412) {
       edit.attempt = null;

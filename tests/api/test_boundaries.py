@@ -44,8 +44,14 @@ class NetworkBoundaryTests(unittest.TestCase):
     def test_health_sidecar_has_no_task_admin_or_docs_routes(self) -> None:
         client = TestClient(create_health_app())
         self.assertEqual({"status": "ok"}, client.get("/healthz").json())
-        for path in ("/api/v1/tasks/anything", "/admin/v1/extensions", "/docs", "/openapi.json"):
-            self.assertEqual(404, client.get(path).status_code, path)
+        for path in (
+            "/healthz/",
+            "/api/v1/tasks/anything",
+            "/admin/v1/extensions",
+            "/docs",
+            "/openapi.json",
+        ):
+            self.assertEqual(404, client.get(path, follow_redirects=False).status_code, path)
 
     def test_admin_install_requires_an_exact_preview_confirmation(self) -> None:
         settings = development_settings()

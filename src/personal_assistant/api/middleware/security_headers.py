@@ -31,6 +31,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; "
                 "base-uri 'none'; form-action 'self'"
             )
-        if request.url.path.startswith("/api/"):
+        # Fixed-name UI files are refreshed through the versioned worker cache;
+        # HTTP/CDN caches must not keep serving scripts from an older release.
+        if request.url.path.startswith(("/api/", "/ui/")):
             response.headers["Cache-Control"] = "no-store"
         return response

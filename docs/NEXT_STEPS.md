@@ -2,7 +2,7 @@
 
 本清单把详细设计拆成较小、可独立验收的工作包。状态只允许 `TODO / NEXT / IN_PROGRESS / DONE / BLOCKED`。后续模型一次领取一个任务，完成后在本文件写入测试命令和结果。
 
-简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01–F06 已通过最终复验并标记 `DONE`；F07 的一次登录自动路由与七字段试填烟测已通过，但正式真实事务 Adapter、实际目标及完整材料/后果绑定的受监督权威预览、正式 Gateway/Outbox 实站链路仍未验收，真实完整填报因暂无确有需要的事务延期，保持 `IN_PROGRESS`。2026-09-30 用户明确调整排期：允许先做不依赖这些 F07 缺口的 F08 子任务；F08.1–F08.5 已分别通过约定范围的独立验收，F08.6 为唯一 `NEXT`、尚未启动；F08 整体仍为 `IN_PROGRESS`，不得据此把 F07 标为 `DONE`。阶段 10 的 LLM 自动路由不在本次范围。
+简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01–F06 已通过最终复验并标记 `DONE`；F07 的一次登录自动路由与七字段试填烟测已通过，但正式真实事务 Adapter、实际目标及完整材料/后果绑定的受监督权威预览、正式 Gateway/Outbox 实站链路仍未验收，真实完整填报因暂无确有需要的事务延期，保持 `IN_PROGRESS`。2026-09-30 用户明确调整排期：允许先做不依赖这些 F07 缺口的 F08 子任务；F08.1–F08.5 已分别通过约定范围的独立验收。F08.6 是唯一当前子任务；发布门禁及明确授权已取得，原助手/health 与 Access 保护的 Tunnel 已临时运行，无认证黑盒通过。Android首次登录/SSE、私有health三项、Chrome标识桌面入口的无地址栏启动/空列表/事件连接及Wi-Fi切至移动数据后恢复均获本人反馈；断网提示、恢复联网以及后台或锁屏约一分钟后恢复也获本人确认；手机自检任务/消息刷新恢复、电脑页面新增任务/消息自动同步获本人反馈，原库只读聚合核实了先前自检任务/首条消息各一条；任务/消息使用后的v12四路径CacheStorage及任务GET的200/no-store已有手机证据；随后经本人对精确材料授权，example.echo@0.1.0已安装启用，公共页面出现example.echo_settings；手机来源由未确定变为用户输入，初次草稿版本2及刷新恢复已有本人反馈；后续真实手机截图确认保留本机未保存值并显示服务器3，显式保留后保存版本4及刷新恢复获本人确认和原库只读核对。手机草稿GET的200/no-store已有截图；更新后截图确认唯一缓存为v13、旧v12节点消失，仍仅四静态路径。手机PUT的409/412、其余缓存与审批仍待核验。其余缓存及跨设备边界与真实Push仍待验收，状态为 `BLOCKED`；F08 整体仍为 `IN_PROGRESS`，不得据此把 F07 标为 `DONE`。阶段 10 的 LLM 自动路由不在本次范围。
 
 ## 基架状态
 
@@ -16,7 +16,7 @@
 | F05 | DONE | 个人知识扩展：授权目录扫描、Markdown/TXT/PDF 抽取、版本化索引、PostgreSQL FTS + pgvector 混合检索、可验证引用、删除传播；通用宿主数据能力与扩展配置通道 | 完整独立审计和修复后自审计通过；全量 597 passed、81 skipped；PostgreSQL/真实 Worker 81 passed；其余证据见下方 F05 章节 |
 | F06 | DONE | smail 扩展：IMAP 只读同步、版本化草稿、R2 SMTP 发送与对账；宿主账户注册表、通用邮件端口与传输台账、生产 Gateway 路由 | 六轮独立审计及补充复验通过；`./scripts/test.ps1` 742 passed、103 skipped，Ruff/Mypy 192 files 通过；`./scripts/test-postgres.ps1` 103 passed（真实 PostgreSQL 与 Worker）；`pip check`/`git diff --check`/wheel 内容核验通过。真实 smail 账号 E2E 未执行 |
 | F07 | IN_PROGRESS | ehall 扩展：用户亲自完成 SSO/验证码/扫码，有头浏览器填写一个低风险事务至提交前权威预览 | 2026-09-30 旧实站直接交互烟测完成一次登录、自动路由与七项试填，未点“提交”。第二轮独立复审发现首轮 P1 修复仍可点击新出现的无关菜单；当前已补本地 Chromium 反例并修复，交互层/单元 **40/40** 通过，改动路径 Ruff/Mypy 通过。`./scripts/test.ps1` 应用户要求在约 16% 处中断，交由审计 agent 复验；首轮 **1185 passed/125 skipped** 不代表当前快照全绿。修复后未重跑真实站点；正式 Adapter、实际提交目标、材料/后果及受监督 Gateway/Outbox 路径未验收，F07 不得标记 DONE。 |
-| F08 | IN_PROGRESS | PWA 与 Web Push；F08.1–F08.5 在各自约定范围内验收通过，F08.6 唯一 NEXT | F08.5 修复后独立定向 45 passed；`./scripts/test.ps1` 1236 passed、130 skipped，Ruff/Mypy 通过；`./scripts/test-postgres.ps1` 130 passed。真实 Android/Cloudflare/Push 服务仍属 F08.6，尚未运行。 |
+| F08 | IN_PROGRESS | PWA 与 Web Push；F08.1–F08.5 在各自约定范围内验收通过；F08.6 唯一当前项，授权部署已接通，手机首次连通/health三项、Chrome标识桌面入口无地址栏启动及Wi-Fi→移动数据恢复已有本人反馈；断网提示/恢复联网、后台或锁屏约一分钟恢复、手机任务/消息刷新恢复与电脑自动同步获本人反馈，先前自检记录获原库只读核对；任务场景CacheStorage四路径及任务GET的200/no-store已获手机证据；Schema草稿/审批、其余缓存/跨设备边界及真实Push仍BLOCKED | F08.5 独立定向45 passed。F08.6 发布前本工作区全量1248 passed/130 skipped，PostgreSQL/Worker130 passed；授权启动后11份迁移一致、无认证本机/边缘及同节点私有HTTPS黑盒通过。24项GET复查与手机人工反馈单列，真实Push未验收。 |
 
 F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基架；后续任务应替换端口适配器或新增业务扩展。当前任务进入 `QUEUED` 后不会被假 Worker 消费，这是有意的 fail-closed 行为。
 
@@ -436,7 +436,7 @@ F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基�
 3. **F08.3 DONE — Schema 表单、来源与版本化草稿**。只渲染受支持的 JSON Schema/UI Schema，逐字段区分 `EVIDENCE`/`USER_INPUT`/`UNKNOWN`；草稿通过版本 CAS 和幂等键保存，409/412 保留本机输入并展示服务器新版，不加载扩展 JS。实施与接口见契约第 19 节。0009 迁移、真实 PostgreSQL 草稿重放和独立公共进程真实 Worker `form.list` 均获定向独立验收；验收命令与边界见下方记录。
 4. **F08.4 DONE — 正式审批页面（2026-10-01 定向独立验收通过）**。手机只联系助手公共 API；邮件路径由已持久审批记录、同版本只读 Worker 与宿主 MIME 校验共同生成完整预览，批准只改变审批状态，不直接发送。ehall 试验性记录因缺少真实目标、完整字段/材料及后果，在公共 API 与 PWA 均不可批准；F07 受监督权威预览仍需后续验收。smail 新工具采用可升级的 0.2.0 包版本，不自动安装或升级。产品中的 Agent 自动发起邮件动作尚未接线；本项验收只涵盖已有审批记录的手机核对/批准与宿主准备能力。契约见第 20 节；独立复验见下方记录。
 5. **F08.5 DONE — Web Push（2026-10-02 独立验收通过）**。助手公共 API 管理手机订阅/撤销，持久订阅材料先由宿主加密；Gateway 持久准备 R2 审批后发一次最小元数据加密通知，仅含待处理提示、风险和非敏感任务 ID。用户点击通知只打开助手 PWA 的任务页，不批准或执行动作。接口与边界见契约第 21 节；真实投递留待 F08.6。
-6. **F08.6 NEXT — 安全与真机验收（尚未启动）**。固定域名 Cloudflare Access、CSRF/Origin/CSP 与 Android 网络切换、后台恢复、缓存检查；Tailscale 仅 health-only 的部署黑盒验收与 F10 协调。
+6. **F08.6 BLOCKED — 安全与真机验收（授权部署已接通）**。固定域名 Cloudflare Access、CSRF/Origin/CSP 与 Android 网络切换、后台恢复、缓存检查；Tailscale 仅 health-only 的部署黑盒验收与 F10 协调。原助手、health 与 Tunnel 已经本人授权临时运行；私有 Serve 只代理8010、AllowFunnel=false，同节点检查通过。应用 One-time PIN 已由本人保存并提供截图，手机首次登录/SSE及health三项、Chrome标识桌面入口无地址栏启动/空列表/SSE、Wi-Fi→移动数据恢复及后台或锁屏约一分钟后恢复都有本人反馈；断网提示及恢复联网自动连接也已确认；手机任务/消息刷新恢复与电脑新增任务/消息自动同步获本人反馈，先前自检记录获原库只读核对；任务/消息场景CacheStorage四路径及任务GET的200/no-store已获手机证据；Schema草稿/审批、其余缓存及跨设备边界和真实Push仍待补齐。随后经本人对精确材料授权，example.echo@0.1.0已安装启用，公共页面出现example.echo_settings；手机来源由未确定变为用户输入，初次草稿版本2及刷新恢复已有本人反馈；后续真实手机截图确认保留本机未保存值并显示服务器3，显式保留后保存版本4及刷新恢复获本人确认和原库只读核对。手机草稿GET的200/no-store已有截图；更新后截图确认唯一缓存为v13、旧v12节点消失，仍仅四静态路径。手机PUT的409/412、其余缓存与审批仍待核验。正式秘密后端仍待 F09，不启动后续编号。
 
 F08.1 验收边界：新增列表 API 的排序、分页、owner 隔离及持久重连；任务详情读最新消息；SSE 游标严格续读；手机宽度浏览器能显示服务器状态和真实连接中断/恢复；缓存仅静态资源。这里的浏览器测试使用本地模拟 SSE/API，尚非 Android 真机或 Cloudflare 远程 E2E。以下命令与结果仅指本轮实际运行，历史 F07 数字不得替代。
 
@@ -502,13 +502,1045 @@ F08.1 验收边界：新增列表 API 的排序、分页、owner 隔离及持久
 
 **F08.5 独立复验与全量回归（2026-10-02；DONE）**：410 恢复修复后，独立复跑上条定向命令 **45 passed、2 warnings**；另运行 `.venv-win\Scripts\python.exe -m pytest tests/integration/test_pwa_browser_f08.py -q -o addopts='' -p no:cacheprovider` → **7 passed**，Ruff、两份 `node --check`、`git diff --check` 均通过。随后执行 `./scripts/test.ps1` → **1236 passed、130 skipped、6 warnings**，Ruff `All checks passed!`，Mypy `Success: no issues found in 228 source files`；执行 `./scripts/test-postgres.ps1` → **130 passed、1 warning**（pytest 缓存目录写入权限警告，不是测试失败）。首次 PostgreSQL 脚本启动被 Windows 沙箱账户错误 1909 阻止，未进入测试；获准改用非沙箱进程后整套执行并退出 0。上述均为本地与模拟外部服务的证据，不覆盖真实 Android、Cloudflare 或真实 Push 服务投递；这些是 F08.6 的验收范围。F08.5 标记 `DONE`，F08.6 升为唯一 `NEXT`、尚未启动；F07 与 F08 整体仍为 `IN_PROGRESS`。
 
+**F08.6 本机预检（2026-10-02；BLOCKED）**：先在 `tests/api/test_boundaries.py::NetworkBoundaryTests::test_health_sidecar_has_no_task_admin_or_docs_routes` 加入精确路径反例，执行 `.venv-win\Scripts\python.exe -m pytest tests/api/test_boundaries.py::NetworkBoundaryTests::test_health_sidecar_has_no_task_admin_or_docs_routes -q -o addopts='' -p no:cacheprovider` → **1 failed**：非 `/healthz` 的 `/healthz/` 返回 307。仅在独立 `health_app` 关闭斜杠自动重定向；保留反例，另增真实本机 Uvicorn 进程黑盒 `tests/integration/test_health_boundary_f08.py`，核对 `/healthz` 的最小 200，以及 `/healthz/`、任务、管理、文档和其他路径的 404，POST 任务路由也为 404。这只验证应用在本机回环监听时的路由，不证明 Tailscale 真实映射。
+
+**本轮实际命令与结果**：`.venv-win\Scripts\python.exe -m pytest tests/api/test_boundaries.py tests/api/test_cloudflare_access.py tests/unit/test_settings.py -q -o addopts='' -p no:cacheprovider` → **73 passed、5 warnings**；`.venv-win\Scripts\python.exe -m pytest tests/integration/test_health_boundary_f08.py -q -o addopts='' -p no:cacheprovider` → **1 passed**；`.venv-win\Scripts\python.exe -m pytest tests/integration/test_pwa_browser_f08.py -q -o addopts='' -p no:cacheprovider` → **7 passed**；`.venv-win\Scripts\python.exe -m pytest tests/integration/test_pwa_approvals_browser_f08.py tests/integration/test_pwa_form_drafts_browser_f08.py -q -o addopts='' -p no:cacheprovider` → **9 passed**；`.venv-win\Scripts\python.exe -m pytest tests/contract/test_f03_contract_consistency.py -q -o addopts='' -p no:cacheprovider` → **10 passed**；`$env:RUFF_CACHE_DIR = Join-Path $env:TEMP 'pa-f086-ruff-cache'; .venv-win\Scripts\python.exe -m ruff check src/personal_assistant/health_app.py tests/api/test_boundaries.py tests/integration/test_health_boundary_f08.py` → `All checks passed!`；`node --check web/pwa/app.js`、`node --check web/pwa/service-worker.js`、`git diff --check` 均退出码 0。首次 Ruff 用仓库默认缓存目录因写入权限失败，改用临时缓存后通过。本轮仅变更独立健康入口和相关测试/状态文档，未改共享状态、审批或 Outbox；未运行本轮全量和 PostgreSQL/Worker 脚本，F08.5 后的历史全量数字不能充作 F08.6 的全量结果。
+
+**恢复 F08.6 所需条件**：用户准备受 Cloudflare 管理的固定域名及仅限本人身份的 self-hosted Access 应用，记录公开 origin、团队域和应用 AUD；Tunnel 的唯一发布路由只能指向本机公共入口 `http://127.0.0.1:8000`，不能映射管理 `8001` 或健康 `8010`。本机生产配置需真实 PostgreSQL、`PA_TRUST_CLOUDFLARE_ACCESS=true` 与上述 Access 参数，且三个进程仍只监听回环。准备可用 Android Chrome 手机，在该固定 HTTPS 域名安装 PWA 并由用户主动授权通知；准备 Tailscale 节点，使用私有 Serve 只代理 `http://127.0.0.1:8010`，不得使用 Funnel。当前默认生产 `SecretStore` 为 fail-closed 占位；真实 VAPID 私钥与订阅加密密钥的可信持久后端由 F09 补齐或另经明确契约验收，密钥、Tunnel token 和 Access JWT 不能写入仓库/聊天。部署完成后再从 Android 的蜂窝/Wi-Fi、断网/恢复、后台唤醒与锁屏通知执行真实测试；从另一 Tailscale 节点逐一探测非 `/healthz` 路径，并验证 API/CacheStorage 不含正文。官方配置参考：[Cloudflare Tunnel](https://developers.cloudflare.com/tunnel/get-started/)、[Access 应用](https://developers.cloudflare.com/learning-paths/clientless-access/access-application/create-access-app/)、[Tailscale Serve](https://tailscale.com/docs/reference/tailscale-cli/serve)。用户已确认这些外部环境尚未准备，因此 F08.6 保持 `BLOCKED`，F07/F08 整体仍为 `IN_PROGRESS`；未连接真实 Push 服务、Android 或 Cloudflare，也未进行真实 ehall 操作。
+
+**F08.6 环境准备协助（2026-10-04；仍 BLOCKED）**：用户授权尽力协助准备，随后明确没有域名与 Cloudflare 账号。此次在实际 Desktop 仓库 `main`（`deeb9b2`）继续，Codex 附加 worktree 为旧 F07 快照，未将其当作当前 F08 代码。保留此前未提交的 health 边界修复与文档，不提交、推送或部署。新增 `scripts/prepare_f08.py`：仅生成未激活模板、校验本地候选文件，不导入组合根或访问数据库；三个端口必须回环且固定为 8000/8001/8010，生产 PostgreSQL、Access 与固定 HTTPS DNS origin 缺一不可。拒绝默认密码、无效 DSN 端口、`${...}` 替换和会改变实际启动配置的继承 `PA_*`（不计 `PA_TEST_*`），只输出错误码而不回显材料。候选配置校验成功仍明确报告数据库未探测、部署的 Access 策略未验证及默认生产 Push 秘密后端不可用。
+
+**本轮先红后绿**：初次运行 `.venv-win\Scripts\python.exe -m pytest tests/unit/test_f08_environment_preparation.py -q -o addopts='' -p no:cacheprovider` → **5 failed、2 passed**（工具尚不存在；两项拒绝路径当时没有证明实现）。最小实现后 **7 passed**。只读复核发现三个错误的放行路径，三个新增反例在修复前定向执行 → **3 failed、7 deselected**，随后补充 DSN 端口、字面值和解码后的默认密码检查。继承环境反例 `.venv-win\Scripts\python.exe -m pytest tests/unit/test_f08_environment_preparation.py -k inherited_configuration -q -o addopts='' -p no:cacheprovider` → **1 failed、10 deselected**：Uvicorn 的 dotenv `override=False` 会保留继承配置，检查器原先却只看文件；现显式拒绝冲突并要求检查与启动使用同一干净壳。
+
+**本轮实际通过命令（在 Desktop 仓库根目录）**：
+
+```powershell
+.venv-win\Scripts\python.exe -B -m pytest tests/unit/test_f08_environment_preparation.py tests/api/test_boundaries.py tests/integration/test_health_boundary_f08.py -q -o addopts='' -p no:cacheprovider
+# 16 passed, 2 warnings（两项依赖弃用警告）
+$env:RUFF_CACHE_DIR = Join-Path $env:TEMP 'pa-f086-prepare-ruff'
+$env:MYPY_CACHE_DIR = Join-Path $env:TEMP 'pa-f086-prepare-mypy'
+.venv-win\Scripts\python.exe -B -m ruff check scripts/prepare_f08.py tests/unit/test_f08_environment_preparation.py
+# All checks passed!
+.venv-win\Scripts\python.exe -B -m mypy scripts/prepare_f08.py
+# Success: no issues found in 1 source file
+.venv-win\Scripts\python.exe scripts/prepare_f08.py prepare --output-dir var/deployment/f08-2026-10-04
+# exit 0, created=true, activated=false（三份文件，位于忽略的 var/）
+.venv-win\Scripts\python.exe scripts/prepare_f08.py check --env-file var/deployment/f08-2026-10-04/.env.template
+# exit 1（预期）：数据库、origin、团队域及 AUD 尚未填写，不能视为可启动配置
+git diff --check
+# exit 0（仅 LF/CRLF 提示）
+```
+
+**本机安装事实与剩余条件**：`winget show --id Cloudflare.cloudflared --exact --source winget --disable-interactivity`、`winget install --id Cloudflare.cloudflared --exact --source winget --no-upgrade --silent --disable-interactivity` 均退出 0，官方 MSI 哈希已由 winget 核验；`& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' --version` → **2026.9.3**。`winget show --id Tailscale.Tailscale --exact --source winget --disable-interactivity` 确认官方 **1.102.4**，对应 `winget install --id Tailscale.Tailscale --exact --source winget --no-upgrade --silent --disable-interactivity` 已下载并通过哈希核验，但仍等待 Windows UAC（`consent.exe`，Tailscale 可执行文件和服务尚未出现），不得称安装完成。现有 Codex 壳的 PATH 尚未刷新，检查工具只报告当前壳可找到的程序。Docker 已安装但引擎未运行；应用启动会迁移数据库、恢复状态与刷新 Worker，故此次未自动启动它或既有数据库。官方账号注册链接已请求在 Codex 浏览器打开（工具返回 queued），不代表注册完成。用户需本人完成系统安装确认、账号注册/登录、域名购买选择以及 Android 安装/权限；真实 Push 仍需 F09 的可信持久秘密后端或另行明确验收的实现。步骤与官方来源见 [环境准备指南](./F08_ENVIRONMENT_PREPARATION.md)。
+
+**验证边界**：此次只改非部署准备脚本、相关测试及状态/指南，未改 API、持久状态、审批、Outbox 或迁移；只运行上述定向测试，不运行全量、PostgreSQL/Worker 或真实网络/站点回归。未启动 Tunnel、Serve/Funnel 或公网监听，没有真实邮件发送、ehall 操作或 Push 投递。F08.6 继续 `BLOCKED`，F07 与 F08 整体继续 `IN_PROGRESS`；后续仍先准备并核对 F08.6 条件。
+
+**2026-10-04 准备续查（仍 BLOCKED）**：用户已取得 `yanshuheng.dpdns.org`、建立 Cloudflare 账号，并明确仍在 DNS 记录/名称服务器步骤，尚未 Active。`qd.je` 当前不在 PSL，未按此前笼统的建议继续转移或添加不合格子域；当前改为 PSL 中的 `dpdns.org` 后缀。新空域名若接入 UI 要求先有记录，可用官方 originless `A @ 192.0.2.0` Proxied/TTL Auto 临时占位，之后取得此 zone 的两条真实 NS，更新 DigitalPlat 委派并等 Active；同名 Tunnel CNAME 建立前移除临时 A，先建立完整主机名 Access，不将占位说成助手已上线。
+
+**本轮只读环境命令**：`& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' --version` → **2026.9.3**；`& 'C:\Program Files\Tailscale\tailscale.exe' version` → **1.102.4**；`Get-Service -Name Tailscale,com.docker.service -ErrorAction SilentlyContinue | Select-Object Name,Status` → **Tailscale Running、com.docker.service Stopped**；`Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 8000,8001,8010,5432 } | Select-Object LocalAddress,LocalPort,OwningProcess` → 无目标监听条目；`& 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' info --format '{{.ServerVersion}}'` → **exit 1**，Docker Linux 引擎管道不存在。之前的 winget 会话已不可查询，故不补写其退出码；安装事实由现在的程序版本与服务状态确认。未读取 `.env` 或凭据，未确认 tailnet 登录/Serve，未启动公共服务、数据库或 Tunnel。只读核对代码后确认：生产 PostgreSQL + Access origin/team/AUD 可支持普通任务、消息、SSE 和草稿的首次远程连接；F09 缺失的秘密后端仍阻断真实 Push/邮件凭据/远程模型，不需要为首次任务 PWA 连通而绕过它。页面挂载 `/ui/`；公开 Origin 本身不含该路径。此次只更新准备/状态文档，不重跑测试；`git diff --check` 退出 0。F08.6 与 F07/F08 整体状态不变。
+
+**2026-10-04 域名、Access 与现成数据库配置续查（仍 BLOCKED）**：用户确认域名接入已完成，提供团队域 `falling-boat-ac78.cloudflareaccess.com` 与应用 AUD `b0d0614b762aff31eb214d187a71d192baa1ce82c5e3a480248212fdc499d44e`。DNS 查到 `abby.ns.cloudflare.com`、`alec.ns.cloudflare.com`。无认证、无 Cookie、禁止跟随重定向的 HTTP 头探测：`https://yanshuheng.dpdns.org/`、`/ui/`、`/api/v1/tasks` 均为 **302**，目标主机与路径匹配该团队 Access 登录；公开 `/cdn-cgi/access/certs` 为 **200** 且含非空公钥集合。没有打印登录查询串、JWT 或业务正文。仅证明未登录边缘保护与公钥服务可达，不能证明仅本人策略、给定 AUD 正确、带身份请求经 Tunnel 到助手、或手机可用。
+
+本机 Docker 已由此前不可用变为可用，此次没有启动它：`& 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' info --format '{{.ServerVersion}}'` → **29.8.0**；`& 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' ps -a --filter label=com.docker.compose.project=lab1 --filter label=com.docker.compose.service=postgres --format '{{.Names}} | {{.Status}} | {{.Ports}}'` → **lab1-postgres-1、healthy、127.0.0.1:5432->5432/tcp**。用户选择沿用原助手数据库。当前仓库没有活动 `.env`，但 `Settings.from_env()` 和 `scripts/mail_real_readonly.py` 具有一致的默认本机 `assistant` 库配置，Compose 也采用对应默认设置；历史启动成功并不依赖存在 `.env`。不能再将“没有 `.env`”写成“没有连接配置”。`run-public.ps1` 仍要求活动 `.env`，新生产与 Access 参数尚未激活。
+
+当前非激活候选命令及结果：
+
+```powershell
+.venv-win\Scripts\python.exe scripts/prepare_f08.py prepare --output-dir var/deployment/f08-access-2026-10-04 --public-origin https://yanshuheng.dpdns.org --team-domain falling-boat-ac78.cloudflareaccess.com --audience b0d0614b762aff31eb214d187a71d192baa1ce82c5e3a480248212fdc499d44e
+# exit 0，created=true，activated=false
+.venv-win\Scripts\python.exe scripts/prepare_f08.py check --env-file var/deployment/f08-access-2026-10-04/.env.template
+# exit 1（预期）：缺 PA_DATABASE_URL、INVALID_DATABASE_URL；公开参数已填，数据库字段仍为空
+```
+
+曾请求从 Docker 提取连接凭据并写入候选；自动审批因“沿用原库未明确授权复制/持久化凭据、项目 SecretHandle 要求”拒绝，命令在执行前终止，没有提取或写入。后续采用安全范围更小的只读验证，直接使用仓库已有默认配置，无 Docker 凭据提取、无 DSN 保存：
+
+```powershell
+@'
+import asyncio
+import json
+import asyncpg
+from personal_assistant.settings import Settings
+
+async def main():
+    settings = Settings.from_env()
+    dsn = settings.database_url.replace('postgresql+asyncpg://', 'postgresql://', 1)
+    connection = None
+    try:
+        connection = await asyncpg.connect(dsn=dsn, timeout=8)
+        result = await connection.fetchrow('SELECT 1 AS connected, current_database() AS database_name, current_user AS role_name')
+        print(json.dumps({'connected': result['connected'] == 1, 'database': result['database_name'], 'role': result['role_name'], 'source': 'existing_repository_default', 'mutated': False}))
+    except Exception as exc:
+        print(json.dumps({'connected': False, 'error_type': type(exc).__name__, 'source': 'existing_repository_default', 'mutated': False}))
+        raise SystemExit(1)
+    finally:
+        if connection is not None:
+            await connection.close()
+
+asyncio.run(main())
+'@ | .venv-win\Scripts\python.exe -B -
+# exit 0：connected=true，database=assistant，role=assistant，mutated=false
+```
+
+执行前只检查相关进程/用户/机器环境变量的名称及是否有值，未发现 `PA_*`/PostgreSQL/数据库覆盖项；没有打印凭据或连接串。查询从 Windows 宿主执行，未调用应用/storage startup，因此无迁移、恢复、Worker 启动或外部动作。它证明原库可用，不证明口令达到生产要求；默认口令仍被候选检查器拒绝，未删除该检查。当前数据库 adapter 没有数据库 SecretHandle 解析接口，正式配置只存 Secret Reference 的设计仍待 F09；任何临时本机 DSN 保存及更换口令须用户明确授权局部例外。已向用户呈现指定候选路径、旧默认连接串失效的影响及“不启动服务/公网”的范围，授权尚未收到。
+
+本次配置调查后仅更新 README、TODO、环境指南和本证据文档，未重跑测试集合；上文 **16 passed、2 warnings** 属此前准备工具定向结果。未运行全量/完整 PostgreSQL/Worker/真实 Push/Android/真实 ehall，不把只读 `SELECT` 算成 PostgreSQL 套件验收。下一步仍在 F08.6：解决候选凭据方式并核验仅本人 Access 策略，之后另行授权助手/Tunnel 启动，继续真实 Android 与私有 health-only 验收；不启动 F09/F10。
+
+**原库口令与临时本机候选（2026-10-04，用户随后明确授权）**：用户回复“允许更换口令并保存临时本机配置”，覆盖原库默认口令轮换、指定 Git 忽略候选的 DSN 保存及本轮 Secret Reference 设计的局部例外；没有授权启动助手或公网。先将该候选目录和文件的 DACL 替换为新建、禁用继承的 ACL，仅真人 `kunji` SID 与 `SYSTEM` 可完全访问，再验证执行身份及文件所有者均为 `kunji`；轮换后 ACL 再次复核通过。唯一秘密落盘位置为 `var/deployment/f08-access-2026-10-04/.env.template`，没有另存秘密备份或临时副本，未打印密码/DSN，未提取 Docker 环境凭据。
+
+一次性 Python 宿主脚本经 stdin 交给 `.venv-win\Scripts\python.exe -B -`：核对 Git 忽略、规范化公开参数、原库/角色/回环端口、原容器 project/service/healthy；随机错误口令反例明确返回 `InvalidPasswordError`，确认宿主确实校验密码。先保存新随机 URL-safe 口令对应的 DSN 到唯一候选，`flush + fsync` 并读取验证后，调用以下精确参数（口令变量只通过 subprocess `input`，不进入 argv/env；不要将本轮更换命令重复当作检查执行）：
+
+```python
+command = [
+    r'C:\Program Files\Docker\Docker\resources\bin\docker.exe',
+    'exec', '-i', 'lab1-postgres-1', 'psql',
+    '-X', '-w', '-v', 'ON_ERROR_STOP=1', '-1',
+    '-h', '/var/run/postgresql', '-p', '5432',
+    '-U', 'assistant', '-d', 'assistant',
+    '-c', "SET password_encryption = 'scram-sha-256'",
+    '-c', '\\password assistant',
+]
+result = subprocess.run(
+    command, input=password + '\n' + password + '\n',
+    capture_output=True, text=True, timeout=20,
+    creationflags=subprocess.CREATE_NO_WINDOW,
+)
+```
+
+`psql` 在客户端加密口令后发送 `ALTER ROLE`，不发送明文 SQL 口令，[官方说明](https://www.postgresql.org/docs/17/app-psql.html)。宿主捕获的 psql 输出没有回显。第一次一次性脚本预检查 **exit 1**：Access 团队域已被准备器规范为 `https://...`，脚本错误地期待裸域；在写入/更换前停止，候选数据库字段仍空。改用现有 `normalize_team_domain()` 核对后执行 **exit 0**：`psql_exit=0`、`rotation=verified`、`new_connection=true`、`old_password_rejected=true`（`InvalidPasswordError`）、`same_database_oid=true`、`application_started=false`、`migration_run=false`。新旧验证均是新建 Windows 宿主 asyncpg 连接；没有修改业务数据、权限、迁移或启动 Worker。只更换原 `assistant` 集群角色口令，因此它在其他库中的旧默认认证也失效，包括历史 `assistant_test` 默认 DSN；代码/Compose/测试示例未复制新秘密。后续测试须从本机配置读入凭据并继续使用独立 `_test` 临时库。
+
+最终本地候选检查：
+
+```powershell
+.venv-win\Scripts\python.exe -B scripts/prepare_f08.py check --env-file var/deployment/f08-access-2026-10-04/.env.template
+# exit 0：local_configuration_valid=true，errors=[]；三个工具均能在 PATH 找到
+# 检查器本身不探测数据库，仍报告 database=not_probed；另行宿主连接验证见上
+git diff --check
+# exit 0（LF/CRLF 提示）；最后文档更新后再次执行
+```
+
+候选安全检查没有删改拒绝默认密码的断言。候选仍未激活为 `.env`，没有运行 Uvicorn、Tunnel、Serve/Funnel，没有提交/推送或部署。数据库 DSN 仍是用户授权的临时本机方案，不能宣称 F09 正式秘密后端已完成。此次只有配置操作/文档更新与上述局部验证，不重跑全量或 PostgreSQL/Worker 套件；F08.6 仍等待策略、部署与真机证据，F07/F08 整体仍 `IN_PROGRESS`。
+
+只读浏览器续查已看到 zone Overview 的“Your domain is now protected by Cloudflare”及 Zero Trust 团队 `falling-boat-ac78`；没有修改网页设置。进入可见菜单的 Applications URL 后，读取应用列表超时，工具会话重置，尚未核实具体应用主机名、AUD 和允许身份；已请用户提供 Policies 规则区域的截图/Include 条件，不请求秘密。域名激活证据已足够，不重复触发 NS 重新检查；仍不以登录重定向或团队概览代替仅本人策略验收。
+
+**Access 策略截图及准备续查**：用户提供 `Email_policy` 截图，Action 为 Allow，Include 为一个指定邮箱，Used by applications 为 1，绑定 Self-hosted 的 `yanshuheng.dpdns.org`；随后明确回答完整 Policies 列表“只有 Email_policy 这一条”。单身份 Allow 的准备条件据此确认；没有将私人邮箱或截图副本写入 Git。唯一策略结论来自用户确认，不是自动独立读取，宿主有效 JWT/AUD 与 Tunnel 链路仍未验收。自动打开应用列表再次超时，没有因此重复要求用户提供秘密或改动策略。
+
+本轮实际环境命令与结果：
+
+- `Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 8000,8001,8010,5432 } | Select-Object LocalAddress,LocalPort,OwningProcess` → 无可见条目；不能据此断言 Docker 数据库不可达。
+- `Get-Process -Name cloudflared -ErrorAction SilentlyContinue | Select-Object Id,ProcessName` → 初次盘点无进程；`Test-Path C:\Users\kunji\.cloudflared` → false。
+- `& 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' info --format '{{.ServerVersion}}'` → **29.8.0**；`& 'C:\Program Files\Docker\Docker\resources\bin\docker.exe' ps -a --filter label=com.docker.compose.project=lab1 --filter label=com.docker.compose.service=postgres --format '{{.Names}} | {{.Status}} | {{.Ports}}'` → **lab1-postgres-1、healthy、127.0.0.1:5432->5432/tcp**。
+- `.venv-win\Scripts\python.exe -B -` 中用 `dotenv_values(..., interpolate=False)` 在进程内读取唯一候选 DSN，直接 `asyncpg.connect(timeout=8) → SELECT 1 → close` → **candidate_database_connection=true、mutated=false、exit 0**，未输出 DSN/密码；解决上述 Windows 端口枚举不完整的具体疑问，没有迁移或启动应用。
+- 宿主 Python 以 `capture_output=True` 分别调用 `C:\Program Files\Tailscale\tailscale.exe status --json` 和 `serve status --json`，只输出字段概要，不输出登录 URL/节点身份：两项 **exit 0**；**BackendState=NeedsLogin、self_online=false、peer_count=0、Serve 配置为空、无 TCP/Web/Funnel 映射**。安装与 Running 服务不能代替登录证据。
+- `& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel login --help` 与 `tunnel --help` → **exit 0**，核对当前已安装 CLI 的官方登录/创建/路由/运行命令。
+
+为用户已授权的环境准备，先创建本机 `C:\Users\kunji\.cloudflared`，以新受保护 ACL 仅允许本人 `kunji` 和 SYSTEM；核验身份和两条 Allow ACE 后，通过隐藏控制台的宿主子进程调用精确 argv `['C:\\Program Files (x86)\\cloudflared\\cloudflared.exe', 'tunnel', 'login']`。实际已输出 **cloudflared_login_started=true、directory_acl_restricted=true、authorization_browser_requested=true、tunnel_started=false**；登录 URL、回调材料及 CLI 原始输出均未回显。此时命令仍在等待本人网页授权，没有登录完成或生成证书的证据；登录进程最长等待五分钟，不把超时或沉默当作同意。按 computer-use 技能，由本人在官方页面选择域名并完成授权；没有自动操作登录、验证码或权限确认。该步骤不创建 Tunnel、不更改 DNS、不启动 public/Admin/Worker。后续若获得部署许可，直接让 public 读取唯一候选文件，不另存根 `.env`；启动会校验/应用待执行迁移及安全恢复台账，须在许可中明确，不称只读。
+
+此轮仅准备、环境只读核查和文档更新，没有新业务代码变更，不重跑全量、PostgreSQL/Worker 套件或真机测试。下一项仍是 F08.6：完成本人 cloudflared 授权、本人 Tailscale 登录，再按仓库发布门禁验证并取得明确启动/发布许可，才能进入固定 HTTPS 手机连接；不跳转 F09/F10。F08.6 保持 `BLOCKED`，F07/F08 整体保持 `IN_PROGRESS`。
+
+**Cloudflare 授权、未启用 Tunnel 与双节点续查（仍 BLOCKED）**：本人回复官方页面“已授权”，原登录子进程退出 **0**，`cert.pem` 存在。证书内容未读取/回显。生成后 ACL 核对发现目录及继承的证书出现额外 CodexSandboxUsers 读取权限；用 `Set-Acl` 改现有文件失败（缺 `SeSecurityPrivilege`），随后使用 `icacls` 只修改 DACL 成功。证书与 Tunnel JSON 各自禁用继承，复查受保护且仅本人 `kunji` 与 SYSTEM 两条 FullControl Allow ACE。数据库候选仍单独受限。没有用目录权限推定后来文件权限安全。
+
+CLI 命令在宿主子进程中捕获输出，不回显认证链接、凭据或完整节点信息。按先查询再注册的顺序实际运行：
+
+```powershell
+& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel --origincert C:\Users\kunji\.cloudflared\cert.pem list --output json
+# exit 0；初始零个 Tunnel（空结果为 JSON null，解析时使用 `json.loads(...) or []`）
+& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel --origincert C:\Users\kunji\.cloudflared\cert.pem create --output json --credentials-file C:\Users\kunji\.cloudflared\lab1-assistant-f086.json lab1-assistant-f086
+# exit 0；仅预注册资源，没有 DNS 路由或连接
+```
+
+重新查询确认名称 `lab1-assistant-f086`、UUID `675e44a7-276e-4d59-ab87-ceb7c5ad02ee`、**active_connections=0**。只把 UUID 和私有凭据路径引用填入 Git 忽略的 `var/deployment/f08-access-2026-10-04/cloudflared.template.yml`；固定主机名代理 public 回环 8000、兜底 404，metrics 只绑定 `127.0.0.1:20241`，禁用自动更新。实际静态验证命令：
+
+```powershell
+& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel --config var/deployment/f08-access-2026-10-04/cloudflared.template.yml ingress validate
+& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel --config var/deployment/f08-access-2026-10-04/cloudflared.template.yml ingress rule https://yanshuheng.dpdns.org/ui/
+& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel --config var/deployment/f08-access-2026-10-04/cloudflared.template.yml ingress rule https://unmatched.example.test/ui/
+# 均 exit 0；固定主机名匹配 http://127.0.0.1:8000，其他主机名匹配 http_status:404
+```
+
+尚未运行 `tunnel route dns`、`tunnel run` 或 Uvicorn。首次列表空值的本机解析曾触发 `TypeError`，修正解析后才注册；没有把解析失败当作授权或服务失败。DNS 同名占位/既有记录仍须在路由前检查，不用覆盖参数盲改。
+
+Tailscale 登录也由本人完成。先前“已登录”实际仅完成网页账号登录，当时 CLI 仍 `NeedsLogin`；本人随后登录 Windows 客户端，实际为 `Running`、电脑在线。Android 完成本人登录和 VPN 确认后，本轮只读 `status --json` 的字段概要为 **known_peer_count=1、online_peer_count=1、online_android_peer_count=1、self_online=true**。`serve status --json` 的真实 JSON 映射计数 **TCP=0、Web=0、AllowFunnel=0**。一次 PowerShell 包裹空属性得到伪计数 1，已用 Python `len(state.get(key) or {})` 纠正，不能视作已有 Serve 配置。没有启动健康 sidecar、Serve/Funnel 或访问任务/审批。电脑与手机在线不等于手机到助手或私有 health 已通过。
+
+当前候选和路径准备完成；首次发布仍按用户“不自行部署”的要求等待明确许可。按 AGENTS.md 在批准发布前运行门禁，结果如下；不能用这些本地结果宣称 Android/真实网络验收已完成。生产数据库配置不传入全量子进程。PostgreSQL 子进程仅从唯一候选在内存中派生独立 `/assistant_test` DSN，核对回环 5432、assistant 角色、`_test` 后缀后传入 `PA_TEST_DATABASE_URL`；凭据不进入命令参数/报告/额外文件。临时库测试属于集群写操作，不是只读。
+
+**首次启动前原库只读迁移预检**：使用唯一候选的 DSN，经 `.venv-win\Scripts\python.exe -B -` 直接建立 asyncpg 连接，在 `transaction(readonly=True)` 查询迁移账本；不调用应用或 storage startup。确认默认搜索路径解析的账本与 `public.schema_migrations` 相同。当前 **7 个已应用版本、checksum_mismatches=[]、unknown_applied_versions=[]**；原始 SQL 字节 SHA-256 与账本一致。待执行版本精确为：
+
+- `0008_f07_browser_session_uniqueness`
+- `0009_f08_form_drafts`
+- `0010_f08_push_subscriptions`
+- `0011_f08_push_subscription_commands`
+
+启动许可须包含上述迁移。0008 会收敛同任务多余的非终态浏览器会话，多条 `EXECUTING/UNKNOWN` 则拒绝执行；其他三份新增草稿/Push 表。只读统计结果 **ambiguous_browser_task_count=0、migration_0008_converged_session_count=0、expired_mail_execution_count=0**；候选未配置 browser broker。未查询任务、草稿或邮件正文，也未实际迁移。每份迁移单独事务提交，整批不是一个事务。预检使用的查询为：
+
+```sql
+SELECT to_regclass('schema_migrations') = to_regclass('public.schema_migrations');
+SELECT version, checksum FROM public.schema_migrations ORDER BY version;
+WITH open_groups AS (
+    SELECT task_id, count(*) AS open_count,
+           count(*) FILTER (WHERE state IN ('EXECUTING', 'UNKNOWN')) AS pending_count
+    FROM public.browser_sessions
+    WHERE state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
+    GROUP BY task_id
+)
+SELECT count(*) FILTER (WHERE pending_count > 1) AS ambiguous_task_count,
+       coalesce(sum(greatest(open_count - 1, 0)), 0)::bigint AS converged_session_count
+FROM open_groups;
+SELECT count(*) FROM public.mail_delivery_actions
+WHERE status = 'EXECUTING' AND lease_expires_at IS NOT NULL AND lease_expires_at <= now();
+```
+
+**当前工作区发布门禁（HEAD `deeb9b2`，含未提交 F08.6 预检/准备修改）**：宿主 Python 以 `capture_output=True` 在干净子进程中运行，不继承 `PA_*`/PostgreSQL/数据库配置，脱敏后输出结果；全量脚本精确 argv 为：
+
+```python
+child_env = {k: v for k, v in os.environ.items()
+             if not k.startswith(('PA_', 'PG', 'DATABASE_', 'POSTGRES_'))}
+command = ['powershell.exe', '-NoProfile', '-NonInteractive',
+           '-Command', '& .\\scripts\\test.ps1']
+result = subprocess.run(command, env=child_env, capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+```
+
+实际 `scripts/test.ps1` **exit 0：1248 passed、130 skipped、7 warnings，751.26s；Ruff 通过，Mypy 228 source files 通过**。7 warnings 包含依赖弃用、测试用短 HMAC 及旧 `.pytest_cache` 权限警告；摘要之后另有两条 Windows asyncio 已关闭管道的 `PytestUnraisableExceptionWarning`。没有删除断言、改为跳过或把警告抹去。PostgreSQL 用例在全量子进程中按原夹具要求跳过，另行门禁结果记录后才能宣称其通过。
+
+本轮实际静态命令：
+
+```powershell
+node --check web/pwa/app.js
+node --check web/pwa/service-worker.js
+.\.venv-win\Scripts\python.exe -B -m pip check
+.\.venv-win\Scripts\python.exe -B -m ruff check --no-cache scripts/prepare_f08.py tests/unit/test_f08_environment_preparation.py
+.\.venv-win\Scripts\python.exe -B -m mypy --cache-dir var/cache/f086-mypy-preflight scripts/prepare_f08.py
+```
+
+以上均 **exit 0**；pip 无依赖冲突，Ruff 通过，准备脚本 Mypy 1 source file 通过。Mypy 初次指定 Windows `--cache-dir NUL` 触发 **exit 1 INTERNAL ERROR**，改为 Git 忽略的普通缓存目录后通过；没有因此修改实现或降低类型检查。
+
+适用 PostgreSQL/Worker 脚本的静态子进程命令及本机 DSN 派生方式：
+
+```python
+values = dotenv_values('var/deployment/f08-access-2026-10-04/.env.template',
+                       interpolate=False)
+original = (values.get('PA_DATABASE_URL') or '').replace(
+    'postgresql+asyncpg://', 'postgresql://', 1)
+parts = urlsplit(original)
+if not (parts.scheme == 'postgresql' and parts.hostname == '127.0.0.1'
+        and parts.port == 5432 and unquote(parts.username or '') == 'assistant'
+        and parts.path == '/assistant' and not parts.query and not parts.fragment):
+    raise SystemExit(1)
+test_dsn = urlunsplit((parts.scheme, parts.netloc, '/assistant_test', '', ''))
+assert urlsplit(test_dsn).path.endswith('_test')
+child_env = {k: v for k, v in os.environ.items()
+             if not k.startswith(('PA_', 'PG', 'DATABASE_', 'POSTGRES_'))}
+child_env['PA_TEST_DATABASE_URL'] = test_dsn
+command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+           '& .\\scripts\\test-postgres.ps1 -DatabaseUrl $env:PA_TEST_DATABASE_URL']
+result = subprocess.run(command, env=child_env, capture_output=True, text=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW)
+```
+
+上述 loader 经 `.venv-win\Scripts\python.exe -B -` 运行，捕获输出后用原 DSN、派生 DSN、密码及 URL 模式脱敏。**exit 0：130 passed、1 warning，348.69s**；警告为相同的旧 pytest 缓存权限问题。含真实 PostgreSQL 与真实扩展 Worker（包括 F08 表单目录 `form.list`）；外部邮件/ehall/Push 服务仍为测试替身，不是实际投递或真实站点验收。执行前后分别只读查询 `pg_database` 并在内存比较名称集合，**new_databases_after_cleanup=0、missing_preexisting_databases=0**；临时库已清理，原 `assistant` 未作为测试目标。没有输出或另存其凭据。
+
+最后本机只读核对 Tailscale：MagicDNS suffix 与 self DNSName 均存在（不记录私人节点名），尚未验证 HTTPS 证书或 Serve 可达性。用 `socket.connect_ex` 探测回环 `8000/8001/8010/20241`，均不能建立连接，不发 HTTP/业务请求；助手/Admin/health/Tunnel metrics 未启用。控制台应用只读读取再次超时，不能声称 DNS 记录已经核对或已发布；路由前检查同名记录的边界不变。
+
+收尾 `Get-Acl` / `GetAccessRules` 只读核对：唯一 `.env.template`、`cert.pem` 和 Tunnel JSON 各自受保护、两条本人/SYSTEM Allow ACE，无其他身份，未读取其内容。`Get-CimInstance Win32_Process` 按 Python 命令行模式只统计、不回显参数：**assistant_or_worker_python_process_count=0**；`Get-Process cloudflared` 为 **0**。默认沙箱的 CIM 查询曾拒绝访问，随后获自动审批的只读查询成功；没有终止进程。`git check-ignore -v` 确认两份候选及临时 Mypy 缓存均由 `var/` 忽略；`git diff --check` **exit 0**（仅 LF/CRLF 提示）。本次续查仅更新 README、TODO、本指南及 NEXT_STEPS 和获准的未启用本机模板，不修改业务代码，不提交/推送/部署。F08.6 保持 `BLOCKED`，待明确启动/发布授权及真实 Android/网络/Push 验收，F07/F08 整体保持 `IN_PROGRESS`。
+
+**2026-10-05 明确授权后的首次接通（仍 BLOCKED）**：前一条是发布前快照。本人随后明确许可启动原助手、应用原库0008–0011及安全恢复、固定域Access+Tunnel和仅health8010的私有Serve。公共进程直接读取唯一获准保存DSN的 `.env.template`，清除继承的 `PA_/PG/DATABASE_/POSTGRES_` 配置，不复制根 `.env`，保留原owner、扩展及材料目录。以隐藏子进程运行，日志禁用请求访问记录，日志文件创建后先限制为本人/SYSTEM；运行元数据只记录进程/端口/配置状态，不含秘密，并置于受限Git忽略的 `var/deployment/f08-access-2026-10-04/`。
+
+实际启动参数如下（已运行，勿重复启动）；`--env-file` 与 `--config` 在执行时使用实际Desktop仓库下的绝对路径：
+
+```powershell
+.\.venv-win\Scripts\python.exe -m uvicorn personal_assistant.app:app --host 127.0.0.1 --port 8000 --no-access-log --env-file var/deployment/f08-access-2026-10-04/.env.template
+.\.venv-win\Scripts\python.exe -m uvicorn personal_assistant.health_app:app --host 127.0.0.1 --port 8010 --no-access-log
+& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' --no-autoupdate tunnel --config var/deployment/f08-access-2026-10-04/cloudflared.template.yml run 675e44a7-276e-4d59-ab87-ceb7c5ad02ee
+```
+
+原库启动后只读复核：**11个已应用迁移、checksum全部匹配、pending空**，未重写历史迁移。应用不会在启动时自动发送邮件或提交ehall。public包装进程12100/监听6572，health包装23548/监听14976，cloudflared8928；监听只在127.0.0.1的8000/8010/20241，8001未启动。Tunnel metrics `/ready`200，证明已建立连接。
+
+首次 `route dns` 不带覆盖参数返回同名记录冲突，未覆盖。截图明确唯一根记录是临时A192.0.2.0/Proxied；自动审批仍拒绝首次覆盖尝试，命令未执行，理由是此前一般接入许可不够精确。本人随后明确批准替换这一占位记录，才运行下面精确命令，**exit0**，根域改为指定Tunnel的Proxied CNAME：
+
+```powershell
+& 'C:\Program Files (x86)\cloudflared\cloudflared.exe' tunnel --origincert 'C:\Users\kunji\.cloudflared\cert.pem' route dns --overwrite-dns 675e44a7-276e-4d59-ab87-ceb7c5ad02ee yanshuheng.dpdns.org
+```
+
+接通后本机GET黑盒**12项通过**：8000的缺失/伪造JWT拒绝401，敏感API `no-store`，CSP/nosniff/no-referrer；8010仅精确 `/healthz`最小200，其余七条404。最初探测错误地要求非敏感health也带 `no-store` 而失败；核对现有中间件只为 `/api/`设置该头后纠正探测条件，保留所有敏感API断言，未修改实现或既有测试。无Cookie、不跟随重定向的实际公网GET**3项通过**：`/`、`/ui/`、`/api/v1/tasks?limit=1`均302到预期团队Access登录，未输出动态查询串。
+
+Tailscale初次Serve提示tailnet未启用并等待本人同意，超时后退出，初始诊断包装误拼接bytes/str产生TypeError；修正包装解码后读取原CLI提示，未据此改产品代码。官方启用页由工具请求打开，返回queued，不当作页面已呈现的证据。本人完成账号功能启用并反馈误选Funnel；只读复核当时TCP/Web映射均空、没有实际公开转发。随后运行已获授权的私有Serve命令**exit0**：
+
+```powershell
+& 'C:\Program Files\Tailscale\tailscale.exe' serve --bg --https=443 http://127.0.0.1:8010
+& 'C:\Program Files\Tailscale\tailscale.exe' serve status --json
+```
+
+JSON只在内存解析并输出脱敏摘要：**TCP1、Web1、唯一Proxy=http://127.0.0.1:8010、AllowFunnel=false**。账号级Funnel资格本次未撤销，未声称关闭该账号开关；实际没有Funnel转发。私有HTTPS证书验证开启，同节点 `/healthz`200且仅 `{"status":"ok"}`，`/healthz/`、`/`、`/api/v1/tasks`、`/api/v1/approvals`、`/admin/v1/extensions`、`/docs`、`/openapi.json`全404，**八项通过**；这不是Android跨设备证据。私人节点主机名只写忽略的runtime元数据，不入Git。
+
+**登录排障与当前复查**：手机截图确认处于助手的Access登录页，只提供Cloudflare账号身份并提示无权访问，未证明宿主JWT/AUD或手机PWA已通过。本人添加One-time PIN后，团队列表截图确认该provider存在；本人又明确表示应用已保存，应用Login methods截图显示Accept all关闭、仅One-time PIN、Cloudflare One Client自动认证关闭。Email_policy单邮箱规则不改，不把OTP方法单独加入Include以扩大允许集合。已请本人用Android Chrome新无痕会话打开助手URL、输入该允许邮箱的验证码；不收集验证码/Cookie/JWT。有效会话及任务/SSE状态仍待反馈。[官方OTP配置](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/)
+
+在实际Desktop仓库运行下面只读探测，**exit0、deployment_boundary_checks=24、passed=true**。只GET、无代理环境、不跟随重定向、默认开启TLS证书验证；不读取凭据文件或业务正文。24项由public四项、两个health入口各八项、公网边缘三项、Tunnel ready一项组成，不与此前检查相加宣称新测试总数：
+
+```powershell
+@'
+import json
+from pathlib import Path
+from urllib.parse import urlsplit
+import httpx
+
+checks = 0
+try:
+    runtime = json.loads(Path('var/deployment/f08-access-2026-10-04/runtime.json').read_text(encoding='utf-8'))
+    assert runtime['serve_configured'] and not runtime['funnel_enabled']
+    private = runtime['health_private_origin']
+    assert urlsplit(private).scheme == 'https' and urlsplit(private).hostname.endswith('.ts.net')
+    blocked = ('/healthz/', '/', '/api/v1/tasks', '/api/v1/approvals', '/admin/v1/extensions', '/docs', '/openapi.json')
+    with httpx.Client(timeout=15, trust_env=False, follow_redirects=False) as client:
+        for path, headers in (('/healthz', {}), ('/ui/', {}), ('/api/v1/tasks?limit=1', {}), ('/api/v1/tasks?limit=1', {'Cf-Access-Jwt-Assertion': 'not-a-jwt'})):
+            response = client.get('http://127.0.0.1:8000' + path, headers=headers)
+            assert response.status_code == 401
+            assert response.headers.get('x-content-type-options') == 'nosniff'
+            assert response.headers.get('referrer-policy') == 'no-referrer'
+            policy = response.headers.get('content-security-policy', '')
+            assert "script-src 'self'" in policy and "frame-ancestors 'none'" in policy
+            if path.startswith('/api/'):
+                assert 'no-store' in response.headers.get('cache-control', '')
+            checks += 1
+        for origin in ('http://127.0.0.1:8010', private):
+            response = client.get(origin + '/healthz')
+            assert response.status_code == 200 and response.json() == {'status': 'ok'}
+            checks += 1
+            for path in blocked:
+                assert client.get(origin + path).status_code == 404
+                checks += 1
+        for path in ('/', '/ui/', '/api/v1/tasks?limit=1'):
+            response = client.get('https://yanshuheng.dpdns.org' + path)
+            assert response.status_code == 302
+            target = urlsplit(response.headers['location'])
+            assert target.scheme == 'https' and target.hostname == 'falling-boat-ac78.cloudflareaccess.com'
+            assert target.path.startswith('/cdn-cgi/access/login')
+            checks += 1
+        assert client.get('http://127.0.0.1:20241/ready').status_code == 200
+        checks += 1
+    print(json.dumps({'deployment_boundary_checks': checks, 'passed': True, 'scope': 'loopback, unauthenticated edge, same-node private HTTPS; no Android or authenticated API'}))
+except Exception as error:
+    print(json.dumps({'passed': False, 'completed_checks': checks, 'error_type': type(error).__name__}))
+    raise SystemExit(1)
+'@ | .\.venv-win\Scripts\python.exe -B -
+```
+
+本次配置及记录更新未新增业务代码；发布前本工作区完整门禁的1248/130与PostgreSQL/Worker130仍为上述已执行证据，没有重跑或套用旧报告数字。后台进程没有服务守护或开机自启，电脑睡眠/关机会影响入口；F09仍缺可信生产SecretStore，真实Push、邮件凭据、远程模型继续fail-closed，产品Agent自动创建邮件动作仍未接线。Android首次登录/SSE与私有health三项的本人反馈已收到；Chrome安装、网络切换/后台恢复/缓存、其余跨设备路径和端口、真实Push及最终两条E2E尚未验收；没有真实邮箱发送、ehall申请或最终提交，不启动后续编号，不提交/推送。F08.6保持BLOCKED，F07/F08整体IN_PROGRESS。
+
+**本人的手机首次连通与私有健康反馈（2026-10-05）**：本人明确回复“任务列表正常，已连接”，随后补充“手机登陆完成了”及手机截图。截图地址为固定助手域名，助手页显示“暂无任务”和“事件连接已建立，正在同步服务端状态”；记录为Android浏览器首次登录/任务列表/SSE连通的本人反馈及截图证据，未收集Cookie/JWT或验证码。截图不能确认Chrome、安装PWA、版本冲突、敏感缓存或网络切换，不把这些写成通过。截图不复制到Git，避免收录私人账号信息。
+
+本人保持Tailscale在线后又明确回复“health正常，另两项均Not Found”，对应私有health域的 `/healthz`、`/api/v1/tasks`、`/admin/v1/extensions`。三项为Android跨设备人工反馈，不含手机网络面板的原始HTTP状态码；与上述24项自动探测单列，不能相加当作pytest数量。精确斜杠、审批、docs/openapi/根路径及直接公共/管理端口的跨设备检查仍待补齐。下一步已请求本人使用Android Chrome普通窗口登录，检查“添加到主屏幕”的实际安装选项；无痕窗口不作为安装验收环境。当前Manifest未声明icons，Chrome安装菜单/标准安装能力仍需核对，不能把桌面快捷方式当作完整PWA安装通过。[Chrome安装说明](https://support.google.com/chrome/answer/9658361?co=GENIE.Platform%3DAndroid&hl=zh-Hans)、[Manifest图标要求](https://web.dev/articles/add-manifest)
+
+本次收尾静态与权限检查：`git diff --check` **exit0**（仅LF/CRLF提示）；`git check-ignore -v var/deployment/f08-access-2026-10-04/runtime.json var/deployment/f08-access-2026-10-04/runtime-public.log`确认均由 `var/`忽略。`Get-Acl`与 `GetAccessRules`只读核对唯一 `.env.template`、runtime元数据及三份运行日志，**每份Protected=true、两条本人/SYSTEM Allow ACE、UnexpectedRules=0**，未读取内容。当前新增记录涉及README/TODO/环境指南/NEXT和忽略的运行配置/元数据，不改业务API/审批/Outbox或迁移；没有因手机反馈重跑全量或真实环境业务回归。
+
+**Chrome仅快捷方式的局部修复（2026-10-05；F08.6仍BLOCKED）**：本人在AndroidChrome安装检查回复“只能创建快捷方式”。这不是安装验收通过。核对实际代码后确认缺少Manifest icons及认证Manifest链接的 `crossorigin="use-credentials"`；Google文档同时要求192/512图标并说明受认证Manifest需要携带凭据。[官方Manifest说明](https://web.dev/articles/add-manifest) 此处只补已确认的静态安装资源缺口，实际Chrome设备/安装服务条件还需本人复验。
+
+先新增 `tests/api/test_pwa_installation_f08.py` 四个用例，下面首条命令在改实现前 **3 failed、1 passed、2 warnings**：包装缺图标、Manifest无icons、链接无use-credentials各失败；缺失/伪造JWT仍401的安全回归通过。另新增390px浏览器反例，先实际安装历史v11 Worker、确认页面受控且旧Manifest来自缓存，再切换到新资源；首次 **1 failed**停在缺图标。随后发现测试的async等待谓词可能将Promise当作真值，将其改为真正await缓存读取、五秒有界轮询且超时抛错，全部后续断言保留；在仍未更改Manifest/HTML/SW时再次运行同一节点，**1 failed**，明确停在v11缓存未被替换。
+
+```powershell
+.\.venv-win\Scripts\python.exe -m pytest tests/api/test_pwa_installation_f08.py -q -o addopts='' -p no:cacheprovider
+.\.venv-win\Scripts\python.exe -m pytest tests/integration/test_pwa_browser_f08.py::PwaBrowserF08Tests::test_manifest_upgrade_replaces_v11_and_decodes_installation_icons -q -o addopts='' -p no:cacheprovider
+```
+
+最小实现：`web/pwa/index.html`添加凭据属性，Manifest仅添加两份同源固定PNG声明，新增 `icon-192.png`与 `icon-512.png`，`pyproject.toml`将它们平放同一PWA包装目标，SW仅升cache名v12、STATIC/fetch白名单保持四路径。图标由本机标准库生成，192文件694字节、512文件2858字节；API验证签名/IHDR实际尺寸，浏览器 `Image.decode()`验证可解码。没有新API、数据库迁移、扩展脚本、核心业务、审批或Outbox变更。已有授权临时入口从源码目录挂载静态资源，本轮未启动第二组服务、安装扩展或改变Access策略。
+
+修复后实际定向与静态命令：
+
+```powershell
+.\.venv-win\Scripts\python.exe -m pytest tests/api/test_pwa_installation_f08.py tests/api/test_pwa_tasks_f08.py tests/api/test_cloudflare_access.py tests/contract/test_f03_contract_consistency.py tests/contract/test_f05_contract_consistency.py -q -o addopts='' -p no:cacheprovider
+# 78 passed、5 warnings，7.46s，exit0；警告为既有依赖和per-request cookie弃用。
+.\.venv-win\Scripts\python.exe -m pytest tests/integration/test_pwa_browser_f08.py tests/integration/test_pwa_form_drafts_browser_f08.py tests/integration/test_pwa_approvals_browser_f08.py -q -o addopts='' -p no:cacheprovider
+# 17 passed，51.58s，exit0；包括v11升级、两尺寸PNG解码与严格四路径/敏感正文缓存断言。
+.\.venv-win\Scripts\python.exe -m ruff check --no-cache tests/api/test_pwa_installation_f08.py tests/integration/test_pwa_browser_f08.py
+# All checks passed；首次本机执行发现新增JS测试字符串仅超行宽1字符，分行后复查通过，未改断言。
+node --check web/pwa/service-worker.js
+node --check web/pwa/app.js
+# 均exit0。
+.\.venv-win\Scripts\python.exe -m pip wheel --no-index --no-deps --no-build-isolation --wheel-dir var/build/f086-install-2026-10-05 .
+# exit0，离线构建personal_assistant_framework-0.1.0-py3-none-any.whl。
+```
+
+Ruff与Node首次默认沙箱未能创建进程（Windows `CreateProcessWithLogonW:1909`），不能当作执行过；获准以限定本机进程重跑后得到上述实际结果。首次尝试 `python -m build --wheel --no-isolation --outdir var/build/f086-install-2026-10-05` **exit1**，build包无可运行 `__main__`；改为现有pip/setuptools的无网络构建成功，没有安装/升级任何依赖。
+
+wheel内容检查实际命令及结果：
+
+```powershell
+@'
+import json
+from pathlib import Path
+from zipfile import ZipFile
+
+wheel = Path('var/build/f086-install-2026-10-05/personal_assistant_framework-0.1.0-py3-none-any.whl')
+with ZipFile(wheel) as archive:
+    prefixes = [name[:-len('manifest.webmanifest')] for name in archive.namelist() if name.endswith('/share/personal-assistant/pwa/manifest.webmanifest')]
+    assert len(prefixes) == 1
+    prefix = prefixes[0]
+    for name in ('index.html', 'manifest.webmanifest', 'service-worker.js', 'icon-192.png', 'icon-512.png'):
+        assert archive.read(prefix + name) == (Path('web/pwa') / name).read_bytes()
+    manifest = json.loads(archive.read(prefix + 'manifest.webmanifest'))
+    assert {icon['sizes'] for icon in manifest['icons']} == {'192x192', '512x512'}
+    assert 'crossorigin="use-credentials"' in archive.read(prefix + 'index.html').decode()
+print('Wheel verification passed: manifest, credentialed link, worker and both PNG files match source.')
+'@ | .\.venv-win\Scripts\python.exe -B -
+# exit0，目标Manifest/HTML/SW/两PNG字节与源码一致。
+```
+
+最终源文件仅调整测试字符串行宽后，复跑上述浏览器新增节点：**1 passed、7.06s、exit0**；`git diff --check` **exit0**（LF/CRLF提示），`git check-ignore -v var/build/f086-install-2026-10-05/personal_assistant_framework-0.1.0-py3-none-any.whl`确认由var忽略。限定静态复核未发现当前资源/认证/包装缺口；没有运行Mypy全量（未改生产Python）或依赖检查（未改依赖）。工作区原有health预检及准备脚本的未提交修改保留。
+
+上述集合仅覆盖当前局部静态资源修复及相关缓存/认证回归，不是F08.6整体验收或新的全量门禁。没有重跑全量或PostgreSQL/Worker；发布前1248/130和130 passed不充作本次修复后数字。已请求本人关闭旧标签、Chrome普通窗口重新打开并触发只读刷新，等待缓存更新后再次检查安装菜单、独立启动与Android应用列表；实际结果仍待反馈。网络切换、后台恢复、真机缓存、其余私有health禁止路径和真实Push仍未验收，生产秘密后端仍待F09；F08.6继续BLOCKED，F07/F08整体IN_PROGRESS，不推进后续编号，不提交/推送或执行外部业务动作。
+
+**Pura 70 安装终态续查（2026-10-05；仍 BLOCKED）**：静态资源修复后，本人反馈“可以点安装了，但是好像实际上没装下来”，进一步说明“弹了一个开始安装就没下文了。手机是华为p70 pura，不能用Google Play”。记录为安装选项已出现、安装终态未确认的人工反馈；没有手机安装日志或应用列表证据。Google 官方文档说明 Chrome 的 WebAPK 路径使用 GMS / Play Services，服务不可用时可回退快捷方式；该设备条件与安装服务受限的候选解释吻合，但无法使用 Play 商店不能单独证明缺少 Play Services，也没有证明这是唯一原因。[Android 安装机制](https://web.dev/learn/pwa/installation#android_installation)
+
+已请求本人先检查“设置 → 应用”中的 `Personal Assistant` / `Assistant`，若无记录则尝试 Chrome “⋮ → 安装并创建快捷方式 → 创建快捷方式 → 添加”，反馈菜单和桌面入口结果。该步骤采用 Google 官方快捷方式路径，保留单邮箱 Access；入口与独立 WebAPK 安装、真实 Push 验收分别记录。[快捷方式操作](https://support.google.com/chrome/answer/15085120?co=GENIE.Platform%3DAndroid&hl=zh-Hans) 本次仅更新 TODO、NEXT 和环境指南，不修改产品代码、Access/Tunnel/Serve 或凭据配置，不新增 APK 包装或秘密后端；未重跑 pytest、全量、PostgreSQL/Worker 或真实网络业务回归，没有新测试数量。收尾在实际Desktop仓库运行 `git diff --check` → **exit0**（仅LF/CRLF提示）。下一步仍是 F08.6 的手机入口与网络恢复验证，正式安装及真实 Push 仍未验收；F07/F08 整体保持 `IN_PROGRESS`。
+
 F08 整体验收仍要求 Android Chrome 完成两条 E2E 流；离线后重连恢复状态；通知不含邮件正文/表单字段；编辑冲突返回 409/412。F08.1 不宣称达到这些整体验收条件。
+
+**同日桌面入口续查**：本人确认应用列表没有助手，点击添加到桌面也无反应；原先等待反馈项已得到该失败结果，入口生成仍未验收。已请求实际 HarmonyOS 版本及“创建桌面快捷方式”列表中 Chrome 的存在/许可状态，不能预设 Chrome 必然列在该权限页。华为官方已给出自带浏览器按系统版本添加桌面的步骤，记录在环境指南；该路径需要重新进行手机能力验证，尚未执行或认定成功。本次仅更新 TODO/NEXT/环境指南，未改产品、凭据或网络配置；没有新增 pytest/全量/PostgreSQL/Worker 结果，收尾 `git diff --check` 结果单列。F08.6 继续 `BLOCKED`，待本人权限检查后继续；正式安装及真实 Push 未通过，F07/F08 整体仍 `IN_PROGRESS`。
+
+本次桌面入口续查收尾：在实际 Desktop 仓库执行 `git diff --check` → **exit0**，只有已有 LF/CRLF 提示。
+
+**桌面入口已生成的本人反馈（同日；仍 BLOCKED）**：本人随后回复“应用安装到桌面了”。此前无入口的现象已有新的正向人工反馈，记录为桌面入口已出现；未取得包装类型、最终使用浏览器、应用列表或独立启动模式证据，不将图标出现等同于 Chrome WebAPK 已通过。已请求从该图标启动，反馈添加入口所用浏览器、有无地址栏、列表/SSE状态，再保持前台从 Wi-Fi 切到移动数据，观察约30秒后的实际恢复；尚未收到这些结果。未要求创建任务或审批，也没有执行真实邮件/ehall/Push。此次只更新 TODO/NEXT/环境指南，不修改产品或运行配置、不开启后续编号、不提交/推送，没有新增测试集合结果；实际 Desktop 仓库的 `git diff --check` → **exit0**（仅已有LF/CRLF提示）。只读核对当前代码确认前台30秒重读任务、SSE有15秒保活等待周期，浏览器控制重连间隔，30秒观察不作为成功期限。网络切换、后台恢复、真机敏感缓存、其余跨设备边界及真实 Push 仍待验收，F08.6 保持 `BLOCKED`，F07/F08 整体仍 `IN_PROGRESS`。
 
 失败红线：确认页被缓存；断线导致重复审批；任意扩展脚本进入页面。
 
+**手机桌面启动、网络切换与后台恢复反馈（同日；仍 BLOCKED）**：本人对桌面启动与前台网络检查明确回复“图标右下角有chrome标识，没有历览器地址栏。任务列表和连接显示的是已建立，但是现在没有任务。切换网络后恢复连接了”。对应已请求的Wi-Fi→移动数据方向，记录为该方向的真机恢复观察；列表仅为空态，没有任务详情、消息、持久草稿或审批交互证据。随后本人对“联网切后台或锁屏约一分钟，再从桌面图标回到助手，先观察自动恢复、不刷新整页”回复“是”，记录为这项恢复观察；未分辨采用了切后台还是锁屏，不宣称两种分别测试或后台长期存活。Chrome标识和无地址栏启动不用于推断WebAPK包类型，也不额外把特定系统包格式设为验收门槛。断开Wi-Fi/移动数据的离线提示和恢复移动数据后的自动重连问题仍待本人反馈；真机敏感缓存、其他跨设备禁止路径、非空业务交互及真实Push未验收。
+
+此次同步README/TODO/NEXT/环境指南的当前摘要与记录，未改产品、运行配置或凭据，未运行新的pytest/全量/PostgreSQL/Worker集合，没有新测试数量；文档检查使用实际Desktop仓库的 `git diff --check`。F08.6状态仍BLOCKED，F07/F08整体IN_PROGRESS，不推进后续编号或执行外部业务动作。
+
+本人随后补充“联网也会恢复”，并对断开Wi-Fi和移动数据期间的顶部状态选择“设备离线或事件连接中断”。断网明确提示与恢复联网后自动连接两项均已记录为人工反馈，原待反馈项已补齐。这些与手机桌面启动、Wi-Fi→移动数据及后台或锁屏约一分钟恢复一起构成本轮基础连接观察，不包括主机/Cloudflare中断、系统长期后台或真实Push。
+
+本轮先请求本人通过手机创建明确标注的本地连接自检任务、发送一条非敏感自检消息，确认成功后刷新核对各只有一条；若失败先保留页面反馈。只读核对实际 `POST /api/v1/tasks` 和 `POST /api/v1/tasks/{id}/messages`、TaskService及PWA按钮文案后提出该检查，没有代替本人调用命令API或创建记录。随后本人回复“是的，都只有一条”，手机自检任务/消息成功后的刷新恢复已按人工反馈记录。当前Agent自动执行未接线，任务停在QUEUED属预期，不宣称已完成助理工作或接入阶段10。
+
+本次手机反馈同步的收尾文档检查：实际Desktop仓库执行 `git diff --check` → **exit0**，仅既有LF/CRLF提示；未重跑其他测试集合。
+
+**原库只读核对与电脑页面同步（2026-10-05；仍 BLOCKED）**：在本人执行后续跨设备新增操作之前，对原助手PostgreSQL作一次只读聚合，以下实际命令在Desktop仓库运行，exit0。只在进程内部读取既有受保护配置，不输出DSN、真实凭据、用户身份、任务ID或其他正文；连接目标限定原库的回环地址/端口/角色/库名，查询为有超时的repeatable-read只读事务。
+
+```powershell
+@'
+import asyncio
+import json
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+
+async def check():
+    import asyncpg
+    from dotenv import dotenv_values
+
+    candidate = Path('var/deployment/f08-access-2026-10-04/.env.template')
+    dsn = dotenv_values(candidate, interpolate=False, encoding='utf-8').get('PA_DATABASE_URL')
+    if not isinstance(dsn, str) or not dsn:
+        raise ValueError
+    dsn = dsn.replace('postgresql+asyncpg://', 'postgresql://', 1)
+    target = urlsplit(dsn)
+    if (target.scheme not in ('postgresql', 'postgres')
+            or target.hostname != '127.0.0.1'
+            or (target.port or 5432) != 5432
+            or unquote(target.username or '') != 'assistant'
+            or unquote(target.path) != '/assistant'):
+        raise ValueError
+
+    objective = 'F08.6 \u624b\u673a\u8fde\u63a5\u81ea\u68c0\uff0c\u4ec5\u8bb0\u5f55\uff0c\u4e0d\u6267\u884c\u5916\u90e8\u52a8\u4f5c'
+    content = '\u624b\u673a\u8865\u5145\u4fe1\u606f\u81ea\u68c0'
+    connection = await asyncpg.connect(dsn=dsn, timeout=8, command_timeout=8)
+    try:
+        async with connection.transaction(isolation='repeatable_read', readonly=True):
+            row = await connection.fetchrow('''
+                SELECT
+                    (SELECT count(*) FROM public.tasks WHERE objective = $1) AS task_count,
+                    (SELECT count(*)
+                     FROM public.task_messages AS message
+                     JOIN public.tasks AS task ON task.id = message.task_id
+                     WHERE task.objective = $1 AND message.content = $2) AS message_count
+            ''', objective, content)
+            result = {
+                'query_succeeded': True,
+                'matching_task_count': row['task_count'],
+                'matching_message_count': row['message_count'],
+            }
+    finally:
+        await connection.close(timeout=4)
+    return result
+
+try:
+    print(json.dumps(asyncio.run(check()), ensure_ascii=True))
+except Exception as error:
+    print(json.dumps({'query_succeeded': False, 'error_type': type(error).__name__}))
+    raise SystemExit(1)
+'@ | & .\.venv-win\Scripts\python.exe -B -
+```
+
+实际输出：`{"query_succeeded": true, "matching_task_count": 1, "matching_message_count": 1}`。此为当时已知自检文本的匹配计数，不是所有任务/消息总数，也不是PostgreSQL测试套件。随后本人按请求在电脑同Access身份的助手页面观察手机新增任务与不同消息，不手动刷新是否自动显示，回复“我试了新增任务和新增消息，都可以”。记录为跨设备页面同步人工反馈；不宣称量化延迟，也不把后续主动新增记录当重复请求。没有新的数据库写入、迁移、服务启动或外部业务动作。
+
+下一项检查手机实际CacheStorage：本人已确认有数据USB线，已请求开启USB调试并亲自确认授权，在电脑Chrome的 `chrome://inspect/#devices` 查找手机及助手页面。仅核对缓存名称/路径，不读取Cookie、验证码、JWT或响应正文；实际结果尚待取得，不能沿用电脑浏览器测试替代。步骤见 `F08_ENVIRONMENT_PREPARATION.md` 第8节。
+
+本轮更新README、TODO、NEXT_STEPS、环境指南，并校正契约第22节额外要求WebAPK/应用列表登记的表述，保持阶段9实际验收范围。产品代码和部署配置没有新增变更；没有重跑全量、PostgreSQL/Worker或真实Push。Schema草稿/审批、真机缓存、其余跨设备健康边界及主机/Cloudflare中断证据仍待补齐，真实Push缺生产秘密后端。F08.6继续BLOCKED、F07/F08整体IN_PROGRESS；不推进F09/F10，不提交或推送。
+
+上述同步后的静态检查：在实际Desktop仓库运行 `git diff --check` → **exit0**，仅LF/CRLF提示。未新增或引用为当前结果的测试数量。
+
+**手机USB调试续查（2026-10-05；缓存仍待验收）**：本人截图显示电脑Chrome已勾选Discover USB devices，但为Offline/Pending authentication。本人报告拔插及授权重置尝试后仍只收到“USB调试已连接”通知，没有电脑密钥指纹授权弹框；不能把连接通知记为调试授权成功。本人确认HarmonyOS 4.2.0.207。已请求切换“传输照片”（PTP）后反馈电脑设备页，尚待结果。
+
+本机只读设备查询在沙箱内因CimException失败；沙箱外查询成功，未修改设备/驱动。最初带SilentlyContinue的空列表不是“没有手机设备”的证据；随后显式ErrorAction Stop区分失败与空结果。最终收窄的实际命令如下，exit0：
+
+```powershell
+try {
+  $f086AdbInterfaces = @(Get-PnpDevice -PresentOnly -ErrorAction Stop | Where-Object { $_.Class -eq 'USBDevice' -and $_.FriendlyName -eq 'ADB Interface' } | Select-Object Status,Class,FriendlyName)
+  [pscustomobject]@{query_succeeded=$true;adb_interfaces=$f086AdbInterfaces} | ConvertTo-Json -Depth 4 -Compress
+} catch {
+  [pscustomobject]@{query_succeeded=$false;error_type=$_.Exception.GetType().FullName} | ConvertTo-Json -Compress
+  exit 1
+}
+```
+
+实际输出：`{"query_succeeded":true,"adb_interfaces":[{"Status":"OK","Class":"USBDevice","FriendlyName":"ADB Interface"}]}`。仅证明查询时Windows枚举该接口为OK，不证明驱动全部正确、调试授权成功或CacheStorage安全。另一个Win32_PnPSignedDriver按ADB名称过滤的查询exit0但为空，未取得驱动提供者/签名证据，不能据此断言缺失驱动。Chrome进程名计数查询也不构成浏览器调试状态证据。未输出设备序列号、手机文件、Cookie或正文；未安装工具/驱动、重启进程或服务、修改部署配置或产品代码。
+
+本轮仅追加环境指南与此证据记录，目标仍是F08.6手机实际缓存检查；PTP结果及CacheStorage内容未确认，阶段状态不变，没有运行测试集合、全量或PostgreSQL/Worker回归。后续先等待本人设备页反馈，不能用电脑缓存替代手机。
+
+**官方ADB诊断及本人授权（2026-10-05；缓存检查继续）**：本人反馈PTP时Chrome手机/Pending条目都消失，传输文件则仍Pending。沙箱外PnP复查仍为ADB Interface OK；Get-PnpDeviceProperty读取该接口的DriverProvider/DriverVersion/DriverInfPath/ProblemCode，得到Microsoft、10.0.26100.8972、winusb.inf、0，未更改驱动。PATH和7个常见SDK路径未找到adb.exe，不宣称已扫描整机。
+
+准备便携工具：Python标准库从 `https://dl.google.com/android/repository/repository2-3.xml` 选择platform-tools的Windows archive，再下载元数据指向的精确 `https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip`，比较声明大小及SHA-1后检查ZIP路径并解压到Git忽略的 `var/deployment/f08-access-2026-10-04/diagnostics/android-platform-tools-2026-10-05`。实际准备输出为 `{"prepared": true, "archive": "platform-tools_r37.0.1-win.zip", "bytes": 8044989, "official_checksum_verified": true, "checksum_type": "sha1", "adb_present": true}`，exit0。此为官方仓库SHA-1核对，不称官方SHA256或数字签名验证。没有修改PATH、安装驱动/Android Studio或安装手机应用。
+
+工具版本的实际PowerShell命令：
+
+```powershell
+& '.\var\deployment\f08-access-2026-10-04\diagnostics\android-platform-tools-2026-10-05\platform-tools\adb.exe' version
+```
+
+exit0，Android Debug Bridge 1.0.41、Version37.0.1-15733141。首次查询前Get-NetTCPConnection核对5037无监听。本人与助手明确说明ADB首次可能启动本地服务、保存本机调试密钥后，本人回复“已取消勾选，可以查询”。首次子进程argv为 `adb.exe -L tcp:127.0.0.1:5037 devices`，exit1，未取得设备状态；不把空states解释为没有手机，也未确认其失败原因。改用官方默认参数后的子进程argv为 `adb.exe devices`，exit0，设备数量1、状态unauthorized。随后本人回复“出现授权弹窗，已允许”。
+
+授权后实际执行的脱敏查询命令如下，在Desktop仓库运行，exit0：
+
+```powershell
+@'
+import json
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+try:
+    adb = Path('var/deployment/f08-access-2026-10-04/diagnostics/android-platform-tools-2026-10-05/platform-tools/adb.exe').resolve()
+    environment = os.environ.copy()
+    environment.pop('ADB_TRACE', None)
+    result = subprocess.run([str(adb), 'devices'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15, env=environment, creationflags=subprocess.CREATE_NO_WINDOW)
+    allowed = {'device', 'unauthorized', 'offline', 'recovery', 'sideload', 'bootloader'}
+    states = [fields[1] for line in result.stdout.splitlines() if len(fields := line.split()) >= 2 and fields[1] in allowed]
+    print(json.dumps({'query_succeeded': result.returncode == 0, 'exit_code': result.returncode, 'device_count': len(states), 'states': states}))
+    sys.exit(result.returncode)
+except Exception as error:
+    print(json.dumps({'query_succeeded': False, 'error_type': type(error).__name__}))
+    sys.exit(1)
+'@ | & .\.venv-win\Scripts\python.exe -B -
+```
+
+实际输出 `{"query_succeeded": true, "exit_code": 0, "device_count": 1, "states": ["device"]}`。5037复查只监听127.0.0.1，进程为本轮新启动的adb；暂时保留用于接下来的Inspect，检查结束后只停止经身份核对的本轮诊断服务。未读取手机文件、日志、Cookie、API正文或本机调试密钥内容；未执行shell/pull/logcat、CDP端口转发或浏览器控制。新服务及可能的本机调试密钥属于诊断工具状态变化，不修改助手服务、数据库或部署配置。
+
+随后本人对重新勾选Chrome USB发现、手机Chrome普通窗口打开助手的检查回复“已出现助手页面及inspect”，手机调试目标及入口已按人工反馈记录。已请求本人点击inspect、打开Application/Cache Storage并提供仅名称和路径的截图；缓存尚未验收。环境指南同步以上事实；本轮没有产品修改、测试集合或全量/PostgreSQL/Worker回归，F08.6继续BLOCKED、F07/F08整体IN_PROGRESS，不推进后续编号。
+
+实际执行 `git check-ignore var/deployment/f08-access-2026-10-04/diagnostics/android-platform-tools-2026-10-05/platform-tools/adb.exe var/deployment/f08-access-2026-10-04/diagnostics/android-platform-tools-2026-10-05/platform-tools_r37.0.1-win.zip` → exit0，两条路径均匹配忽略规则；`git diff --check` → exit0，仅既有LF/CRLF提示。未提交、推送或部署新产品代码。
+
+**手机所选缓存截图与节点数反馈（2026-10-05）**：本人按请求在手机助手页面Inspect中提供CacheStorage列表截图，origin为 `https://yanshuheng.dpdns.org`，可见路径过滤框没有输入过滤条件，所选缓存仅有 `/ui/`、`/ui/app.js`、`/ui/manifest.webmanifest`、`/ui/styles.css` 四条固定静态路径，无API条目。图片未含左侧树及缓存名称；本人回答左侧“只有这一条”，因此缓存节点数1只按人工反馈记录，不宣称截图自身覆盖全部节点。未打开缓存响应正文、Cookie或请求凭据；截图不证明HTTP缓存/LocalStorage/IndexedDB或未访问的Schema草稿/审批页的敏感存储情况。
+
+本人随后抄出唯一缓存名称 `assistant-static-v12`，但表示未找到任务请求。因此所选四路径由截图支持，节点总数1和名称v12由本人文本反馈支持；仅为当前任务/消息使用后的手机CacheStorage观察，不扩充为HTTP缓存/LocalStorage/IndexedDB或未访问的Schema草稿/审批页面验收。任务API响应Cache-Control实际值仍未取得。
+
+只读核对实际app.js确认刷新按钮调用refreshTaskViews/loadTasks，产生 `GET /api/v1/tasks?limit=20`，jsonRequest指定fetch cache:no-store；安全头中间件也对 `/api/` 配置no-store，但代码契约不替代实际手机响应。已请求在远程Network选择All、录制圆点红色、Filter仅填tasks，然后在刚被Inspect的那个手机Chrome普通标签点“刷新状态”。Name列通常只显示 `tasks?limit=20`，选择该行的Response Headers，仅反馈状态码/Cache-Control；若仍无行，仅发请求列表截图。没有让本人打开聊天中格式混乱的API链接、开启Disable cache、覆盖响应头或发送完整Headers/正文/HAR。当前尚待反馈。
+
+此处只更新环境指南与证据记录，没有新增自动化测试或产品修改，ADB诊断服务继续仅本机回环用于当前Inspect。F08.6继续BLOCKED，剩余项及F07延期边界不变。
+
+**手机任务响应头截图（2026-10-05）**：本人随后提供远程Network截图，General显示 `GET https://yanshuheng.dpdns.org/api/v1/tasks?limit=20`、200 OK；Response Headers显示 `Cache-Control: no-store`、`Cf-Cache-Status: DYNAMIC`，Disable cache未勾选。未见请求Cookie/JWT或响应正文，没有将截图中的任务标识、CF报告标识或请求ID复制到仓库。缓存名assistant-static-v12及节点总数1仍是本人文本反馈，四固定路径与任务GET响应头分别由截图支持。当前任务/消息使用后的CacheStorage及任务GET响应头有限范围已确认，不扩大为HTTP缓存底层、LocalStorage/IndexedDB或尚未访问Schema草稿/审批场景均无敏感数据。
+
+**Schema真机检查前置缺口**：本人在已有自检任务的Schema表单草稿区域反馈“尚无可用草稿。一个Schema不支持，已禁用”。随后电脑同身份实际助手页面的只读观察定位为 `nju.smail · smail.account_settings（Schema不支持）`；源定义使用数组及额外UI能力，超出既定扁平Schema集合。页面的Example Echo状态为DISCOVERED，不等同已安装/启用。编辑、来源及冲突真机检查尚未开始，不构建/安装/导入/执行新扩展、不改变Schema支持集合或F07审批边界；后续可先提供现有example.echo的PUBLIC字段验收夹具精确预览，按AGENTS.md在任何build/install/import/execute之前取得本人确认。
+
+本轮同步README、TODO、NEXT_STEPS及环境指南，产品代码和部署配置没有新增修改，没有运行新的自动化测试/全量/PostgreSQL/Worker；早前数字不充作本次结果。F08.6继续唯一当前BLOCKED项，手机Schema编辑/来源/冲突、审批、其余缓存与跨设备边界及真实Push待验收，F07/F08整体仍IN_PROGRESS。ADB服务暂留仅回环供Inspect；不提交或推送。
+
+**Access 503诊断与最小提示修复（2026-10-05；仍BLOCKED）**：本人报告“无法读取最新任务：Cloudflare Access verification is unavailable”，退出并重新接验证码仍无效，随后确认手机和电脑“都已恢复”。电脑当前实际页面显示事件连接建立及已有任务；这个503与既有中间件的 `CLOUDFLARE_ACCESS_UNAVAILABLE` 一致，不能据此认定账号或令牌失效。源码中取钥错误被汇总为该稳定错误码，现有运行日志没有记录具体取钥失败类别，本次未捕获原故障，未宣称根因已修复。
+
+只读宿主探测：官方团队 `/cdn-cgi/access/certs` 使用项目相同httpx及RSA解析器，两种trust_env模式均设5秒总期限、禁重定向、64KiB上限，不发送Cookie/JWT；结果分别为200/2个有效公钥/5116字节/2.01秒，以及200/2个有效公钥/5116字节/1.06秒。诊断进程无代理环境变量。回环health为200且仅status=ok，回环任务无令牌为401/TOKEN_MISSING/no-store，公网无认证任务为302跳往本团队Access。只读取日志分类计数，尾部未见ERROR/WARNING等所检类别，不据此证明未发生故障；没有输出日志正文、令牌、claims或密钥。实际运行监听命令如下，返回8000、8010、20241及诊断ADB5037均为127.0.0.1，无8001：
+
+```powershell
+Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -in @(8000,8001,8010,5037,20241) } | Select-Object LocalAddress,LocalPort,OwningProcess | ConvertTo-Json -Compress
+```
+
+电脑Cloudflare页面只读确认：应用Session Duration为24 hours，唯一Email_policy的Session duration为Same as application session timeout，应用仅选One-time PIN。全局Access设置页两次读取超时，尚未确认全局覆盖；不保证实际会话必为24小时，未改Allow策略、登录方式、会话时长或JWT校验。
+
+先新增 `tests/integration/test_pwa_access_recovery_browser_f086.py`，实际红测如下，**1 failed / 1 passed，exit1，12.29秒**；失败在期望中文503解释，失败前的旧列表、未发送输入、无POST/导航及四静态缓存检查通过，恢复后断言当时尚未执行：
+
+```powershell
+.\.venv-win\Scripts\python.exe -B -m pytest -q -o 'addopts=' -p no:cacheprovider tests/integration/test_pwa_access_recovery_browser_f086.py
+```
+
+最小实现只在 `loadTasks` 对 `status===503 && code===CLOUDFLARE_ACCESS_UNAVAILABLE` 提示“助手暂时无法校验登录；请保持本页在前台并联网，页面会自动重读任务，暂时无需退出重新登录”。其他401/503保持原错误语义；未改认证、共享状态、审批、Outbox、30秒轮询或写命令重试规则。SW缓存名升为v13以刷新缓存脚本，四固定静态路径和API不拦截规则不变，契约同步当前版本；历史v12手机证据保留，不将其算成v13验收。
+
+修复后实际定向命令与结果：
+
+```powershell
+.\.venv-win\Scripts\python.exe -B -m pytest -q -o addopts='' -p no:cacheprovider tests/integration/test_pwa_access_recovery_browser_f086.py tests/integration/test_pwa_browser_f08.py tests/api/test_pwa_installation_f08.py tests/api/test_pwa_tasks_f08.py
+# 20 passed, 2 warnings，exit0，28.59秒；警告为依赖弃用
+.\.venv-win\Scripts\python.exe -B -m ruff check --no-cache tests/integration/test_pwa_access_recovery_browser_f086.py
+# All checks passed，exit0
+node --check web/pwa/app.js
+node --check web/pwa/service-worker.js
+# 均exit0
+```
+
+390px反例从任务列表/详情200切为503，驱动产品现有30秒只读轮询；503时保留原列表和未发送输入，恢复200后无需手动刷新或重登即显示新任务版本、移除读错，输入仍保留。全过程无POST或Access导航，缓存仍仅四固定静态路径且无API/输入正文；401同错误码及503其他错误码不显示新503提示。相邻任务、安装/旧缓存升级、Push及消息浏览器回归一起通过。这些为本地替身证据，不代替实际Cloudflare中断原因或v13手机复验。
+
+此轮是局部只读提示修复，未修改认证决策、共享持久状态、迁移或副作用链路，未重跑全量、PostgreSQL/Worker或真实业务回归，旧完整门禁数字不冒充本轮结果。截至该局部修复收尾，已有助手/health/Tunnel未重启，Admin未启动、未安装或启用扩展、未提交/推送；下方另记录随后已获授权的夹具安装。`git diff --check`实际执行exit0（仅已有LF/CRLF提示），工作区保留先前改动及本次提示/测试/文档增量。F08.6保持唯一当前BLOCKED项，F07/F08整体IN_PROGRESS；下一步仍在F08.6内核对手机v13与可用Schema草稿的验收条件，真实Push缺生产秘密后端，其余审批/边界及中断验收仍待补齐。
+
+**草稿验收夹具的安装前静态快照（当时未安装/未启用）**：宿主 `LocalArtifactStager` 只复制仓库 `extensions/example_echo` 到独立Git忽略的 `var/deployment/f08-access-2026-10-04/previews/example_echo/stage_8aef2afb6ed31e7ab00d04c9`，经 `ManifestParser` 静态校验，再以 `compute_artifact_hash` 复核材料哈希与stager一致，锁文件经 `effective_requirements` 读取。实际调用由 `.\.venv-win\Scripts\python.exe -B -` 的stdin脚本执行、exit0；没有调用安装器、ContractVerifier、Runtime、Admin、Settings或数据库，没有导入/构建/执行扩展。摘要保存为同目录 `stage_8aef2afb6ed31e7ab00d04c9.summary.json`。
+
+摘要为example.echo@0.1.0、入口example_echo.worker:create_extension、表单槽example.echo_settings、唯一工具example.echo/READ、必需/可选宿主能力均空、锁定第三方运行依赖为空；完整材料 `sha256:1c3725193434fa8d027ce95b87b5992fec4bef2fa72f82da18525a241ec70725`。源声明表单只含PUBLIC文本prefix/maxLength40；静态材料摘要不是可消费的Admin plan/nonce，也不冒称真实Worker form.list已通过。
+
+已请求本人按AGENTS.md确认：临时启动只监听回环8001的Admin（包含现有ENABLED Worker恢复），正式inspect核对同一材料哈希、确认精确预览后安装并启用，再核验真实form.list并做手机草稿/版本冲突检查。未获回复前不得build/install/import/execute扩展或启动Admin；若正式材料哈希漂移，须重新提供预览。venv只隔离依赖与崩溃，扩展仍是本机可信代码。当时等候授权；本人随后明确回复“允许该材料安装并启用，用于草稿验收”，后续实际操作见下文。F08.6状态与其他未验收项不变。
+
+
+**已授权Example Echo安装启用与手机草稿续验（2026-10-05；仍BLOCKED）**：本人明确授权上述精确哈希的材料及临时回环Admin（包含恢复现有ENABLED Worker）。由已核对的Git忽略运行器 `var/deployment/f08-access-2026-10-04/run-admin-for-draft-check.py` 在后台Hidden启动127.0.0.1:8001；它仅从已授权候选读取配置，不打印或另存凭据，生产设置、回环端口、邮件发送和浏览器提交禁用均断言通过。两份运行日志在启动前以CreateNew创建并限制本人/SYSTEM访问。
+
+实际安装HTTP操作由 `.\.venv-win\Scripts\python.exe -B -` 的stdin脚本执行，exit0（2.39秒）：先POST `/admin/v1/extensions/inspect` 指向冻结stage，断言Manifest ID/version/artifact hash、install模式、READ工具与空能力列表；确认预览材料与本人批准哈希一致后，使用仅内存中的plan_id/confirmation_nonce/preview_hash及accepted_warning=true POST `/admin/v1/extensions/install`，查询 `/admin/v1/extension-operations/{id}` 得SUCCEEDED/INSTALLED_DISABLED；再POST `/admin/v1/extensions/example.echo/enable` 并查询操作得SUCCEEDED/ENABLED。两项操作均复核版本0.1.0及相同材料哈希。幂等键在命令前保存到受控Git忽略回执 `var/deployment/f08-access-2026-10-04/example-echo-authorized-operations.json`；未保存或输出确认nonce、令牌或真实凭据，未重复安装。
+
+安装后通过电脑实际公共助手页面读取任务与草稿区域：出现可选 `example.echo · example.echo_settings`，原nju.smail不支持项仍禁用。这是当前公共进程按需Worker提供的页面观察，不是浏览器替身；未取得独立原始catalog JSON截图，不把已验证的Admin版本回执冒称为手机catalog响应逐字段核验。
+
+临时Admin收尾：首次停止前保护检查把venv启动器PID误当listener PID，守卫拒绝且未写停止标记。随后只读确认wrapper7296→监听进程39812，两者命令行均为上述授权运行器、唯一8001 listener为127.0.0.1，直属Worker PID17308/37756。仅在核对解析路径位于指定deployment目录后，以CreateNew写 `admin-draft-check.stop`，由运行器令Uvicorn优雅退出；未使用强制kill。20秒内检查成功、exit0，随后独立只读复核命令如下：
+
+```powershell
+$ErrorActionPreference='Stop'
+$taskAdmin = @(Get-CimInstance Win32_Process -Filter 'ProcessId=7296 OR ProcessId=39812 OR ProcessId=17308 OR ProcessId=37756')
+$taskListening = @(Get-NetTCPConnection -State Listen -LocalPort 8000,8001,8010,20241 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess)
+[pscustomobject]@{AdminAndOwnedWorkersRemaining=$taskAdmin.Count; StopMarkerExists=(Test-Path -LiteralPath 'var/deployment/f08-access-2026-10-04/admin-draft-check.stop'); Listeners=$taskListening} | ConvertTo-Json -Depth 3 -Compress
+```
+
+实测exit0：Admin及上述Worker剩余0、停止标记存在、8001无监听；原public6572/8000、health14976/8010、Tunnel8928/20241均保留为127.0.0.1 listener。公共进程按需启动的Worker不属于临时Admin，不宣称全部Worker退出；持久ENABLED状态保留。不增加开机自启/服务守护，不属于F09。
+
+手机本人先反馈保存前来源“未确定”、保存后“用户输入”，随后补充：任务标题“第二个自检，不执行外部动作”，草稿基准版本2，刷新并重新打开同一任务后仍恢复该测试值。电脑当时页面也显示草稿版本2、prefix测试文字及用户输入来源。这里只记录真实保存/刷新恢复及来源，跨设备409/412冲突、结果未确认/同键重试、Schema场景缓存和审批仍待真机检查；v13手机缓存更新未核对，真实Push仍缺生产秘密后端。
+
+本段是已授权部署操作与人工观察，没有新产品代码、迁移或新增自动化测试数量，没有重跑全量/完整PostgreSQL/Worker或真实业务回归；此前20 passed是503局部修复证据。F08.6保持唯一当前BLOCKED，F07/F08整体IN_PROGRESS；未发送邮件、提交ehall、提交/推送代码或推进F09/F10。
+
+
+**同一草稿的跨设备冲突与显式处理（2026-10-05；手机部分验收）**：本人按要求在手机将prefix改为“手机未保存自检-v2”，明确回复“已改，未保存”。电脑实际公共PWA在相同标题的已读版本2草稿中填写“电脑已保存自检-v2”并点击保存；首次AX显示正在保存，后续两次只读浏览器状态请求超时，因此未重复发送命令，未仅凭点击声称成功。改用原库独立asyncpg只读连接，设置default_transaction_read_only=on并在readonly=True事务内执行参数化SELECT，限定唯一标题、example.echo/example.echo_settings及0.1.0，只投影草稿版本、PUBLIC测试prefix与来源；没有调用startup/迁移/容器或读取其他正文。`.\.venv-win\Scripts\python.exe -X utf8 -B -` stdin命令实际exit0（1.28秒），返回matched_drafts=1、read_only=on、version=3、prefix为电脑测试值、来源USER_INPUT，确认写入完成。
+
+本人随后提供真实手机截图：顶部明确“服务器草稿已更新到版本3；本机输入未保存，请显式处理冲突”，基准版本仍2；prefix仍为手机未保存测试值，来源“用户输入（未保存）”；服务器面板列出版本3及电脑值，并展示保留本机/放弃本机两个显式选项。截图证明只读同步检测到新版本后未静默覆盖；该时点截图不是手机PUT的409/412动态反例，也没有展示保存版本4。本人随后按“保留本机输入，以服务器新版保存”→保存→刷新同一任务的步骤回复“是”，确认草稿版本4及手机测试值恢复；下方原库只读核对一致。未读取Cookie/JWT或其他敏感正文，未生成外部审批/提交；F08.6状态不变。
+
+
+**冲突处理后的原库只读复核**：实际执行以下命令，exit0（1.36秒），read_only=on、matched_drafts=1、version=4、prefix为手机未保存测试值、source=USER_INPUT；断言与本人手机反馈一致。不打印DSN/异常原文或其他数据，不执行迁移。
+
+```powershell
+@'
+import asyncio, json
+from pathlib import Path
+import asyncpg
+from dotenv import dotenv_values
+from personal_assistant.infrastructure.database.config import normalize_dsn
+
+async def main():
+    config=dotenv_values(Path('var/deployment/f08-access-2026-10-04/.env.template'),interpolate=False)
+    conn=await asyncpg.connect(normalize_dsn(config['PA_DATABASE_URL']),timeout=5,command_timeout=5,server_settings={'default_transaction_read_only':'on'})
+    try:
+        async with conn.transaction(readonly=True):
+            mode=await conn.fetchval('SHOW transaction_read_only')
+            rows=await conn.fetch("SELECT d.version, d.values_json->>'prefix' AS prefix, d.sources->>'prefix' AS source FROM task_form_drafts d JOIN tasks t ON t.id=d.task_id WHERE t.objective=$1 AND d.extension_id=$2 AND d.form_id=$3 AND d.extension_version=$4", '第二个自检，不执行外部动作','example.echo','example.echo_settings','0.1.0')
+            assert len(rows)==1, 'Ambiguous self-check draft'
+            row=dict(rows[0])
+            assert row['version']==4 and row['prefix']=='手机未保存自检-v2' and row['source']=='USER_INPUT', 'Self-check result mismatch; suppress content'
+            print(json.dumps({'read_only':mode,'matched_drafts':len(rows),'draft':row},ensure_ascii=False))
+    finally:
+        await conn.close()
+try:
+    asyncio.run(main())
+except Exception as exc:
+    print(json.dumps({'diagnostic_failed':type(exc).__name__}))
+    raise SystemExit(1)
+'@ | .\.venv-win\Scripts\python.exe -X utf8 -B -
+```
+
+该检查不是PostgreSQL测试套件或真实Worker回归。随后只请求本人查看使用草稿后的CacheStorage名称/路径与GET form-draft状态码/Cache-Control，不读取Cookie、JWT、响应正文或导出HAR；本人已提供下方两份截图。F08.6保持BLOCKED。
+
+
+**草稿使用后的手机缓存与响应头截图（2026-10-05）**：本人随后提供草稿使用后的远程DevTools截图：Cache Storage树仅一个assistant-static-v12节点，未设置路径过滤，列表仍只有四个固定静态路径；GET form-draft为200 OK、Cache-Control: no-store，Disable cache未勾选。本次仅确认该CacheStorage及草稿GET响应头，不扩大为浏览器HTTP缓存底层、LocalStorage/IndexedDB、其他敏感API或审批场景；手机仍为v12，v13更新尚待确认。截图未展示Cookie、JWT或响应正文，未将URL中的任务ID或其他请求标识复制到仓库；未声称Cf-Cache-Status或其他未展示头已核对。图片1左侧展示真实手机远程目标，Cache Storage展开且仅v12一个节点；图片2Network为All、录制开启，过滤form，General明确GET与200，Response headers可见no-store。
+
+当前源文件为assistant-static-v13，PWA根路径实现及现有editable映射均指向Desktop仓库；这是静态路径核对，不代替实际外网取得v13脚本的证据。已请求本人在同一远程Service workers点Update后刷新已保存页面与缓存列表，不注销Worker、清理站点数据或退出登录，等待版本/错误反馈。本轮仅查看已有源定义并更新TODO/NEXT_STEPS/环境指南，没有产品代码、迁移、认证或审批更改，没有重跑任何测试集合、全量/完整PostgreSQL/Worker或真实业务回归；早前20 passed不计作本轮结果。F08.6仍BLOCKED，F07/F08整体IN_PROGRESS，未提交、推送或部署新进程。
+
+
+**真实手机v13缓存升级截图（2026-10-05）**：本人按上一请求的Service workers Update及刷新步骤，随后提供Application面板截图。目标origin为https://yanshuheng.dpdns.org，Cache Storage树已展开且只显示assistant-static-v13，原v12节点不在列表；路径Filter为空，列表只有/ui/、/ui/app.js、/ui/manifest.webmanifest、/ui/styles.css，无API请求条目，未选缓存响应正文。该截图补齐真实手机的缓存名升级与旧节点消失观察；历史v12的任务及草稿场景证据保留。此前草稿GET的200/no-store仍是此前Network截图证据，未假称本图又验证了响应头。
+
+此截图未包含Service workers状态/控制器详情，不从缓存名推断Worker所有运行状态、应用脚本逐字版本或真实503中断复验。范围只覆盖本origin的CacheStorage版本及四路径，无浏览器HTTP缓存底层、LocalStorage/SessionStorage/IndexedDB、未访问的审批或全部敏感API验收。本人随后反馈助手origin的Local storage与Session storage均为空，IndexedDB界面显示未检测到数据库。该项按本人文本反馈记录，未获得这三处的独立截图或存储导出；未读取值/Cookies，不推断其他origin或浏览器HTTP缓存底层。未清理数据或要求退出登录。
+
+本轮只读取现有状态文档/前端源引用并更新TODO.md、NEXT_STEPS.md、F08_ENVIRONMENT_PREPARATION.md；没有产品行为、认证、共享状态、迁移或审批/Outbox变更，未跑新测试集合、全量/PostgreSQL/Worker或真实业务回归，不使用旧测试数字作为本次结果。F08.6仍唯一当前BLOCKED，F07/F08整体IN_PROGRESS；真实Push仍缺生产SecretStore，审批及其余边界尚待验收，不启动F09/F10，不提交/推送或部署新进程。
+
+
+**手机本地存储与私有路径续验（2026-10-05）**：本人随后反馈助手origin的Local storage与Session storage均为空，IndexedDB界面显示未检测到数据库。该项按本人文本反馈记录，未获得这三处的独立截图或存储导出；未读取值/Cookies，不推断其他origin或浏览器HTTP缓存底层。结合已提供的v13唯一四静态路径和先前任务/草稿GET no-store证据，确认范围仍限于本人实际使用场景，不扩充为所有敏感API、审批或浏览器全部缓存验收。
+
+下一步已请求本人保持Android Tailscale在线，在既有私有health Origin上检查/api/v1/approvals、/healthz/、/docs、/openapi.json及/是否均Not Found；本人随后回复“是的”，确认这五项均显示Not Found；结合先前三项，私有HTTPS八项页面观察已补齐。未获取新增五项的Network状态码/截图，不假称独立抓包已确认404。私有主机名只留在忽略部署配置，不写入Git；直接端口跨设备边界也未据此宣称通过。当前不新增代码或运行测试集合，F08.6仍BLOCKED、F07/F08整体IN_PROGRESS。
+
+
+**手机直接端口检查的只读准备**：实际执行以下宿主命令，exit0；取得当前电脑的Tailscale IPv4只用于手机检查，不将地址复制到Git。监听输出仅public8000及health8010、地址均127.0.0.1；8001无listener。该结果是宿主观察，不代替另一节点的端口访问验收，没有改Serve/Funnel或监听配置。
+
+```powershell
+$ErrorActionPreference='Stop'
+$taskTailscale = 'C:\Program Files\Tailscale\tailscale.exe'
+if (-not (Test-Path -LiteralPath $taskTailscale)) { throw 'Installed Tailscale CLI missing' }
+& $taskTailscale ip -4
+if ($LASTEXITCODE -ne 0) { throw 'Tailscale IPv4 query failed' }
+@(Get-NetTCPConnection -State Listen -LocalPort 8000,8001,8010 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess) | ConvertTo-Json -Compress
+```
+
+
+**下一步手机直接端口访问**：已使用只读CLI查询取得的电脑Tailscale IPv4，向本人提供带8000/8001端口的HTTP /healthz检查地址。要求保持手机Tailscale在线，逐项反馈实际错误或HTTP页面及是否自动升级HTTPS；不输入登录信息，不使用任务/审批正文。该请求不修改任何网络配置；本人结果见下段，未仅由宿主回环监听或浏览器TLS错误宣称手机端口不可达。地址仅用于聊天，本仓库不保存私有IPv4/节点主机名。
+
+
+**手机直接端口的浏览器反馈（2026-10-05）**：本人先反馈两项无法访问，后明确Chrome两个指定端口均ERR_CONNECTION_TIMED_OUT；Edge初次DNS_PROBE_FINISHED_NXDOMAIN，复试也为ERR_CONNECTION_TIMED_OUT。初次DNS错误不作为端口结果，保留重试历史；未修改DNS、代理或网络安全配置。此为手机浏览器在指定地址下的未成功直连观察，不独立归因于防火墙丢弃、未提供逐项最终URL截图或TCP抓包。此前私有health正常与非health路径Not Found、宿主只读回环监听作为分开的证据保留；本轮可记录手机未能直连8000/8001，不将超时原因描述为已定位的配置缺陷，也不要求恢复这些端口的私有访问。
+
+技术语义核对仅使用Chromium官方源码：ERR_CONNECTION_TIMED_OUT为连接尝试超时，DNS_PROBE_FINISHED_NXDOMAIN来自DNS探测分类，两者不合并为同一验收证据。参考[连接错误定义](https://chromium.googlesource.com/chromium/+/refs/heads/trunk/net/base/net_error_list.h)和[DNS探测分类](https://chromium.googlesource.com/chromium/src/+/main/chrome/browser/net/dns_probe_service_factory.cc)。未据此确认Edge首次失败的根因。
+
+F08.6当前已补的手机范围：任务/消息创建与同步、基础网络/后台恢复、草稿来源/保存恢复/跨设备只读同步冲突及显式保留保存4、v13四静态缓存、任务/草稿GET no-store、本地存储空的本人反馈、私有HTTPS八项页面观察及两项直接端口超时反馈。未完成：手机PUT的409/412与响应结果未确认/同键重试、正式审批、其他敏感场景/缓存、受控Cloudflare中断和助手主机离线、真实Push投递/撤销/最小通知点击；生产SecretStore依赖F09仍未满足，不把已有模拟或本地代码测试用于宣称这些真机条件通过。不擅自停原助手/health/Tunnel或改变排期，F08.6保持唯一当前BLOCKED、F07/F08整体IN_PROGRESS。
+
+本轮只修改TODO.md、NEXT_STEPS.md和F08_ENVIRONMENT_PREPARATION.md；未改代码、迁移、风险等级、审批或网络配置，未启动新进程、提交、推送或部署。仅文档续记与只读核对，没有运行测试集合、全量或PostgreSQL/Worker回归，旧数量不充作当前结果。
+
+**电脑断网后后台运行复核（2026-10-07；未重启）**：本人询问断网后如何重启后台。首次受限查询中Win32_Process拒绝访问，端口查询未得到可采信结果；随后经提升权限作只读查询，确认原公共wrapper12100/listener6572、health wrapper23548/listener14976及Tunnel8928仍存活，8000/8010/20241均仅监听127.0.0.1，8001未监听。因此没有重复启动或停止这些进程。
+
+实际命令为 `Get-NetTCPConnection -State Listen`（过滤8000/8001/8010/20241并仅输出LocalAddress/LocalPort/OwningProcess）、`Get-CimInstance Win32_Process`（仅输出PID、父PID、名称及已知助手命令行匹配布尔值），以及 `.\.venv-win\Scripts\python.exe -X utf8 -B -` 的httpx只读流式GET检查：timeout=8、follow_redirects=False、trust_env=False，健康正文读取上限256 bytes；不读取登录Cookie/JWT或任务正文。两次提升权限检查均exit0，结果如下：
+
+| 检查 | 实际结果 | 范围 |
+| --- | --- | --- |
+| http://127.0.0.1:8000/healthz | 401 | 公共进程有响应，未携带Access认证；不据此确认认证后的任务读取 |
+| http://127.0.0.1:8010/healthz | 200，最小正文{"status":"ok"} | 独立health进程正常 |
+| http://127.0.0.1:20241/ready | 200 | Tunnel在复核时已就绪 |
+| https://yanshuheng.dpdns.org/ui/ | 302，重定向主机为既有Access团队 | 未登录边缘身份层仍生效；不跟随登录或保存Location查询参数 |
+
+恢复联网后建议先保留当前页面并观察，必要时只点“刷新状态”，无需因断网重复启动既有进程。尚未收到这次电脑断网期间的手机提示或恢复后的手机结果，不将上述当前宿主/边缘检查记作主机离线与真机自动恢复验收通过。本轮仅运行状态诊断与文档更新，没有产品修改或pytest/全量/PostgreSQL/Worker测试，没有启动新后台、改变配置、提交或推送；F08.6仍BLOCKED，F07/F08整体IN_PROGRESS。
+
+**电脑断网与恢复的手机反馈及范围认可（2026-10-07）**：本人反馈：“电脑断网期间手机提示事件连接中断，电脑恢复网络后手机任务列表自动恢复正常，顶端提示未自动恢复正常，手动刷新后才恢复。其实我认为这是可以接受的”。据此，将主机断网场景记录为按本人认可范围通过，并保留体验限制：任务列表自动恢复；顶部连接提示需要手动刷新才恢复，不能写成顶部提示或SSE自动重连均已通过。具体手动刷新方式、恢复耗时及SSE连接本身未独立观测；不推断提示滞留的根因，不以列表正常作为SSE已经恢复的证据。本轮按用户已认可的范围记录，不为此新增代码修复。
+
+复现入口沿用本轮人工步骤：手机使用独立于电脑的移动数据并保持助手页面前台，确认草稿已保存且没有结果未确认的原请求；断开电脑网络、观察手机提示；恢复电脑网络、观察列表和顶部提示，若顶部提示仍未恢复再手动刷新。本次结果来自本人真机反馈，之前的宿主端口与health/Tunnel检查作为另项证据保留；没有重新进行断网操作，不外推为关机/进程崩溃恢复或独立Cloudflare中断已经验证。
+
+截至此反馈，主机网络断开/恢复这一项已有本人认可；余项仍为手机PUT409/412、响应结果未确认与同键重试、正式审批及其他敏感场景缓存、独立Cloudflare中断、真实Push投递/撤销/最小通知点击。生产SecretStore仍依赖F09，未自行调整排期。F08.6保持唯一当前BLOCKED，F07/F08整体IN_PROGRESS。本轮只更新TODO.md、NEXT_STEPS.md和环境指南，没有代码、认证、共享状态、迁移或部署更改，没有运行pytest/全量/PostgreSQL/Worker集合；实际运行 `git diff --check` → exit0（仅已有LF/CRLF提示）；写入该结果后再次同命令检查。未运行测试集合，不复用旧测试数量。
+
+**真机草稿409续验准备（2026-10-07；未执行保存）**：读取当前saveFormDraft、loadFormDraft及既有390px反例，确认真实草稿CAS契约为409；手机前台只读同步可能先发现新版本并阻止发送，因此准备在saveFormDraft请求发出前用远程DevTools普通行断点暂停，再由电脑保存N+1、恢复手机发送原N请求。当前未格式化源请求行为app.js:628，以实际Sources函数/PUT语句校对为准。环境指南新增逐步操作及恢复断点要求；未添加扩展脚本、生产测试端点、响应覆盖或认证绕过。已向本人请求手机基准版本及Inspect可用性，回复和真正PUT409结果均待收到。
+
+桌面对照控制尝试：原IAB标签未找到、列表为空；新开助手页面的控制调用超时，重新绑定后见助手壳、Failed to fetch及无任务列表。点只读刷新仍Failed to fetch；整页重读初见正在连接，后续状态捕获又超时。本轮没有点创建任务或保存草稿；未读取Cookie/JWT、不确定失败根因，不将该浏览器控制问题外推为助手停止或手机掉线。随后以本人远程DevTools/电脑PWA操作配合完成，当前不重复启动服务、安装扩展或改Access。
+
+本轮仅准备步骤和记录，修改NEXT_STEPS.md及环境指南；没有产品/迁移/部署修改，没有运行pytest/全量/PostgreSQL/Worker集合，没有真实提交或邮件/Push投递。当前仍缺真机409和结果未确认/同键重试证据，F08.6保持唯一当前BLOCKED，F07/F08整体IN_PROGRESS；待手机准备反馈后继续同一编号。实际运行 `git diff --check` → exit0（仅已有LF/CRLF提示），写入结果后再检查；不计入自动化测试数量。
+
+**手机版本5准备反馈与原库只读基线（2026-10-07）**：本人回复“没保存前的基准版本是5，现在可以打开”，确认基准5与远程Inspect入口。随后已请求在saveFormDraft的PUT调用前设普通行断点，手机只点击一次保存并保持暂停，等待本人反馈；此时尚未收到暂停或请求结果，未在电脑发送对照保存。
+
+原库只读命令实际exit0（2.06秒），transaction_read_only=on、matched_drafts=1、version=5、saved_command_receipts=5。该基线只投影版本及该草稿已保存命令回执数量，不读取表单值、任务ID、键或用户身份；目标限定已授权本机原库，repeatable-read/readonly事务与5秒连接/命令超时。不是PostgreSQL测试套件，也不能证明尚未执行的冲突/重放通过。完整实际命令如下：
+
+```powershell
+@'
+import asyncio, json
+from pathlib import Path
+from urllib.parse import urlsplit
+import asyncpg
+from dotenv import dotenv_values
+from personal_assistant.infrastructure.database.config import normalize_dsn
+
+async def main():
+    config = dotenv_values(Path('var/deployment/f08-access-2026-10-04/.env.template'), interpolate=False)
+    dsn = normalize_dsn(config['PA_DATABASE_URL'])
+    target = urlsplit(dsn)
+    if target.hostname != '127.0.0.1' or target.port != 5432 or target.username != 'assistant' or target.path != '/assistant':
+        raise ValueError('Original local database target mismatch')
+    conn = await asyncpg.connect(dsn, timeout=5, command_timeout=5, server_settings={'default_transaction_read_only':'on'})
+    try:
+        async with conn.transaction(isolation='repeatable_read', readonly=True):
+            mode = await conn.fetchval('SHOW transaction_read_only')
+            rows = await conn.fetch('''SELECT d.version,
+                (SELECT count(*) FROM task_form_draft_commands c WHERE c.receipt->>'task_id'=d.task_id) AS receipts
+                FROM task_form_drafts d JOIN tasks t ON t.id=d.task_id
+                WHERE t.objective=$1 AND d.extension_id=$2 AND d.form_id=$3 AND d.extension_version=$4''',
+                '第二个自检，不执行外部动作', 'example.echo', 'example.echo_settings', '0.1.0')
+            assert mode == 'on' and len(rows) == 1, 'Read-only or unique draft check failed'
+            row = dict(rows[0])
+            assert row['version'] == 5, 'Draft changed; do not send the planned stale request yet'
+            print(json.dumps({'read_only':mode, 'matched_drafts':len(rows), 'version':row['version'], 'saved_command_receipts':row['receipts']}))
+    finally:
+        await conn.close()
+try:
+    asyncio.run(main())
+except Exception as exc:
+    print(json.dumps({'diagnostic_failed':type(exc).__name__}))
+    raise SystemExit(1)
+'@ | .\.venv-win\Scripts\python.exe -X utf8 -B -
+```
+
+F08.6保持BLOCKED；下一步只在本人确认手机暂停后由电脑保存版本6，再恢复手机旧版本5的请求并核对真实409。没有运行自动化测试、提交/推送或新增部署。
+
+**手机保存已暂停、电脑对照版本6（2026-10-08；409待反馈）**：本人确认手机已在此前指定的saveFormDraft请求前暂停。桌面自动控制此前超时，因此由本人在正常电脑PWA对相同自检草稿保存“电脑冲突自检-20261007”，随后回复版本6。一次原库只读核对实际exit0（0.99秒），read_only=on、matched_drafts=1、version=6、saved_command_receipts=6、matches_computer_test=true；与先前基线5/5比较仅新增一次保存回执。查询只投影版本、数量及指定PUBLIC自检值的匹配布尔值，不输出正文、任务ID或键。该观察说明电脑保存已持久化，不代替手机409结果。
+
+实际只读命令：
+
+```powershell
+@'
+import asyncio, json
+from pathlib import Path
+from urllib.parse import urlsplit
+import asyncpg
+from dotenv import dotenv_values
+from personal_assistant.infrastructure.database.config import normalize_dsn
+
+async def main():
+    config = dotenv_values(Path('var/deployment/f08-access-2026-10-04/.env.template'), interpolate=False)
+    dsn = normalize_dsn(config['PA_DATABASE_URL'])
+    target = urlsplit(dsn)
+    if target.hostname != '127.0.0.1' or target.port != 5432 or target.username != 'assistant' or target.path != '/assistant':
+        raise ValueError('Original local database target mismatch')
+    conn = await asyncpg.connect(dsn, timeout=5, command_timeout=5, server_settings={'default_transaction_read_only':'on'})
+    try:
+        async with conn.transaction(isolation='repeatable_read', readonly=True):
+            mode = await conn.fetchval('SHOW transaction_read_only')
+            rows = await conn.fetch('''SELECT d.version,
+                d.values_json->>'prefix'=$5 AS matches_computer_test,
+                (SELECT count(*) FROM task_form_draft_commands c WHERE c.receipt->>'task_id'=d.task_id) AS receipts
+                FROM task_form_drafts d JOIN tasks t ON t.id=d.task_id
+                WHERE t.objective=$1 AND d.extension_id=$2 AND d.form_id=$3 AND d.extension_version=$4''',
+                '第二个自检，不执行外部动作', 'example.echo', 'example.echo_settings', '0.1.0', '电脑冲突自检-20261007')
+            assert mode == 'on' and len(rows) == 1, 'Read-only or unique draft check failed'
+            row = dict(rows[0])
+            print(json.dumps({'read_only':mode, 'matched_drafts':len(rows), 'version':row['version'], 'saved_command_receipts':row['receipts'], 'matches_computer_test':row['matches_computer_test']}))
+    finally:
+        await conn.close()
+try:
+    asyncio.run(main())
+except Exception as exc:
+    print(json.dumps({'diagnostic_failed':type(exc).__name__}))
+    raise SystemExit(1)
+'@ | .\.venv-win\Scripts\python.exe -X utf8 -B -
+```
+
+已请求本人仅取消本次手机行断点并Resume/F8，核对手机原版5的实际PUT状态、本机测试输入是否保留及服务器面板是否为6；先不再次保存或选择冲突处理。此时手机恢复/409反馈仍待收到；没有将暂停或预期冲突记成通过，没有由宿主直接改库、发送公共写请求或操纵浏览器认证。没有新增代码、自动化测试、部署、提交或推送；F08.6仍BLOCKED，下一步仍是同一真机409与同键重试项目。
+
+**真实手机PUT409与采用服务器草稿（2026-10-08；本项已补证）**：本人先反馈手机原版5的保存返回409、输入仍为“手机冲突自检-20261007”、基准仍为5、冲突面板显示服务器6；随后明确该请求方法是PUT，并点击“使用服务器草稿，放弃本机输入”（未再次保存）。本人确认页面变为版本6、prefix变为“电脑冲突自检-20261007”、冲突面板消失。本次实际409及页面处理来自本人远程DevTools/真机反馈，没有导出请求正文、认证材料或HAR，也没有独立捕获该409截图。生产CAS契约返回409，未制造412；412兼容分支不计为新的真机证据。
+
+采用服务器草稿后再次执行上一节完整只读命令，实际exit0（0.93秒）：read_only=on、matched_drafts=1、version=6、saved_command_receipts=6、matches_computer_test=true。与电脑成功保存后的6/6相同，说明这次旧版手机请求及显式采用服务器草稿未增加版本或成功保存回执。查询仍为原库只读事务，仅投影版本、回执数量及PUBLIC自检值匹配布尔值，没有通过直接改库制造冲突。该结论不外推为响应丢失重放已经验证。
+
+下一步仅准备同一自检草稿的回执丢失/同键重试：手机基准6，测试文字“手机回执重试自检-20261008”。先在远程DevTools使用自定义网络限速（Download 1 Kbps、Upload 100000 Kbps、Latency 60000 ms，Keep log），不点击保存；待本人确认准备后只保存一次。必须先核对原库已提交新版本且手机尚未收到完整回执，再中断手机响应；若未写入或手机已确认成功，本轮不能计作丢回执反例。恢复No throttling后只允许原请求手动同键重试，核对版本/回执数量不再次增加；实际结果尚待执行。Chrome官方[限速配置](https://developer.chrome.com/docs/devtools/settings/throttling)和[Network离线操作](https://developer.chrome.com/docs/devtools/network/reference)仅支持操作机制，不能替代上述运行证据。自定义吞吐量使用整数，不用会被当前DevTools实现按整数转换的小数速率。
+
+本轮仅文档更新与原库只读核对，没有产品代码修改、测试集合、全量或PostgreSQL/Worker回归；没有重启或部署服务、修改认证/迁移/网络配置、提交或推送。F08.6仍为唯一当前BLOCKED；尚缺手机响应丢失/同键重试、正式审批及其他敏感场景缓存、独立Cloudflare中断与真实Push（生产SecretStore依赖F09），F07/F08整体仍IN_PROGRESS。
+
+**首次限速保存为正常成功，不计丢回执通过（2026-10-08）**：本人按准备步骤点击一次保存并反馈“正在保存”。在仍等待反馈时原库只读命令实际exit0（0.98秒）：read_only=on、matched_drafts=1、version=7、saved_command_receipts=7、matches_phone_retry_test=true。但随后本人明确手机已经显示“草稿已保存，服务器版本7”，因此没有切Offline，也没有制造结果未确认或执行重试。该保存仅确认正常持久化；不能把查询先于手机反馈当作完整回执已丢失。
+
+本次精确只读命令如下（和版本6核对一样仅输出元数据及PUBLIC自检值匹配布尔值）：
+
+```powershell
+@'
+import asyncio, json
+from pathlib import Path
+from urllib.parse import urlsplit
+import asyncpg
+from dotenv import dotenv_values
+from personal_assistant.infrastructure.database.config import normalize_dsn
+
+async def main():
+    config = dotenv_values(Path('var/deployment/f08-access-2026-10-04/.env.template'), interpolate=False)
+    dsn = normalize_dsn(config['PA_DATABASE_URL'])
+    target = urlsplit(dsn)
+    if target.hostname != '127.0.0.1' or target.port != 5432 or target.username != 'assistant' or target.path != '/assistant':
+        raise ValueError('Original local database target mismatch')
+    conn = await asyncpg.connect(dsn, timeout=5, command_timeout=5, server_settings={'default_transaction_read_only':'on'})
+    try:
+        async with conn.transaction(isolation='repeatable_read', readonly=True):
+            mode = await conn.fetchval('SHOW transaction_read_only')
+            rows = await conn.fetch('''SELECT d.version,
+                d.values_json->>'prefix'=$5 AS matches_phone_retry_test,
+                (SELECT count(*) FROM task_form_draft_commands c WHERE c.receipt->>'task_id'=d.task_id) AS receipts
+                FROM task_form_drafts d JOIN tasks t ON t.id=d.task_id
+                WHERE t.objective=$1 AND d.extension_id=$2 AND d.form_id=$3 AND d.extension_version=$4''',
+                '第二个自检，不执行外部动作', 'example.echo', 'example.echo_settings', '0.1.0', '手机回执重试自检-20261008')
+            assert mode == 'on' and len(rows) == 1, 'Read-only or unique draft check failed'
+            row = dict(rows[0])
+            print(json.dumps({'read_only':mode, 'matched_drafts':len(rows), 'version':row['version'], 'saved_command_receipts':row['receipts'], 'matches_phone_retry_test':row['matches_phone_retry_test']}))
+    finally:
+        await conn.close()
+try:
+    asyncio.run(main())
+except Exception as exc:
+    print(json.dumps({'diagnostic_failed':type(exc).__name__}))
+    raise SystemExit(1)
+'@ | .\.venv-win\Scripts\python.exe -X utf8 -B -
+```
+
+下一次受控尝试调整为同一草稿基准7、PUBLIC文字“手机回执丢失自检-20261008”，自定义网络Latency改为300000 ms，下载/上传仍1/100000 Kbps。在点击一次保存后约5秒、手机仍等待时由本人直接切Offline，再核对原库是否提交。该顺序减少人工反馈往返期间完整回执先到达的机会；只有已提交且页面结果未确认、原请求绑定保留，才继续手动同键重试。尚未收到本次中断结果；若已确认正常成功或没有提交，仍不计作该反例通过。没有将自定义网络仿真外推为独立Cloudflare中断证据。
+
+**第二次Offline反馈与草稿读取失败修复（2026-10-08；真机丢回执仍未验证）**：本人切Offline后只反馈“无法编辑草稿：Failed to fetch”；原库只读核对实际exit0（1.09秒），read_only=on、matched_drafts=1、version=8、saved_command_receipts=8、matches_phone_retry_test=true。恢复No throttling且未刷新/另发保存后，本人反馈测试输入仍在、基准8、按钮没有“重试”、没有冲突面板。此时服务器已提交，但没有确认原PUT以失败结束或页面进入结果未确认，也没有进行同键重试；不把该场景计为真机丢回执/重放通过。不推断原PUT响应在Offline期间是否已经到达或在恢复后继续完成。没有第三次手机保存；真实同键重试仍待后续可靠的中断方式。
+
+本次实际只读命令（仅版本/数量及PUBLIC自检值匹配，不读取/输出原请求键或正文）：
+
+```powershell
+@'
+import asyncio, json
+from pathlib import Path
+from urllib.parse import urlsplit
+import asyncpg
+from dotenv import dotenv_values
+from personal_assistant.infrastructure.database.config import normalize_dsn
+
+async def main():
+    config = dotenv_values(Path('var/deployment/f08-access-2026-10-04/.env.template'), interpolate=False)
+    dsn = normalize_dsn(config['PA_DATABASE_URL'])
+    target = urlsplit(dsn)
+    if target.hostname != '127.0.0.1' or target.port != 5432 or target.username != 'assistant' or target.path != '/assistant':
+        raise ValueError('Original local database target mismatch')
+    conn = await asyncpg.connect(dsn, timeout=5, command_timeout=5, server_settings={'default_transaction_read_only':'on'})
+    try:
+        async with conn.transaction(isolation='repeatable_read', readonly=True):
+            mode = await conn.fetchval('SHOW transaction_read_only')
+            rows = await conn.fetch('''SELECT d.version,
+                d.values_json->>'prefix'=$5 AS matches_phone_retry_test,
+                (SELECT count(*) FROM task_form_draft_commands c WHERE c.receipt->>'task_id'=d.task_id) AS receipts
+                FROM task_form_drafts d JOIN tasks t ON t.id=d.task_id
+                WHERE t.objective=$1 AND d.extension_id=$2 AND d.form_id=$3 AND d.extension_version=$4''',
+                '第二个自检，不执行外部动作', 'example.echo', 'example.echo_settings', '0.1.0', '手机回执丢失自检-20261008')
+            assert mode == 'on' and len(rows) == 1, 'Read-only or unique draft check failed'
+            row = dict(rows[0])
+            print(json.dumps({'read_only':mode, 'matched_drafts':len(rows), 'version':row['version'], 'saved_command_receipts':row['receipts'], 'matches_phone_retry_test':row['matches_phone_retry_test']}))
+    finally:
+        await conn.close()
+try:
+    asyncio.run(main())
+except Exception as exc:
+    print(json.dumps({'diagnostic_failed':type(exc).__name__}))
+    raise SystemExit(1)
+'@ | .\.venv-win\Scripts\python.exe -X utf8 -B -
+```
+
+同时确定并修复了本项局部UI问题：loadFormDraft的GET失败原先无条件清空表单区域，遮住已保留在页面内存的输入及原请求。现仅在读取暂时失败（网络错误、408或5xx）且已有经校验的Schema与本机输入/待确认请求/冲突时，继续显示原基准、值和对应保存状态；正在发送时保持按钮禁用，结果未确认时保留原键/版本及手动重试入口，不因GET失败释放或重建保存命令。成功返回但Schema不支持的响应仍拒绝编辑，404目录与其他非暂时错误的原处理不变。不改API、CAS、幂等指纹、认证、审批、迁移、秘密后端或发送链路。Service Worker升v14以更新静态脚本，缓存与拦截仍仅原四条固定静态路径；不将本机草稿放入任何持久浏览器存储。
+
+先新增两项390px失败反例，修正新增测试的缩进笔误后，旧实现实际两项均失败于字段元素被清空。最小实现后同命令exit0、两项通过；随后强化同一反例，加入PUT已提交但回执仍等待时GET503，确认原版本/输入/禁用状态保持，之后丢回执与恢复重读并手动同键重试仍只有一份回执、版本只增加一次。另一反例覆盖真实fetch失败、未保存输入保留与恢复保存，并验证随后返回不支持Schema仍清空编辑入口。这些为本地模拟API/390px Chromium结果，不代替手机同键重试证据。
+
+实际测试命令与结果：
+
+| 命令 | 实际结果 |
+| --- | --- |
+| `.\.venv-win\Scripts\python.exe -m pytest tests/integration/test_pwa_form_drafts_browser_f08.py -q -k 'failed_draft_reread or failed_network_read'`（初版新增测试） | exit2，新增测试缩进笔误/采集错误；纠正后才进行有效红测，不当作产品失败反例证据 |
+| `.\.venv-win\Scripts\python.exe -X utf8 -m pytest -p no:cacheprovider tests/integration/test_pwa_form_drafts_browser_f08.py -q -k 'failed_draft_reread or failed_network_read'` | 实现前exit1、2 failed；实现后exit0、2项通过。禁用不可写的pytest缓存，不跳过测试 |
+| `.\.venv-win\Scripts\python.exe -X utf8 -m pytest -p no:cacheprovider -o 'addopts=--strict-markers' -q tests/integration/test_pwa_form_drafts_browser_f08.py tests/integration/test_pwa_browser_f08.py tests/api/test_pwa_installation_f08.py` | exit0，21 passed、2个依赖弃用警告，55.26秒；覆盖相邻PWA及静态缓存升级/安装 |
+| `.\.venv-win\Scripts\python.exe -X utf8 -m pytest -p no:cacheprovider -o 'addopts=--strict-markers' -q tests/integration/test_pwa_form_drafts_browser_f08.py`（强化在途反例后） | exit0，9 passed，19.66秒；与上一行有重复，不加总为独立用例数 |
+| `.\.venv-win\Scripts\python.exe -X utf8 -m ruff check --no-cache tests/integration/test_pwa_form_drafts_browser_f08.py` | 新增fixture长行先报E501，改为多行后通过 |
+| `D:\nodejs\node.exe --check web/pwa/app.js` / `D:\nodejs\node.exe --check web/pwa/service-worker.js` | 均通过 |
+| `git diff --check` | 首次指出新增测试末尾空行；删去多余空行后收尾再次核对，结果见收尾记录 |
+
+本轮改动web/pwa/app.js、web/pwa/service-worker.js、tests/integration/test_pwa_form_drafts_browser_f08.py及TODO/NEXT_STEPS/环境指南/契约文档；保留原工作区已有改动。本项属于读取失败显示的局部修复，按约定仅跑定向测试与静态检查，没有重跑全量或完整PostgreSQL/Worker套件，没有访问真实邮箱、Push或ehall，没有重启既有服务、修改网络配置、提交或推送。尚缺手机v14复验、可靠的真实丢回执/同键重试及其余F08.6条件；F08.6仍唯一当前BLOCKED，F07/F08整体IN_PROGRESS。
+
+本次局部修复收尾：实际Desktop仓库的Ruff目标文件、两份Node --check及git diff --check均exit0；仅保留已有LF/CRLF提示。git diff人工复核确认只新增草稿读取失败的状态保留、两项反例及固定静态缓存版本14，原工作区其他改动未回退。没有用静态或本地浏览器结果宣称手机v14或真实丢回执重放已通过。
+
+**手机仍为v13的更新诊断（2026-10-08；v14真机未确认）**：本人按此前刷新步骤反馈CacheStorage仍为v13，故没有继续用旧脚本验收局部修复。只读检查当前Desktop仓库的Service Worker第一行为v14；同一.venv-win导入的personal_assistant.app路径及_pwa_root均指向该Desktop仓库。命令实际exit0（2.09秒），没有build_container、启动应用/Worker、执行迁移或读取认证材料。这里只确认当前解释器与磁盘目录，不宣称已经读取了现有公共进程的认证后HTTP正文，也不据此确认手机或Cloudflare收到新版。
+
+实际只读命令：
+
+```powershell
+@'
+import json
+from pathlib import Path
+import personal_assistant.app as package
+from personal_assistant.app import _pwa_root
+
+runtime = json.loads(Path('var/deployment/f08-access-2026-10-04/runtime.json').read_text(encoding='utf-8-sig'))
+print(json.dumps({'runtime_field_names':list(runtime), 'imported_app_file':package.__file__, 'pwa_root':str(_pwa_root()), 'source_worker_first_line':(_pwa_root()/'service-worker.js').read_text(encoding='utf-8').splitlines()[0]}))
+'@ | .\.venv-win\Scripts\python.exe -X utf8 -B -
+rg --files --hidden --no-ignore var/deployment/f08-access-2026-10-04 -g '*.ps1' -g '*.py'
+```
+
+本人已被请求在原手机远程DevTools Application → Service workers确认非Offline，点当前注册的Update一次，观察Status、错误及缓存版本；不注销注册、不清站点数据，也不勾选Update on reload/Bypass for network以替代正常生命周期。该一次更新及状态/错误的查看方式按[Chrome官方PWA调试说明](https://developer.chrome.com/docs/devtools/progressive-web-apps)核对。实际手机更新结果尚待反馈，未定位为边缘缓存、鉴权或安装失败，不凭猜测改变CDN缓存规则、认证策略或重启既有服务。
+
+本轮只读诊断与文档续记，没有产品代码更改或新增测试执行，不复用上一轮21/9的数量作为本轮结果。下一步仍是F08.6的v14更新与读取失败真机复验；真实丢回执/同键重放仍未验证。F08.6保持唯一当前BLOCKED，F07/F08整体IN_PROGRESS；未提交、推送或新增部署。
+
+**一次Update后的手机反馈（2026-10-08）**：本人反馈“#7 activated and is running”，CacheStorage仍v13。按Chrome官方说明，Status的编号不是本项目缓存版本，因此只记录现有注册仍运行；尚未确认运行脚本的CACHE常量、新脚本下载响应或安装错误。已请求本人读取Source第一行，并在Network核对一次更新请求的状态码与CF-Cache-Status/Age/Cache-Control；不索取完整Headers或认证材料。未清站点数据、注销注册、重启服务或修改缓存策略。Cloudflare官方默认缓存行为说明JS等静态扩展在无缓存头时可能按状态码缓存；本项目现有安全响应头只为/api/设置no-store。但缺少本次手机请求的实际头，仍不能认定边缘缓存是根因。参考[Cloudflare默认缓存行为](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/)。本轮git diff --check实际exit0（仅已有换行提示），未重新运行测试集合。F08.6仍BLOCKED。
+
+**运行源首行确认v13（2026-10-08）**：本人从当前手机注册Source抄得 `const CACHE = "assistant-static-v13";`，并反馈当前页面Network过滤service-worker.js未出现更新请求。现可确认该手机当时运行的是v13，不只依赖缓存树显示；还未确认实际网络交付的文件是否为v13。已请求在同一被Inspect的手机Chrome标签页只读打开稳定脚本URL及附PUBLIC诊断参数的同一路径：`/ui/service-worker.js`、`/ui/service-worker.js?f086=20261008-v14`，分别核对首行和响应状态/CF-Cache-Status/Age/Cache-Control。本人此前已确认保存到8且无未保存请求，故该导航不丢弃未确认的命令；诊断参数不改正式注册URL，也不执行保存或安装。两项真实HTTP结果尚待反馈，未据此改策略或宣称缓存根因已定位。本轮仅文档续记与静态差异检查，没有新增测试执行；F08.6仍唯一当前BLOCKED。
+
+
+**静态 HTTP 缓存最小修复及公共进程重新加载（2026-10-08）**：用户认为反复真机实验过重，本轮收缩为固定静态脚本交付问题；停止要求手机反复操作DevTools和制造丢回执，不将未测项目计为通过。代码确认原 `/ui/` 响应未设Cache-Control，固定名JS可能被HTTP/CDN缓存；运行源v13尚不能证明具体根因。对稳定与查询参数脚本的普通Python读取，默认沙箱均URLError；提升权限后稳定地址URLError、查询地址403/no-store。已有浏览器只读诊断标签页到达Access登录页，随后关闭；未读取Cookie、令牌或绕过Access。这些请求没有取得已认证脚本内容。
+
+最小实现仅在 `SecurityHeadersMiddleware` 的既有no-store分支加入 `/ui/`；固定UI的GET、HEAD、304及带诊断查询的Worker响应均禁止HTTP缓存，API策略保持no-store。Service Worker仍为v14、CacheStorage仍只存四个固定静态资源，未添加敏感响应、扩展JS、自动升级脚本或持久化前端状态。测试先失败，后修复；如下结果均为本轮实跑：
+
+```powershell
+# 实现前：1 failed / 4 deselected / 2依赖警告；实现后同命令：1 passed / 4 deselected / 2警告。
+.\.venv-win\Scripts\python.exe -X utf8 -m pytest -p no:cacheprovider -o 'addopts=--strict-markers' -q tests/api/test_pwa_installation_f08.py -k fixed_ui_files
+# 29 passed / 2依赖警告，23.18s；包含上面1例，不另行加总。
+.\.venv-win\Scripts\python.exe -X utf8 -m pytest -p no:cacheprovider -o 'addopts=--strict-markers' -q tests/api/test_pwa_installation_f08.py tests/api/test_api.py tests/api/test_boundaries.py tests/api/test_pwa_tasks_f08.py tests/integration/test_pwa_browser_f08.py
+# exit0：All checks passed。
+.\.venv-win\Scripts\python.exe -X utf8 -m ruff check --no-cache src/personal_assistant/api/middleware/security_headers.py tests/api/test_pwa_installation_f08.py
+# exit0：1 source file无问题。
+.\.venv-win\Scripts\python.exe -X utf8 -m mypy src/personal_assistant/api/middleware/security_headers.py
+# 两项exit0。
+& 'D:\nodejs\node.exe' --check web/pwa/app.js
+& 'D:\nodejs\node.exe' --check web/pwa/service-worker.js
+git diff --check
+```
+
+按本轮小范围要求只跑相关定向API/390px浏览器及静态检查，未跑全套、PostgreSQL/Worker套件或真实业务环境回归；本地浏览器使用模拟服务，不能代替手机v14交付证据。Cloudflare默认尊重no-store，缓存规则仍可覆盖源站策略，因此尚不能声称已清除现存边缘副本。[Cloudflare默认缓存行为](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/)
+
+沿用用户已有的启动接入及现有已启用扩展恢复授权，只重新加载公共助手。先核对wrapper12100/listener6572及直属进程、独立控制台、原配置发送/提交关闭，排除health/Tunnel；Ctrl+C请求未使旧进程退出，20秒等待失败且没有启动替代。Ctrl+Break使四个原Worker退出并释放8000，但诊断辅助进程也退出非零、两个原公共Python仍在，故未按该命令宣称重启成功。再次核验这两个Python的精确模块/回环端口/配置参数后，执行 `Stop-Process -Id 6572`、`Stop-Process -Id 12100` 清理残留，确认原Worker均退出且8000无监听。随后使用 `Start-Process -WindowStyle Hidden`、原工作目录/原env-file及以下实际参数启动公共助手，stdout/stderr留在既有受限Git忽略目录的runtime-public-cache-fix.out.log/.err.log：
+
+```powershell
+.\.venv-win\Scripts\python.exe -m uvicorn personal_assistant.app:app --host 127.0.0.1 --port 8000 --no-access-log --timeout-graceful-shutdown 10 --env-file var/deployment/f08-access-2026-10-04/.env.template
+```
+
+10秒关停等待上限只作为本次临时Uvicorn参数，避免后续关停等待长连接；未实现F09服务守护或开机自启。新wrapper38220/listener30748，runtime.json已更新实际PID。本轮只读黑盒实际结果：公共 `http://127.0.0.1:8000/ui/service-worker.js` 和 `/api/v1/tasks` 无认证均401且Cache-Control:no-store；独立8010的health为200、最小status:ok；Tunnel回环ready为200。8000与8010仍仅监听127.0.0.1，health23548/14976和Tunnel8928保持运行。未更改DNS、Access规则、数据库凭据或迁移文件，未提交/推送；上述关停步骤仅记录本次旧PID，不能用于再次重启。
+
+下一步仅请手机普通刷新一次，反馈列表/连接是否正常；不再要求DevTools、退出登录或保存草稿。手机升级v14、真正丢回执/同键重试仍未验证；正式审批、其余未访问敏感缓存、独立Cloudflare中断及真实Push仍未补齐，F08.6保持唯一当前BLOCKED，F07/F08整体IN_PROGRESS，不启动后续编号。
+
+
+**普通刷新反馈（2026-10-08）**：公共进程重新加载后，本人对“普通刷新一次、只反馈任务列表与连接”的请求回复“列表和连接正常”。这仅作为本次正常使用恢复的人工证据，不证明手机当前运行v14或所有边缘旧副本已失效。停止反复DevTools/丢回执操作；此前真正响应丢失重试及正式审批/真实Push等未验收项继续保留，阶段状态不变。本轮新增改动文件为 src/personal_assistant/api/middleware/security_headers.py、tests/api/test_pwa_installation_f08.py、TODO.md、docs/CONTRACTS_AND_INTERFACES.md、docs/NEXT_STEPS.md，忽略目录另更新runtime.json及运行日志。
+
+
+**下一实际依赖盘点（2026-10-08）**：按用户“继续”收尾现有F08.6，而非追加反复手机实验。核对真实生产组合根：PostgreSQL默认绑定 `UnavailableSecretStore`，其put/resolve_for_broker/delete均抛 `SecretUnavailableError`；当前固定入口尚未配置VAPID公钥与秘密句柄。因此真实Push有F09凭据后端依赖，不能用内存明文替代。已准备提请用户授权最小F09.1排期例外，仅Windows Credential Manager实现SecretStorePort及必要接线；F08.6维持BLOCKED、F07/F08维持IN_PROGRESS。该提议尚未被当作授权或NEXT，不在本轮实施F09。
+
+原库只读事务（下方精确命令，exit0、1.25s）：example.echo@0.1.0与nju.smail@0.1.0均ENABLED；审批状态聚合为空（没有审批记录）；VAPID两项配置均false，mail_send/browser_submit均false。仓库nju.smail Manifest为0.2.0，存在部署版本差异，后续升级必须另作精确材料确认；本轮没有build/install/import/execute该新扩展或制造可批准的外部动作。未读取审批载荷、nonce、邮件正文或凭据值到输出。
+
+```powershell
+@'
+import asyncio, json
+from pathlib import Path
+from urllib.parse import urlsplit
+import asyncpg
+from dotenv import dotenv_values
+from personal_assistant.infrastructure.database.config import normalize_dsn
+
+async def main():
+    config = dotenv_values('var/deployment/f08-access-2026-10-04/.env.template', interpolate=False)
+    dsn = normalize_dsn(config['PA_DATABASE_URL'])
+    target = urlsplit(dsn)
+    assert (target.hostname, target.port, target.username, target.path) == ('127.0.0.1', 5432, 'assistant', '/assistant')
+    conn = await asyncpg.connect(dsn, timeout=5, command_timeout=5, server_settings={'default_transaction_read_only':'on'})
+    try:
+        async with conn.transaction(isolation='repeatable_read', readonly=True):
+            mode = await conn.fetchval('SHOW transaction_read_only')
+            assert mode == 'on'
+            extensions = await conn.fetch("SELECT id, manifest->>'version' AS version, lifecycle_state FROM extensions ORDER BY id")
+            approvals = await conn.fetch("SELECT status, count(*) AS count FROM approvals GROUP BY status ORDER BY status")
+            print(json.dumps({
+                'read_only': True,
+                'extensions': [dict(row) for row in extensions],
+                'approval_counts_by_status': [dict(row) for row in approvals],
+                'push_public_key_configured': bool(config.get('PA_PUSH_VAPID_PUBLIC_KEY')),
+                'push_secret_handle_configured': bool(config.get('PA_PUSH_VAPID_SECRET_HANDLE')),
+                'mail_send_enabled': str(config.get('PA_MAIL_SEND_ENABLED', 'false')).lower() in ('true', '1', 'yes', 'on'),
+                'browser_submit_enabled': str(config.get('PA_BROWSER_SUBMIT_ENABLED', 'false')).lower() in ('true', '1', 'yes', 'on'),
+            }, ensure_ascii=False))
+    finally:
+        await conn.close()
+
+try:
+    asyncio.run(main())
+except Exception as error:
+    print(json.dumps({'diagnostic_error_type': type(error).__name__}))
+    raise SystemExit(1)
+'@ | .\.venv-win\Scripts\python.exe -X utf8 -B -
+```
+
+本轮只改TODO/NEXT的依赖与状态记录，没有产品代码、数据库写入、运行配置/进程或网络修改；没有运行pytest、全套、PostgreSQL/Worker回归，上一轮29 passed不作为本轮结果。文档差异检查 `git diff --check` exit0。当前等待用户对跨编号的排期例外作明确选择；未提交或推送。
+
+**实施报告交接（2026-10-08）**：本人要求先生成当前报告，交独立审计 agent 验收 F08.6；因此本轮不推进 F09.1，不把提议设为 NEXT。见 [F08.6 实现与验收交接报告](F08_6_IMPLEMENTATION_REPORT_2026-10-08.md)：包含 main 的精确 HEAD、未提交文件及关键 SHA-256、逐轮实际命令/结果、当前回环服务与私有 Serve 只读快照、手机反馈与截图的适用边界，以及真实 Push、正式审批、手机 v14 交付和丢回执等未完成项。严格串行造成的是凭据后端排期阻塞，任务/消息/草稿运行没有因此死锁。F08.6 仍为唯一当前 BLOCKED，F07/F08 整体 IN_PROGRESS；本轮只改报告与状态文档，没有新 pytest/全量/PostgreSQL/Worker 测试，没有代码、服务配置、数据库或外部行为修改。审计只读默认，使用 Desktop 实际工作区；不把实施报告当独立验收。
+
+本次报告收尾：报告已写入，17 个源码/测试/资源 SHA-256 已逐项复核一致；报告生成后的 git diff --check 实际 exit0（仅已有 LF/CRLF 提示）。本轮未运行测试集合，不将只读或文档检查计入 passed 数量。
+
+**独立复验后P2修复（2026-10-08）**：2026-10-08 独立复验后 P2 修复：旧草稿回执只确认原命令，不覆盖已采用的新版本或显式保留的本机输入；原幂等键保留至完整回执验证和渲染成功。390px 三个反例先 3 failed、修复后 3 passed，草稿 API/浏览器及静态缓存相关回归 30 passed、2 依赖警告，Ruff/Node/差异检查通过。Service Worker 磁盘版本 v15，仍只缓存四条静态路径，手机交付未验证。报告已补修复证据并更新 17 项摘要；本修复等待独立复验，F08.6 继续唯一当前 BLOCKED、F07/F08 整体 IN_PROGRESS，不推进 F09.1；未运行全量/完整 PostgreSQL/Worker，未重启或改配原服务，未提交/推送。
+
+精确失败/通过命令、用例条件、未完成项及最新摘要见 [实施报告第10节](F08_6_IMPLEMENTATION_REPORT_2026-10-08.md#10-独立复验后旧回执覆盖新草稿的-p2-修复)。旧审计40例与本轮30例是不同且重叠的集合，未相加；全量中断没有完整结果。
+
+**P2局部独立复验通过（2026-10-08）**：2026-10-08 P2 独立复验通过并关闭：用户复跑报告第10节定向集合 30 passed、2 warnings，另有原问题、坏回执/渲染失败同键重试、迟到回执保留未处理冲突的组合反例 3 passed；Ruff、两份 JS 语法、差异检查及 17 项摘要吻合。用户确认测试浏览器已回收、原服务未受影响，本轮未发现新的局部阻断。旧回执仅确认原命令，显式保留的本机输入仍须再次保存。F08.6 整体继续唯一当前 BLOCKED，F07/F08 整体 IN_PROGRESS；尚缺手机 v15、真机丢回执重试、正式审批及缓存、独立 Cloudflare 中断、真实 Push。下一步仍补 F08.6 证据，不推进 F09.1。本轮实施者只记录审计反馈，不新增代码/测试或改动服务，不提交/推送。
+
 禁区：把业务编排放进前端；在 localStorage 保存凭据或完整敏感正文。
 
-### F09 — Windows 生产适配器（TODO）
+### F09 — Windows 生产适配器（IN_PROGRESS，仅F09.1排期例外）
 
 范围：Credential Manager、服务守护、交互桌面桥、进程管理、文件监听；保留 portable test doubles。
 
@@ -520,6 +1552,52 @@ F08 整体验收仍要求 Android Chrome 完成两条 E2E 流；离线后重连�
 
 禁区：用 UI 自动化代替稳定协议接口；把交互桌面权限开放给所有扩展。
 
+### F09.1 — Windows 安全凭据后端（唯一当前授权项，BLOCKED）
+
+2026-10-08 用户明确授权的排期例外：先实现最小凭据后端，再回到 F08.6 验收。F08.6 继续 BLOCKED，F07/F08 整体 IN_PROGRESS；本授权取代前文历史记录中的“不推进 F09.1”。
+
+范围：在 infrastructure/platform/windows 实现 SecretStorePort 的 Credential Manager 适配器；生产 PostgreSQL 组合根按平台选择；本机 CLI 只经隐藏终端输入保存并输出句柄。无迁移，无服务守护、自动邮件/填表、真实 Push 配置或外部动作。
+
+本轮授权文件：Windows 平台实现、infrastructure/secrets 工厂、bootstrap.py、CLI 凭据命令及最小解析器接线，对应单元/Windows 集成测试，以及 README/TODO/契约/NEXT 与实现报告。Win32 不进入 core/SDK/扩展。原服务保留，不提交/推送/部署。
+
+验收：先失败反例；句柄与 kind/namespace 绑定；同名不覆盖；Unicode/多行与字节上限；缺失/损坏/OS 错误拒绝且脱敏；隐藏输入不降级回显；合成凭据在真实 Windows 独立进程读取并精确删除；生产默认及注入接线。因凭据边界及组合根改动，运行全量及适用 PostgreSQL/Worker 门禁；记录实际结果，不复用历史数字。
+
+#### F09.1 本轮结果与未通过门禁（2026-10-08）
+
+已实现：Windows Generic Credential、UTF-8/2560字节上限、kind/namespace/wcm1_引用绑定、脱敏错误及精确删除；平台工厂、PostgreSQL默认/注入接线；隐藏CLI输入/删除，原CLI架构断言保留。无迁移/依赖新增；原服务未重启或换包。
+
+最终定向命令：
+```powershell
+.\.venv-win\Scripts\python.exe -m pytest -p no:cacheprovider -o 'addopts=--strict-markers' -q --tb=short tests/unit/test_windows_credentials_f09.py tests/unit/test_secret_cli_f09.py tests/integration/test_windows_credentials_native_f09.py tests/contract/test_extension_independence.py tests/unit/test_cli_extension_flow.py tests/unit/test_bootstrap_f04.py
+```
+先红28 failed/1 passed，最终 **42 passed**，含真实Windows跨进程及仅解析合成VAPID的两项Native测试。
+
+门禁命令：
+```powershell
+.\.venv-win\Scripts\python.exe -X utf8 var/verification/f091/run_gates.py full
+.\.venv-win\Scripts\python.exe -X utf8 var/verification/f091/run_gates.py postgres
+.\.venv-win\Scripts\python.exe -X utf8 var/verification/f091/run_gates.py full-failures
+.\.venv-win\Scripts\python.exe -X utf8 var/verification/f091/run_gates.py postgres-failures
+```
+前两项调用既有scripts/test.ps1、scripts/test-postgres.ps1；只在子进程环境派生*_test DSN、输出脱敏，不测试原业务库。首轮全量 **9 failed/1284 passed/130 skipped/15 warnings**；PostgreSQL/Worker **3 failed/127 passed/2 warnings**。日志保留。
+
+后两项串行复跑失败路径：full-failures 首次2 failed/19 passed/1 warning；修正PYTHONUTF8=1与Windows tasklist编码冲突（子进程保留系统locale、仅stdio UTF-8）后 **1 failed/20 passed**。postgres-failures 对邮件/ehall Worker完整文件 **6 passed**。
+
+剩余失败是 test_extension_rpc_robustness.py::RpcRobustnessTests::test_rpc_call_timeout_includes_lock_wait 的elapsed<0.7s，两次串行0.703/1.641s。未放宽断言、未改RPC核心；F09.1收尾 **BLOCKED**，定向实现就绪待独立复验。未重跑第二遍完整门禁，不称全量全绿。
+
+最终全仓Ruff、既有六包Mypy（232 source files）、pip check通过；差异检查通过。所有文件、命令与15项摘要见 [F09.1实现报告](F09_1_IMPLEMENTATION_REPORT_2026-10-08.md)。
+
+风险：同身份跨进程已测，服务换身份/冷启动未测；不保证全堆清零或强杀清理；原临时DSN例外未迁移；真实Push尚未配置。先核对回归门禁并独立验收F09.1，再回F08.6补真机Push/正式审批等；F08.6仍BLOCKED，F07/F08整体IN_PROGRESS，其他F09功能不启动。未提交/推送/部署。
+
+#### F09.1 独立验收与新的 F06 阻断（2026-10-09）
+
+用户独立检查通过凭据功能；阶段仍 **BLOCKED**。用户本次实际结果：F09.1定向 **42 passed**，RPC集合 **14 passed**，全量 **1292 passed、130 skipped、1 failed**（邮件TLS超时，单例复跑通过），PostgreSQL/真实Worker **130 passed**；Ruff、Mypy232文件、依赖、差异及15项交接摘要均通过。RPC本次未复现，不宣称根治；全量不能称全绿。以上为用户独立证据，未提供完整命令文本，实施者不冒充本轮重新运行。
+
+新P2：`infrastructure/mail/smtp_client.py::_TrackedSmtp._get_socket` 在 `wrap_socket` 的自动TLS握手返回后才登记实际TLS socket。用户独立反例取消250ms后连接仍打开、线程仍运行，socket超时设2秒时约2.0秒后才回收；默认30秒可能明显拖延。反例零邮件发送，未证明凭据泄漏。
+
+拟定最小修复：先 `wrap_socket(..., do_handshake_on_connect=False)` 创建TLS socket并登记，检查中止标记后显式握手；失败和取消关闭实际连接。改动文件限 `smtp_client.py`、`tests/integration/test_mail_protocol_f06.py`，如确认必须修改测试服务夹具则仅限对应辅助类，以及本轮状态/契约/报告。先写失败反例，增加有界取消测试，分别控制底层socket超时和宿主总时限分支，保留线程回收、连接关闭、零发送断言；随后串行全量及PostgreSQL/Worker完整复验，不重复实现凭据后端。
+
+**待用户另行授权**：依据AGENTS每任务步骤3及用户本轮说明，F06跨范围修复尚未开始、尚未设为NEXT。F09.1/F08.6继续BLOCKED，F07/F08整体IN_PROGRESS，其他F09不推进。当前仅记录状态，无业务代码/测试改动、测试重跑或服务/外部账户操作。2026-10-08报告第8节15项摘要是当时交接快照；本次新增文档记录不改写该历史摘要。
 ### F10 — 部署、备份与双入口安全测试（TODO）
 
 范围：Cloudflare Tunnel、Access、Tailscale health-only、6 小时恢复点、异地加密副本与恢复演练。

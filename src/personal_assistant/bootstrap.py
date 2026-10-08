@@ -129,7 +129,7 @@ from personal_assistant.infrastructure.models import (
 )
 from personal_assistant.infrastructure.push.service import PushService
 from personal_assistant.infrastructure.push.transport import HttpWebPushSender
-from personal_assistant.infrastructure.secrets import UnavailableSecretStore
+from personal_assistant.infrastructure.secrets import default_secret_store
 from personal_assistant.infrastructure.storage import NullStorageLifecycle, StorageLifecycle
 from personal_assistant.infrastructure.tools import CapabilityRoutingExecutor
 from personal_assistant.settings import ConfigurationError, Settings
@@ -201,6 +201,11 @@ class Container:
 
 def _bundled_extensions_root() -> Path:
     return Path(__file__).resolve().parents[2] / "extensions"
+
+
+def build_secret_store() -> SecretStorePort:
+    """Build only the host credential adapter; no storage or worker lifecycle."""
+    return default_secret_store()
 
 
 def build_container(
@@ -390,7 +395,9 @@ def _build_postgres_container(
     )
     registry = ExtensionRegistry()
     operations = PostgresExtensionOperationStore(adapters.database)
-    credential_store: SecretStorePort = secret_store or UnavailableSecretStore()
+    credential_store: SecretStorePort = (
+        secret_store if secret_store is not None else build_secret_store()
+    )
     providers = _build_model_providers(settings, credential_store)
     disclosures = DisclosureConsentService(
         adapters.disclosure_consents, recipients=_remote_recipients(providers)
