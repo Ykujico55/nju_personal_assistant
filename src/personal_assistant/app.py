@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import sysconfig
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -30,9 +32,7 @@ def _pwa_root() -> Path:
     source_tree = Path(__file__).resolve().parents[2] / "web" / "pwa"
     if source_tree.is_dir():
         return source_tree
-    installed = (
-        Path(sysconfig.get_path("data")) / "share" / "personal-assistant" / "pwa"
-    )
+    installed = Path(sysconfig.get_path("data")) / "share" / "personal-assistant" / "pwa"
     if installed.is_dir():
         return installed
     raise RuntimeError("PWA static assets are missing from this installation")
@@ -56,6 +56,8 @@ def create_app(
         # Fail closed: a database that is unreachable or fails migration stops
         # startup instead of silently falling back to in-memory state.
         await container.storage.startup()
+        stop = asyncio.Event()
+        worker: asyncio.Task[None] | None = None
         try:
             # Publish tool descriptors for persisted ENABLED extensions so the
             # production gateway always reflects the durable lifecycle state.
@@ -70,8 +72,19 @@ def create_app(
             # startup recovery never resumes a click.
             if container.browser_broker is not None:
                 await container.browser_broker.recover_stale_sessions()
+            if settings.embedded_agent:
+                from personal_assistant.workers.agent_worker import loop
+
+                worker = asyncio.create_task(
+                    loop(container, stop), name="embedded-development-agent"
+                )
             yield
         finally:
+            stop.set()
+            if worker is not None:
+                worker.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await worker
             # Closing the verifier must never prevent storage from closing.
             try:
                 if verifier is not None:

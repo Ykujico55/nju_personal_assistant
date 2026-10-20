@@ -423,21 +423,30 @@ class SmtpState:
     recipients: list[list[str]] = field(default_factory=list)
     auth_failures: int = 0
     auth_attempts: int = 0
+    starttls_supported: bool = True
+    starttls_code: int = 220
+    ehlo_code: int = 250
+    commands: list[str] = field(default_factory=list)
+    peer_closed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class SimulatedSmtpServer:
     """Implicit-TLS SMTP server with scriptable failure phases."""
 
-    def __init__(self, state: SmtpState, ssl_context: ssl.SSLContext) -> None:
+    def __init__(
+        self, state: SmtpState, ssl_context: ssl.SSLContext, *, starttls: bool = False
+    ) -> None:
         self.state = state
         self._ssl_context = ssl_context
+        self._starttls = starttls
         self._server: asyncio.AbstractServer | None = None
         self.port = 0
         self._tasks: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
-            self._handle, host="127.0.0.1", port=0, ssl=self._ssl_context
+            self._handle, host="127.0.0.1", port=0,
+            ssl=None if self._starttls else self._ssl_context,
         )
         self.port = self._server.sockets[0].getsockname()[1]
 
@@ -445,8 +454,10 @@ class SimulatedSmtpServer:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
-        for task in list(self._tasks):
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
 
     async def _handle(
@@ -457,7 +468,9 @@ class SimulatedSmtpServer:
             self._tasks.add(task)
         try:
             await self._serve(reader, writer)
-        except (ConnectionError, asyncio.CancelledError):
+        except ConnectionError:
+            self.state.peer_closed.set()
+        except asyncio.CancelledError:
             pass
         finally:
             with contextlib.suppress(Exception):
@@ -474,20 +487,42 @@ class SimulatedSmtpServer:
             return
         await self._write(writer, b"220 smtp.test ESMTP ready\r\n")
         envelope_recipients: list[str] = []
+        tls_active = not self._starttls
         while True:
             line = await reader.readline()
             if not line:
+                self.state.peer_closed.set()
                 return
             text = line.decode("utf-8", "replace").rstrip("\r\n")
             command = text.upper()
+            self.state.commands.append(command.partition(" ")[0])
             if command.startswith("EHLO") or command.startswith("HELO"):
+                if self.state.ehlo_code != 250:
+                    await self._write(
+                        writer, f"{self.state.ehlo_code} EHLO refused\r\n".encode("ascii")
+                    )
+                    continue
                 await self._write(
                     writer,
                     b"250-smtp.test\r\n"
-                    b"250-AUTH PLAIN LOGIN\r\n"
+                    + (
+                        b"250-STARTTLS\r\n"
+                        if not tls_active and self.state.starttls_supported else b""
+                    )
+                    + b"250-AUTH PLAIN LOGIN\r\n"
                     b"250-8BITMIME\r\n"
                     b"250 SIZE 10485760\r\n",
                 )
+            elif command == "STARTTLS" and self._starttls and not tls_active:
+                if self.state.starttls_code != 220:
+                    await self._write(
+                        writer,
+                        f"{self.state.starttls_code} TLS upgrade refused\r\n".encode("ascii"),
+                    )
+                    continue
+                await self._write(writer, b"220 begin TLS\r\n")
+                await writer.start_tls(self._ssl_context)
+                tls_active = True
             elif command.startswith("AUTH PLAIN"):
                 self.state.auth_attempts += 1
                 token = text.split(" ", 2)[2] if len(text.split(" ", 2)) > 2 else ""
@@ -590,17 +625,21 @@ async def _read_smtp_data(reader: asyncio.StreamReader) -> bytes:
 
 
 class SimulatedTcpStallServer:
-    """Accepts TCP connections and never performs a TLS handshake.
+    """Accept TLS ClientHello without replying, and observe the peer closing.
 
-    Used to prove that a timeout or cancellation during connect/TLS still closes
-    the transport and reclaims the worker thread.
+    Optional STARTTLS mode first performs only the plaintext greeting/upgrade.
+    TLS, authentication and message submission never complete on this server.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, starttls: bool = False) -> None:
         self._server: asyncio.AbstractServer | None = None
+        self._starttls = starttls
         self.port = 0
         self.connections = 0
         self.received = 0
+        self.client_hello = asyncio.Event()
+        self.peer_closed = asyncio.Event()
+        self.commands: list[str] = []
         self._tasks: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
@@ -610,12 +649,13 @@ class SimulatedTcpStallServer:
     async def stop(self) -> None:
         if self._server is not None:
             self._server.close()
-        for task in list(self._tasks):
+        tasks = list(self._tasks)
+        for task in tasks:
             task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
         if self._server is not None:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._server.wait_closed(), timeout=2.0)
+            await asyncio.wait_for(self._server.wait_closed(), timeout=2.0)
 
     async def _handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -625,20 +665,37 @@ class SimulatedTcpStallServer:
         if task is not None:
             self._tasks.add(task)
         try:
-            with contextlib.suppress(Exception):
-                while True:
-                    chunk = await reader.read(4096)
-                    if not chunk:
-                        break
-                    self.received += len(chunk)
-                    await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            return
+            if self._starttls:
+                writer.write(b"220 smtp.test ESMTP ready\r\n")
+                await writer.drain()
+                greeting = (await reader.readline()).decode().strip()
+                self.commands.append(greeting)
+                if not greeting.upper().startswith("EHLO "):
+                    return
+                writer.write(b"250-smtp.test\r\n250 STARTTLS\r\n")
+                await writer.drain()
+                upgrade = (await reader.readline()).decode().strip()
+                self.commands.append(upgrade)
+                if upgrade.upper() != "STARTTLS":
+                    return
+                writer.write(b"220 begin TLS\r\n")
+                await writer.drain()
+            while True:
+                chunk = await reader.read(4096)
+                if not chunk:
+                    self.peer_closed.set()
+                    break
+                self.received += len(chunk)
+                self.client_hello.set()
+                # Keep reading to observe EOF/reset; never reply to ClientHello.
+        except ConnectionError:
+            self.peer_closed.set()
         finally:
             with contextlib.suppress(Exception):
                 writer.close()
-            with contextlib.suppress(Exception):
                 await writer.wait_closed()
+            if task is not None:
+                self._tasks.discard(task)
 
 
 __all__ = [

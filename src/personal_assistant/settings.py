@@ -64,6 +64,38 @@ def normalize_push_origins(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
+def normalize_ntfy_publish_url(raw: str) -> str:
+    """Only a literal loopback publisher and one fixed ntfy topic are allowed."""
+
+    if (
+        not raw
+        or len(raw) > 256
+        or any(ord(character) <= 32 or ord(character) == 127 for character in raw)
+    ):
+        raise ConfigurationError("PA_NTFY_PUBLISH_URL is invalid")
+    try:
+        parts = urlsplit(raw)
+        port = parts.port
+    except ValueError:
+        raise ConfigurationError("PA_NTFY_PUBLISH_URL is invalid") from None
+    topic = parts.path.removeprefix("/")
+    if (
+        parts.scheme != "http"
+        or parts.hostname not in {"127.0.0.1", "::1"}
+        or port is None
+        or not 1 <= port <= 65535
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+        or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", topic)
+        or topic in {"v1", "docs", "static", "file", "app", "health", "metrics"}
+    ):
+        raise ConfigurationError("PA_NTFY_PUBLISH_URL must be a loopback URL with one topic")
+    host = f"[{parts.hostname}]" if parts.hostname == "::1" else parts.hostname
+    return f"http://{host}:{port}/{topic}"
+
+
 def normalize_browser_origins(values: tuple[str, ...]) -> tuple[str, ...]:
     """Canonicalize the user's supervised-browser origin allow-list."""
 
@@ -167,12 +199,12 @@ def normalize_mail_recipients(values: tuple[str, ...]) -> tuple[str, ...]:
         address = raw.strip().lower()
         if not address:
             continue
-        if len(address) > 320 or "@" not in address or any(
-            character in address for character in " <>,;\t\r\n"
+        if (
+            len(address) > 320
+            or "@" not in address
+            or any(character in address for character in " <>,;\t\r\n")
         ):
-            raise ConfigurationError(
-                "PA_MAIL_TEST_RECIPIENTS contains an invalid address"
-            )
+            raise ConfigurationError("PA_MAIL_TEST_RECIPIENTS contains an invalid address")
         if address not in seen:
             seen.add(address)
             normalized.append(address)
@@ -282,27 +314,21 @@ def normalize_model_endpoint(
 def normalize_model_id(raw: str, *, field_name: str) -> str:
     value = raw.strip()
     if not _MODEL_ID.fullmatch(value):
-        raise ConfigurationError(
-            f"{field_name} must be 1-128 printable characters without spaces"
-        )
+        raise ConfigurationError(f"{field_name} must be 1-128 printable characters without spaces")
     return value
 
 
 def normalize_provider_id(raw: str, *, field_name: str) -> str:
     value = raw.strip()
     if not _PROVIDER_ID.fullmatch(value):
-        raise ConfigurationError(
-            f"{field_name} must be 1-64 characters of [A-Za-z0-9._:-]"
-        )
+        raise ConfigurationError(f"{field_name} must be 1-64 characters of [A-Za-z0-9._:-]")
     return value
 
 
 def normalize_secret_handle_id(raw: str, *, field_name: str) -> str:
     value = raw.strip()
     if not _SECRET_HANDLE_ID.fullmatch(value):
-        raise ConfigurationError(
-            f"{field_name} must be 1-128 opaque characters of [A-Za-z0-9._:-]"
-        )
+        raise ConfigurationError(f"{field_name} must be 1-128 opaque characters of [A-Za-z0-9._:-]")
     return value
 
 
@@ -374,11 +400,15 @@ class Settings:
     public_origin: str | None
     cf_access_team_domain: str | None
     cf_access_aud: str | None
+    database_secret_handle: str | None = None
+    embedded_agent: bool = False
     model_remote_provider_id: str = "remote.openai"
     model_remote_base_url: str | None = None
     model_remote_model: str | None = None
     model_remote_secret_handle: str | None = None
     model_remote_timeout_seconds: float = 60.0
+    model_remote_json_mode: bool = False
+    model_remote_thinking: str | None = None
     model_local_provider_id: str = "local.ollama"
     model_local_base_url: str | None = None
     model_local_model: str | None = None
@@ -394,6 +424,8 @@ class Settings:
     push_vapid_public_key: str | None = None
     push_vapid_secret_handle: str | None = None
     push_allowed_origins: tuple[str, ...] = ()
+    ntfy_publish_url: str | None = None
+    ntfy_secret_handle: str | None = None
 
     def __post_init__(self) -> None:
         # Every construction path (from_env, direct construction, replace)
@@ -407,13 +439,9 @@ class Settings:
                 normalize_team_domain(self.cf_access_team_domain),
             )
         if self.cf_access_aud is not None:
-            object.__setattr__(
-                self, "cf_access_aud", normalize_audience(self.cf_access_aud)
-            )
+            object.__setattr__(self, "cf_access_aud", normalize_audience(self.cf_access_aud))
         if self.public_origin is not None:
-            object.__setattr__(
-                self, "public_origin", normalize_public_origin(self.public_origin)
-            )
+            object.__setattr__(self, "public_origin", normalize_public_origin(self.public_origin))
         object.__setattr__(
             self,
             "model_remote_provider_id",
@@ -493,25 +521,43 @@ class Settings:
             "browser_allowed_origins",
             normalize_browser_origins(tuple(self.browser_allowed_origins)),
         )
-        object.__setattr__(
-            self, "browser_origin_mode", self.browser_origin_mode.strip().lower()
-        )
+        object.__setattr__(self, "browser_origin_mode", self.browser_origin_mode.strip().lower())
         if self.push_vapid_public_key is not None:
             object.__setattr__(
-                self, "push_vapid_public_key",
+                self,
+                "push_vapid_public_key",
                 normalize_push_public_key(self.push_vapid_public_key),
             )
         if self.push_vapid_secret_handle is not None:
             object.__setattr__(
-                self, "push_vapid_secret_handle",
+                self,
+                "push_vapid_secret_handle",
                 normalize_secret_handle_id(
                     self.push_vapid_secret_handle, field_name="PA_PUSH_VAPID_SECRET_HANDLE"
                 ),
             )
         object.__setattr__(
-            self, "push_allowed_origins",
+            self,
+            "push_allowed_origins",
             normalize_push_origins(tuple(self.push_allowed_origins)),
         )
+        if self.ntfy_publish_url is not None:
+            object.__setattr__(
+                self,
+                "ntfy_publish_url",
+                normalize_ntfy_publish_url(
+                    self.ntfy_publish_url,
+                ),
+            )
+        if self.ntfy_secret_handle is not None:
+            object.__setattr__(
+                self,
+                "ntfy_secret_handle",
+                normalize_secret_handle_id(
+                    self.ntfy_secret_handle,
+                    field_name="PA_NTFY_SECRET_HANDLE",
+                ),
+            )
         self.validate()
 
     @classmethod
@@ -539,6 +585,8 @@ class Settings:
             public_origin=normalize_public_origin(public_origin) if public_origin else None,
             cf_access_team_domain=normalize_team_domain(team_domain) if team_domain else None,
             cf_access_aud=normalize_audience(audience) if audience else None,
+            database_secret_handle=os.getenv("PA_DATABASE_SECRET_HANDLE") or None,
+            embedded_agent=_env_bool("PA_EMBEDDED_AGENT", False),
             model_remote_provider_id=os.getenv(
                 "PA_MODEL_REMOTE_PROVIDER_ID", "remote.openai"
             ).strip(),
@@ -546,9 +594,9 @@ class Settings:
             model_remote_model=os.getenv("PA_MODEL_REMOTE_MODEL") or None,
             model_remote_secret_handle=os.getenv("PA_MODEL_REMOTE_SECRET_HANDLE") or None,
             model_remote_timeout_seconds=_env_float("PA_MODEL_REMOTE_TIMEOUT_SECONDS", 60.0),
-            model_local_provider_id=os.getenv(
-                "PA_MODEL_LOCAL_PROVIDER_ID", "local.ollama"
-            ).strip(),
+            model_remote_json_mode=_env_bool("PA_MODEL_REMOTE_JSON_MODE", False),
+            model_remote_thinking=os.getenv("PA_MODEL_REMOTE_THINKING") or None,
+            model_local_provider_id=os.getenv("PA_MODEL_LOCAL_PROVIDER_ID", "local.ollama").strip(),
             model_local_base_url=os.getenv("PA_MODEL_LOCAL_BASE_URL") or None,
             model_local_model=os.getenv("PA_MODEL_LOCAL_MODEL") or None,
             model_local_timeout_seconds=_env_float("PA_MODEL_LOCAL_TIMEOUT_SECONDS", 120.0),
@@ -563,9 +611,7 @@ class Settings:
                     if item.strip()
                 )
             ),
-            mail_max_message_bytes=_env_int(
-                "PA_MAIL_MAX_MESSAGE_BYTES", 2 * 1024 * 1024
-            ),
+            mail_max_message_bytes=_env_int("PA_MAIL_MAX_MESSAGE_BYTES", 2 * 1024 * 1024),
             browser_companion_url=os.getenv("PA_BROWSER_COMPANION_URL", "").strip(),
             browser_allowed_origins=normalize_browser_origins(
                 tuple(
@@ -574,10 +620,10 @@ class Settings:
                     if item.strip()
                 )
             ),
-            browser_origin_mode=os.getenv(
-                "PA_BROWSER_ORIGIN_MODE", "open"
-            ),
+            browser_origin_mode=os.getenv("PA_BROWSER_ORIGIN_MODE", "open"),
             browser_submit_enabled=_env_bool("PA_BROWSER_SUBMIT_ENABLED", False),
+            ntfy_publish_url=os.getenv("PA_NTFY_PUBLISH_URL") or None,
+            ntfy_secret_handle=os.getenv("PA_NTFY_SECRET_HANDLE") or None,
             push_vapid_public_key=os.getenv("PA_PUSH_VAPID_PUBLIC_KEY") or None,
             push_vapid_secret_handle=os.getenv("PA_PUSH_VAPID_SECRET_HANDLE") or None,
             push_allowed_origins=tuple(
@@ -589,6 +635,22 @@ class Settings:
         return settings
 
     def validate(self) -> None:
+        if self.environment == "production" and self.embedded_agent:
+            raise ConfigurationError("production requires an independent durable worker")
+        if self.database_secret_handle is not None:
+            normalize_secret_handle_id(
+                self.database_secret_handle, field_name="PA_DATABASE_SECRET_HANDLE"
+            )
+        if type(self.model_remote_json_mode) is not bool or self.model_remote_thinking not in {
+            None,
+            "enabled",
+            "disabled",
+        }:
+            raise ConfigurationError("invalid remote model response options")
+        if bool(self.ntfy_publish_url) != bool(self.ntfy_secret_handle):
+            raise ConfigurationError("ntfy requires a publish URL and a secret handle")
+        if self.ntfy_publish_url and not self.public_origin:
+            raise ConfigurationError("ntfy click links require PA_PUBLIC_ORIGIN")
         if bool(self.push_vapid_public_key) != bool(self.push_vapid_secret_handle):
             raise ConfigurationError("Web Push requires both VAPID key fields")
         if self.push_vapid_public_key and not self.push_allowed_origins:
@@ -635,8 +697,7 @@ class Settings:
         ):
             if not 0 < timeout <= _MAX_MODEL_TIMEOUT_SECONDS:
                 raise ConfigurationError(
-                    f"{field_name} must be between 0 and "
-                    f"{_MAX_MODEL_TIMEOUT_SECONDS:g} seconds"
+                    f"{field_name} must be between 0 and {_MAX_MODEL_TIMEOUT_SECONDS:g} seconds"
                 )
         if self.model_remote_base_url is not None:
             if (
@@ -649,18 +710,14 @@ class Settings:
                     "PA_MODEL_REMOTE_BASE_URL must be stored in normalized https form"
                 )
             if not self.model_remote_model:
-                raise ConfigurationError(
-                    "remote model endpoint requires PA_MODEL_REMOTE_MODEL"
-                )
+                raise ConfigurationError("remote model endpoint requires PA_MODEL_REMOTE_MODEL")
             if not self.model_remote_secret_handle:
                 raise ConfigurationError(
                     "remote model endpoint requires PA_MODEL_REMOTE_SECRET_HANDLE"
                 )
         else:
             if self.model_remote_model is not None:
-                raise ConfigurationError(
-                    "PA_MODEL_REMOTE_MODEL requires PA_MODEL_REMOTE_BASE_URL"
-                )
+                raise ConfigurationError("PA_MODEL_REMOTE_MODEL requires PA_MODEL_REMOTE_BASE_URL")
             if self.model_remote_secret_handle is not None:
                 raise ConfigurationError(
                     "PA_MODEL_REMOTE_SECRET_HANDLE requires PA_MODEL_REMOTE_BASE_URL"
@@ -679,14 +736,10 @@ class Settings:
                     "PA_MODEL_LOCAL_BASE_URL must be stored in normalized loopback form"
                 )
             if not self.model_local_model:
-                raise ConfigurationError(
-                    "local model endpoint requires PA_MODEL_LOCAL_MODEL"
-                )
+                raise ConfigurationError("local model endpoint requires PA_MODEL_LOCAL_MODEL")
         else:
             if self.model_local_model is not None:
-                raise ConfigurationError(
-                    "PA_MODEL_LOCAL_MODEL requires PA_MODEL_LOCAL_BASE_URL"
-                )
+                raise ConfigurationError("PA_MODEL_LOCAL_MODEL requires PA_MODEL_LOCAL_BASE_URL")
             if self.model_local_fallback_provider_id is not None:
                 raise ConfigurationError(
                     "PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID requires a configured local model"
@@ -708,9 +761,7 @@ class Settings:
         if len({self.public_port, self.admin_port, self.health_port}) != 3:
             raise ConfigurationError("public, admin and health ports must be distinct")
         if not 64 * 1024 <= self.mail_max_message_bytes <= 25 * 1024 * 1024:
-            raise ConfigurationError(
-                "PA_MAIL_MAX_MESSAGE_BYTES must be between 65536 and 26214400"
-            )
+            raise ConfigurationError("PA_MAIL_MAX_MESSAGE_BYTES must be between 65536 and 26214400")
         if self.mail_send_enabled and not self.mail_test_recipients:
             raise ConfigurationError(
                 "PA_MAIL_SEND_ENABLED requires at least one PA_MAIL_TEST_RECIPIENTS address"
@@ -730,9 +781,7 @@ class Settings:
                 "PA_BROWSER_COMPANION_URL must be stored in normalized loopback form"
             )
         if self.browser_origin_mode not in {"allowlist", "open"}:
-            raise ConfigurationError(
-                "PA_BROWSER_ORIGIN_MODE must be allowlist or open"
-            )
+            raise ConfigurationError("PA_BROWSER_ORIGIN_MODE must be allowlist or open")
         if (
             self.browser_companion_url
             and self.browser_origin_mode == "allowlist"

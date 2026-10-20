@@ -1,8 +1,39 @@
 # 实现接力清单
 
+## 2026-10-20 当前结论：DELIVERY.2 本地验收 DONE；F08.6 BLOCKED
+
+用户已独立复验通过：相关160 passed，原两项连续串行5轮/每轮2 passed，真实总deadline到期回收及清理失效反例通过，Ruff/Mypy/差异及118项摘要匹配，活动测试运行器0。用户核对实施者完整日志1405 passed/135 skipped/6 warnings；该数字不是用户本轮重跑。本轮只记录验收结论和项目现状，不新增运行测试，不操作原库/原服务，不提交/推送/部署。**DELIVERY.2 的本地阻断关闭并标DONE**；**F08.6仍BLOCKED，F07/F08整体IN_PROGRESS**，F06.P2/最小F09.1 DONE。下方BLOCKED/待复验段落为当时历史。
+
+当前项目是本地优先的单用户助手：手机/电脑PWA只与助手通信，助手统一连接模型、知识资料、邮件和桌面浏览器。持久任务执行/工作流、模型披露、审批/Outbox、Windows主机、加密备份恢复/升级已有本地实现；DeepSeek仅有公开连接自检证据，邮件代写代发和完整业务流程仍需真实验收。新批次未部署到原手机入口；开发18100模板为内存，正式持久使用需PostgreSQL、独立Worker、凭据句柄及新迁移，不能把仓库新版当作线上已运行。
+
+当前后续编号为 **F08.6（BLOCKED）**：核对实际运行版本、真实手机丢回执重试、正式单次审批及敏感缓存、独立Cloudflare中断、无Google环境ntfy投递/撤销/锁屏/点击。之后补真实模型任务和受控邮件“资料→草稿→手机核对→精确审批→发送→归档”，以及冷启动/长期运行/生产备份恢复/升级演练。F07正式真实事务Adapter、完整目标/材料/后果权威绑定、Gateway/Outbox实站链路仍延期；没有确有需要事务时不制造申请或最终提交。详情见[本地运行手册](RUNBOOK_LOCAL_BETA.md)和[最新验收记录](F07_SESSION_CREATION_TEST_TIMING_2026-10-20.md)。
+
+## 2026-10-20 DELIVERY.2 测试时序局部修复（BLOCKED，待独立复验）
+
+用户独立确认资源回收修复及额外10项反例通过，但统一150ms测试预算导致正常根撤销/主动取消提前超时，独立完整本地1402 passed/135 skipped/2 failed，故整体验收未通过。本轮只修改 `tests/integration/test_companion_failed_creation_f07.py` 与交接文档：正常请求5秒、故意创建响应超时只在driver进入后注入、创建任务提前结束立即取异常、finally收尾；正常TTL与唯一idle TTL用例隔离，全部原回收断言保留。先红 **3 failed**，单文件 **8 passed**，原两项连续串行 **5轮各2 passed**，相关合并 **160 passed、2 warnings**；本轮完整本地 **1405 passed、135 skipped、6 warnings**（21:46），Ruff/Mypy263通过、exit0，修复文件8项在全量中全部通过。活动测试运行器0、测试标签容器0，查询成功。Ruff/Mypy测试1文件及源码269文件、JS/依赖/差异检查通过，118项材料仅该测试一项摘要改变。精确命令、日志和最终门禁见[本轮报告](F07_SESSION_CREATION_TEST_TIMING_2026-10-20.md)。DELIVERY.2及F08.6保持 **BLOCKED**，F07/F08 **IN_PROGRESS**；生产代码、30秒超时、旧迁移、原库与原服务不改。本轮不重新运行PostgreSQL/Worker，因为只改测试且未涉及数据库；此前135 passed属于上一轮实施证据，不计本轮。未提交、推送或部署。下方为历史实现/门禁记录。
+
+## 2026-10-19 DELIVERY.2 相邻 F07.P2 创建失败清理（BLOCKED，待独立复验）
+
+用户已独立确认原三项 DELIVERY.2 修复通过；新增阻断为创建超时后迟到会话无法撤销、TTL 无访问时不回收。本轮仅修复此清理缺口：已知 ID 的宿主根撤销、先撤销后启动竞态、独立 TTL 及抗重复取消收尾；不增加命令超时。先写失败反例后实现，合并定向 **159 passed、2 warnings**；真实本机浏览器取消回收 **1 passed**。本轮串行完整本地 **1404 passed、135 skipped、8 warnings**，Ruff/Mypy263通过；随后完整临时 PostgreSQL/真实 Worker **135 passed**，两门禁exit0。另独立Ruff/Mypy269、三份JS、依赖/差异检查及wheel265条目/10web/12迁移/118项摘要通过；活动测试运行器0、测试标签容器0且查询成功，见[本轮报告](F07_SESSION_CREATION_CLEANUP_2026-10-19.md)。DELIVERY.2 保持 **BLOCKED** 待独立复验；F08.6 真实缺口仍 **BLOCKED**，F07/F08 **IN_PROGRESS**，F06.P2/最小 F09.1 **DONE**。不操作原库/服务，不调用真实模型、邮箱或 ehall，不提交、推送或部署。下节为原三项修复的历史门禁，不能替代本轮结果。
+
+## 2026-10-19 DELIVERY.2 修复与复验（BLOCKED）
+
+独立验收确认 1 项 P1、2 项 P2：实际 EXTERNAL_WRITE 未决动作被普通继续绕过、已绑定工作流切换后错误成功收尾、恢复 EXECUTING 审批时丢失 UNKNOWN 与审核来源。本轮仅修复上述缺陷并补本地完整门禁；未决结果不自动重放，旧授权不可重用。DELIVERY.2 保持 **BLOCKED**，等待修复后的独立复验；F08.6 继续 **BLOCKED**，F07/F08 整体 **IN_PROGRESS**，F06.P2/最小 F09.1 **DONE**。原库、运行服务、真实模型、邮件及站点不操作，不提交/推送/部署。本轮先失败后修复：相关回归 **38 passed、2 warnings**；完整临时 PostgreSQL／真实 Worker **135 passed**。完整本地 **1383 passed、135 skipped、1 failed、6 warnings**，失败为 F07 创建 Companion 会话超时；隔离复跑 **1 passed**，不等于全量全绿或根因已解决。Ruff、Mypy269、三份 JS、依赖与差异检查通过；离线 wheel265条目/10web/12迁移逐字节核验，当前112项摘要。收尾活动 pytest/测试运行器0、测试标签容器0，查询成功；原库/服务未动。精确命令、日志、文件及剩余风险见 [本轮修复报告](DELIVERY_2_REMEDIATION_2026-10-19.md)。历史数字不算本轮运行。
+
+
+2026-10-13 用户明确调整排期：授权一次性推进全部后续项目开发，范围不限 F08.6；外部邮件/通知/站点 API 配置、真实环境联调与验收留待后续；随后用户另行授权本批次提前接入真实模型，并已完成 DeepSeek 单次 PUBLIC 自检，本地自动化验证继续执行。本授权取代此前唯一 NEXT/不得推进其他 F09 的排期限制；按依赖顺序完成 Windows 运行适配、持久任务执行与调度、组合工作流/可审核规则、管理与手机入口、备份恢复及交付手册。审批、凭据、可信扩展确认、UNKNOWN 不自动重放及 health-only 边界仍适用。F07/F08 真实验收状态不冒改 DONE；开发实现和独立验收分别记录。当前交付包 **BLOCKED（独立验收发现阻断，修复后待复验）**，见 [集中开发报告](DEVELOPMENT_DELIVERY_2026-10-13.md)。
+
+2026-10-10 F08.6 ntfy 最小接线（本轮）：本人已明确授权无 Google 通知通道的主机接线和本地测试，要求停在手机安装或外网入口配置之前。新增默认关闭的本机 ntfy 适配器、秘密句柄配置、两种存储组合根及关闭资源接线；消息只含任务 ID/风险/提醒类型，点击只进入助手，结果不明不自动重试。先失败后实现，定向57 passed、2 warnings，全项目Ruff/Mypy234通过，依赖/JS/差异检查通过；本轮全量1312 passed、130 skipped、2 failed（F07 Companion测试启动超时与F06 TLS线程状态断言），隔离复跑1 passed、1 failed，F06断言仍失败。完整PostgreSQL/Worker门禁未继续，原因及精确命令见报告第5节；不引用旧轮数字代替，也不称全量全绿。真实 ntfy/手机客户端尚未接入，原服务未重启或部署；F08.6仍 **BLOCKED**，F07/F08整体 **IN_PROGRESS**，F06.P2/最小F09.1 **DONE**，其他F09不启动。本轮实现详情、精确命令和剩余证据见 [主机接线报告](F08_6_NTFY_LOCAL_REPORT_2026-10-10.md)。下方诊断轮未改源码的说明属于历史范围。
+
+2026-10-10 F08.6 浏览器注册定位（此前诊断轮，后台数据为10-09只读快照）：用户恢复推进；手机点击开启通知后反馈“通知权限未授予”。现有页面在requestPermission非granted时返回，本次操作尚未进入浏览器订阅和订阅POST；不据此判断是denied还是default，也不归因于GMS或服务器。本人确认Chrome应用通知已允许，但助手单站显示“不允许”；随后页面提示“订阅结果未确认，可手动重试同一浏览器订阅”。2026-10-09 23:42（北京时间）只读复核：VAPID宿主可用、原库read_only=on，订阅0/订阅命令0，public无JWT401、health200、Tunnel ready200。该提示覆盖多个失败阶段，尚未定位浏览器subscribe或API失败；本人保留页面重试一次后，提示短暂“正在订阅”又转为“订阅结果未确认”；未记为成功。已请求一次有Network观察的定位，仅读POST是否出现及状态码，不展开正文/Cookie；定位前Chrome显示USB Pending authentication。实际用原官方ADB devices -l只投影数量/状态，exit0、1台device；未输出序列号或读取手机内容。等待本人让Chrome重读设备，保留订阅未确认的原页面；2026-10-10本人Network反馈没有POST；全局异常断点先停在草稿不存在的读取错误，换通知专用catch断点后得到AbortError: Registration failed - push service error。实际ADB包路径只读查询以android和Chrome为对照均exit0/present=true，com.google.android.gms为exit1/present=false且无输出；手机缺少Chrome Android注册所需GMS组件，是明确环境依赖缺口，与该注册错误吻合。通用SERVICE_ERROR本身不证明唯一底层成因；未读取手机用户内容/安装软件/修改权限或发出通知。已停止同配置重试；本人随后明确永久不使用 Google Play，不再以更换为具备 Google 服务的手机为前置条件；本人已明确允许 F08.6 最小 ntfy 接线和本地测试，并要求停在手机安装或外网入口配置之前；F08.6 仍 BLOCKED，其他 F09 不启动；请求移除通知断点并F8恢复原页面。开始时 public/health/Tunnel 均未监听；第一次恢复 public exit3，类型 ConnectionRefusedError，原库连接也被拒绝，Docker Linux engine pipe 不存在。执行 docker desktop start --detach 得到 already running，随后 status为running、原lab1-postgres-1为healthy；按原授权恢复可跟踪的三个运行会话。当前public8000无JWT的Push配置401、health8010/healthz 200、Tunnel ready200、匿名公网/ui/302至既有Access团队；原库只读订阅0、自检任务匹配1，VAPID句柄可用、发信/提交关闭。Tailscale现Running且自身在线、在线peer0，已保存Serve仍只代理health8010、AllowFunnel=false，未修改其配置。本轮无pytest/全量/PostgreSQL测试，前一轮13 passed不是本轮重跑结果；没有发送通知、改源码、提交或推送。手机订阅未确认，F08.6继续BLOCKED、F07/F08整体IN_PROGRESS，其他F09不启动。
+
+2026-10-09 F08.6 本机准备续接（历史证据）：按用户“开始下一步”回到 F08.6；随后用户要求停在需要其配合之前。本轮用真实 Windows Credential Manager 生成并持久化 VAPID 私钥，忽略目录仅新增公钥/句柄/精确 FCM origin，原库临时 DSN 保留。生产组合根在另一宿主进程成功解析同一密钥；现恢复 public 127.0.0.1:8000、独立 health 127.0.0.1:8010 与既有 Tunnel，Admin 未启动，发信/ehall 提交关闭，未投递通知。实际定向 13 passed、2 warnings；本轮未重跑全量或 PostgreSQL/Worker 套件，产品源码未新增修改，恢复基线使用此前已独立通过的同一实现。手机订阅与真实 Push 尚未开始；Tailscale 当前 NoState、私有入口本轮未恢复。F08.6 保持 BLOCKED、F07/F08 整体 IN_PROGRESS，F06.P2 与最小 F09.1 DONE，其他 F09 不启动。详见 docs/F08_6_PUSH_PREPARATION_2026-10-09.md；本轮未提交或推送。
+
 本清单把详细设计拆成较小、可独立验收的工作包。状态只允许 `TODO / NEXT / IN_PROGRESS / DONE / BLOCKED`。后续模型一次领取一个任务，完成后在本文件写入测试命令和结果。
 
-简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01–F06 已通过最终复验并标记 `DONE`；F07 的一次登录自动路由与七字段试填烟测已通过，但正式真实事务 Adapter、实际目标及完整材料/后果绑定的受监督权威预览、正式 Gateway/Outbox 实站链路仍未验收，真实完整填报因暂无确有需要的事务延期，保持 `IN_PROGRESS`。2026-09-30 用户明确调整排期：允许先做不依赖这些 F07 缺口的 F08 子任务；F08.1–F08.5 已分别通过约定范围的独立验收。F08.6 是唯一当前子任务；发布门禁及明确授权已取得，原助手/health 与 Access 保护的 Tunnel 已临时运行，无认证黑盒通过。Android首次登录/SSE、私有health三项、Chrome标识桌面入口的无地址栏启动/空列表/事件连接及Wi-Fi切至移动数据后恢复均获本人反馈；断网提示、恢复联网以及后台或锁屏约一分钟后恢复也获本人确认；手机自检任务/消息刷新恢复、电脑页面新增任务/消息自动同步获本人反馈，原库只读聚合核实了先前自检任务/首条消息各一条；任务/消息使用后的v12四路径CacheStorage及任务GET的200/no-store已有手机证据；随后经本人对精确材料授权，example.echo@0.1.0已安装启用，公共页面出现example.echo_settings；手机来源由未确定变为用户输入，初次草稿版本2及刷新恢复已有本人反馈；后续真实手机截图确认保留本机未保存值并显示服务器3，显式保留后保存版本4及刷新恢复获本人确认和原库只读核对。手机草稿GET的200/no-store已有截图；更新后截图确认唯一缓存为v13、旧v12节点消失，仍仅四静态路径。手机PUT的409/412、其余缓存与审批仍待核验。其余缓存及跨设备边界与真实Push仍待验收，状态为 `BLOCKED`；F08 整体仍为 `IN_PROGRESS`，不得据此把 F07 标为 `DONE`。阶段 10 的 LLM 自动路由不在本次范围。
+当前状态（2026-10-09独立验收）：**F06.P2 DONE；最小F09.1 DONE**。唯一后续验收项为**F08.6（BLOCKED）**，F07/F08整体保持IN_PROGRESS，不推进其他F09。用户独立完成邮件89 passed及额外10项、全量1301 passed/130 skipped/9 warnings、PostgreSQL/真实Worker130 passed/1 warning，静态/依赖/8项摘要/wheel通过，25个记录测试进程退出；本轮实施者仅核对日志摘要和记录状态，未重跑测试。最新证据见下方及[修复报告](F06_TLS_CANCELLATION_REPAIR_2026-10-09.md)第10节。
+
+截至此前F08.6环境验收的历史总览：简要状态见 `../TODO.md`，冻结的接口、事务与验收契约见 `CONTRACTS_AND_INTERFACES.md`。F01–F06 已通过最终复验并标记 `DONE`；F07 的一次登录自动路由与七字段试填烟测已通过，但正式真实事务 Adapter、实际目标及完整材料/后果绑定的受监督权威预览、正式 Gateway/Outbox 实站链路仍未验收，真实完整填报因暂无确有需要的事务延期，保持 `IN_PROGRESS`。2026-09-30 用户明确调整排期：允许先做不依赖这些 F07 缺口的 F08 子任务；F08.1–F08.5 已分别通过约定范围的独立验收。当时F08.6是唯一子任务；发布门禁及明确授权已取得，原助手/health 与 Access 保护的 Tunnel 已临时运行，无认证黑盒通过。Android首次登录/SSE、私有health三项、Chrome标识桌面入口的无地址栏启动/空列表/事件连接及Wi-Fi切至移动数据后恢复均获本人反馈；断网提示、恢复联网以及后台或锁屏约一分钟后恢复也获本人确认；手机自检任务/消息刷新恢复、电脑页面新增任务/消息自动同步获本人反馈，原库只读聚合核实了先前自检任务/首条消息各一条；任务/消息使用后的v12四路径CacheStorage及任务GET的200/no-store已有手机证据；随后经本人对精确材料授权，example.echo@0.1.0已安装启用，公共页面出现example.echo_settings；手机来源由未确定变为用户输入，初次草稿版本2及刷新恢复已有本人反馈；后续真实手机截图确认保留本机未保存值并显示服务器3，显式保留后保存版本4及刷新恢复获本人确认和原库只读核对。手机草稿GET的200/no-store已有截图；更新后截图确认唯一缓存为v13、旧v12节点消失，仍仅四静态路径。手机PUT的409/412、其余缓存与审批仍待核验。其余缓存及跨设备边界与真实Push仍待验收，状态为 `BLOCKED`；F08 整体仍为 `IN_PROGRESS`，不得据此把 F07 标为 `DONE`。阶段 10 的 LLM 自动路由不在本次范围。
 
 ## 基架状态
 
@@ -16,7 +47,7 @@
 | F05 | DONE | 个人知识扩展：授权目录扫描、Markdown/TXT/PDF 抽取、版本化索引、PostgreSQL FTS + pgvector 混合检索、可验证引用、删除传播；通用宿主数据能力与扩展配置通道 | 完整独立审计和修复后自审计通过；全量 597 passed、81 skipped；PostgreSQL/真实 Worker 81 passed；其余证据见下方 F05 章节 |
 | F06 | DONE | smail 扩展：IMAP 只读同步、版本化草稿、R2 SMTP 发送与对账；宿主账户注册表、通用邮件端口与传输台账、生产 Gateway 路由 | 六轮独立审计及补充复验通过；`./scripts/test.ps1` 742 passed、103 skipped，Ruff/Mypy 192 files 通过；`./scripts/test-postgres.ps1` 103 passed（真实 PostgreSQL 与 Worker）；`pip check`/`git diff --check`/wheel 内容核验通过。真实 smail 账号 E2E 未执行 |
 | F07 | IN_PROGRESS | ehall 扩展：用户亲自完成 SSO/验证码/扫码，有头浏览器填写一个低风险事务至提交前权威预览 | 2026-09-30 旧实站直接交互烟测完成一次登录、自动路由与七项试填，未点“提交”。第二轮独立复审发现首轮 P1 修复仍可点击新出现的无关菜单；当前已补本地 Chromium 反例并修复，交互层/单元 **40/40** 通过，改动路径 Ruff/Mypy 通过。`./scripts/test.ps1` 应用户要求在约 16% 处中断，交由审计 agent 复验；首轮 **1185 passed/125 skipped** 不代表当前快照全绿。修复后未重跑真实站点；正式 Adapter、实际提交目标、材料/后果及受监督 Gateway/Outbox 路径未验收，F07 不得标记 DONE。 |
-| F08 | IN_PROGRESS | PWA 与 Web Push；F08.1–F08.5 在各自约定范围内验收通过；F08.6 唯一当前项，授权部署已接通，手机首次连通/health三项、Chrome标识桌面入口无地址栏启动及Wi-Fi→移动数据恢复已有本人反馈；断网提示/恢复联网、后台或锁屏约一分钟恢复、手机任务/消息刷新恢复与电脑自动同步获本人反馈，先前自检记录获原库只读核对；任务场景CacheStorage四路径及任务GET的200/no-store已获手机证据；Schema草稿/审批、其余缓存/跨设备边界及真实Push仍BLOCKED | F08.5 独立定向45 passed。F08.6 发布前本工作区全量1248 passed/130 skipped，PostgreSQL/Worker130 passed；授权启动后11份迁移一致、无认证本机/边缘及同节点私有HTTPS黑盒通过。24项GET复查与手机人工反馈单列，真实Push未验收。 |
+| F08 | IN_PROGRESS | PWA 与 Web Push；F08.1–F08.5 在各自约定范围内验收通过；F08.6 BLOCKED，最小F09.1及F06.P2已DONE，回到真机/真实Push等验收；此前授权部署已接通，手机首次连通/health三项、Chrome标识桌面入口无地址栏启动及Wi-Fi→移动数据恢复已有本人反馈；断网提示/恢复联网、后台或锁屏约一分钟恢复、手机任务/消息刷新恢复与电脑自动同步获本人反馈，先前自检记录获原库只读核对；任务场景CacheStorage四路径及任务GET的200/no-store已获手机证据；Schema草稿/审批、其余缓存/跨设备边界及真实Push仍BLOCKED | F08.5 独立定向45 passed。F08.6 发布前本工作区全量1248 passed/130 skipped，PostgreSQL/Worker130 passed；授权启动后11份迁移一致、无认证本机/边缘及同节点私有HTTPS黑盒通过。24项GET复查与手机人工反馈单列，真实Push未验收。 |
 
 F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基架；后续任务应替换端口适配器或新增业务扩展。当前任务进入 `QUEUED` 后不会被假 Worker 消费，这是有意的 fail-closed 行为。
 
@@ -219,9 +250,35 @@ F00 已冻结的公共边界见 `docs/IMPLEMENTATION_MAP.md`。不要重写基�
 
 ### F06 — smail 扩展（DONE — 独立验收通过）
 
+#### F06.P2 — SMTP TLS取消与准备失败回收（DONE，独立验收通过）
+
+最新独立验收已通过，F06.P2 DONE、最小F09.1 DONE；邮件89 passed及额外10项、全量1301 passed/130 skipped/9 warnings、PostgreSQL/真实Worker130 passed/1 warning。日志为 `var/verification/f06_tls_cancel/full.log` / `postgres.log`；摘要已只读核对，完整独立命令文本未在反馈中提供，可复现实施命令保留在修复报告第5/8节。静态、依赖、8项摘要及wheel通过，用户确认记录25进程退出。本轮只记录验收，无测试重跑或产品/服务操作。以下修复过程和旧BLOCKED/待复验表述为历史，以本段及报告第10节为准。
+
+用户要求先提交推送，再修F06：快照9891102已成功推送origin/main，随后才开始本项。最小范围是smtp_client.py、test_mail_protocol_f06.py、tests/support/mail_servers.py中的SMTP/TCP测试服务及状态/契约/修复报告。隐式TLS和STARTTLS均存在握手完成后才登记实际socket的问题，沿用同一连接生命周期修复；保留能力检查、证书校验、SMTP状态重置、审批/Outbox和FAILED/UNKNOWN分类。
+
+第一轮修复计划（历史，已执行）：先红测试，在真实TCP/TLS握手窗口捕获实际SSLSocket，取消在0.75秒内完成并关闭socket/回收线程；把底层socket超时与宿主总时限分别设定，显式区分两个分支；两种TLS模式都保留零发送、实际peer关闭、线程回收断言。补正常STARTTLS精确MIME通过路径。先运行新增/修改定向反例，再做最小实现；修复后串行scripts/test.ps1及适用scripts/test-postgres.ps1完整复验。F09.1/F08.6仍BLOCKED，不以实现者测试替代独立验收，不推进其他F09。
+
+
 范围：IMAP TLS 只读轮询、UIDVALIDITY/UID 游标与 Message-ID/内容哈希辅助去重、线程/联系人/附件来源、版本化草稿、受控 SMTP TLS 单封发送及 Sent 只读对账。
 
 能力边界：读取与发送能力分离；客户端专用密码仅经 `SecretHandle` 由宿主邮件代理使用；扩展不建立 IMAP/SMTP 连接。
+
+#### F06.P2 第一轮修复结果（2026-10-09，历史快照）
+
+- 最小实现：两种TLS模式共用创建实际TLS socket→登记→检查中止→显式握手→再次检查；失败关闭实际socket。STARTTLS保留能力检查、220响应检查与RFC 3207状态重置；审批/Outbox、租约、风险与FAILED/UNKNOWN分类未改。
+- 首红命令：`.\.venv-win\Scripts\python.exe -m pytest -p no:cacheprovider -o 'addopts=--strict-markers' -q --tb=short tests/integration/test_mail_protocol_f06.py -k 'tls_handshake or starttls'`，**4 failed/3 passed/34 deselected**；实际两种取消和宿主总时限均等到约2秒socket超时。修复首次同命令 **6 passed/1 failed**（一项STARTTLS总时限1.5秒>1.25秒，隔离1 passed），耗时断言均保留。
+- 最终定向：同环境运行pytest文件 `tests/integration/test_mail_protocol_f06.py tests/unit/test_mail_send_gateway_f06.py tests/contract/test_f06_contract_consistency.py`，**86 passed**（142.48秒）；目标Ruff/Mypy通过。完整命令见修复报告。
+- 完整门禁：`.\.venv-win\Scripts\python.exe -X utf8 var/verification/f06_tls_cancel/run_gates.py full` → **1298 passed、130 skipped、11 warnings**（1274.56秒），全仓Ruff、Mypy232文件通过；随后串行同运行器 `postgres` → **130 passed、1 warning**（569.21秒）。分别调用scripts/test.ps1和scripts/test-postgres.ps1，后者仅派生*_test DSN/临时库，日志脱敏。没有新增skip或弱化断言。
+- 警告保留：依赖弃用/测试用短HMAC、Windows管道析构回收与pytest缓存目录权限；本轮不扩大修复到RPC/进程监督。全量本次通过不表示历史时限波动已根治。
+- [修复报告](F06_TLS_CANCELLATION_REPAIR_2026-10-09.md)记录文件、精确命令、摘要、首轮失败与风险。F06.P2待独立复验；F09.1/F08.6继续BLOCKED，F07/F08整体IN_PROGRESS。推送的仅9891102快照；F06修复留在工作区，未再次提交/推送/部署。
+
+#### F06.P2 独立反馈后的局部补修（2026-10-09，历史交接）
+
+- 用户独立反馈：上一轮邮件86 passed、取消/交接6项通过，但缺STARTTLS或454时TCP仍打开；无认证或发送。实施者不将用户数字算作本轮执行。
+- 本轮先补真实TCP的缺STARTTLS、454及EHLO拒绝，pytest过滤 `starttls_unsupported or starttls_454 or starttls_ehlo_refusal`：3 failed/41 deselected（1.16秒）；统一保护_connect准备流程，所有异常close再原样抛出后同命令3 passed/41 deselected（0.88秒）。保留peer关闭、fd=-1、线程回收及零认证/发送断言。
+- 相邻命令：`.\.venv-win\Scripts\python.exe -m pytest -p no:cacheprovider -o 'addopts=--strict-markers' -q --tb=short tests/integration/test_mail_protocol_f06.py tests/unit/test_mail_send_gateway_f06.py tests/contract/test_f06_contract_consistency.py` → **89 passed，134.30秒**。Ruff三改动文件、Mypy产品1文件及pip check通过；git diff --check及全部9项改动（含未跟踪报告）的行尾空白检查通过。
+- 仅连接准备异常回收，审批/Outbox、共享状态及数据库/Worker接口未改，按AGENTS局部规则不重跑全量或PostgreSQL/Worker；1298/130完整门禁是补修前历史。当前精确命令、限制及摘要见修复报告第8/9节。
+- F06.P2保持IN_PROGRESS等待独立复验；F09.1/F08.6仍BLOCKED，F07/F08整体IN_PROGRESS。没有新提交/推送/部署、服务重启、真实邮箱或ehall操作；独立通过后再关闭F09.1并回到F08.6。
 
 #### 架构缺口清单（实现前检查，2026-09-18）
 
@@ -1540,7 +1597,7 @@ except Exception as error:
 
 禁区：把业务编排放进前端；在 localStorage 保存凭据或完整敏感正文。
 
-### F09 — Windows 生产适配器（IN_PROGRESS，仅F09.1排期例外）
+### F09 — Windows 生产适配器（IN_PROGRESS，本地实现已复验，真实运行待验收）
 
 范围：Credential Manager、服务守护、交互桌面桥、进程管理、文件监听；保留 portable test doubles。
 
@@ -1552,7 +1609,9 @@ except Exception as error:
 
 禁区：用 UI 自动化代替稳定协议接口；把交互桌面权限开放给所有扩展。
 
-### F09.1 — Windows 安全凭据后端（唯一当前授权项，BLOCKED）
+### F09.1 — Windows 安全凭据后端（DONE，最小授权范围独立验收通过）
+
+2026-10-09 当前结论：凭据功能已先独立通过，阻断其阶段的F06.P2本次也通过完整独立复验，最小F09.1可解除BLOCKED并标DONE。独立全量1301 passed/130 skipped/9 warnings，PostgreSQL/真实Worker130 passed/1 warning，Ruff/Mypy232/依赖/差异/摘要/wheel通过。其他F09仍未授权实施，回到唯一后续F08.6（BLOCKED），补实际手机v15、丢回执重试、正式审批/缓存、Cloudflare独立中断及真实Push；当前部署/凭据配置并未在本轮改动。以下为实现与首轮门禁历史。
 
 2026-10-08 用户明确授权的排期例外：先实现最小凭据后端，再回到 F08.6 验收。F08.6 继续 BLOCKED，F07/F08 整体 IN_PROGRESS；本授权取代前文历史记录中的“不推进 F09.1”。
 
@@ -1589,7 +1648,7 @@ except Exception as error:
 
 风险：同身份跨进程已测，服务换身份/冷启动未测；不保证全堆清零或强杀清理；原临时DSN例外未迁移；真实Push尚未配置。先核对回归门禁并独立验收F09.1，再回F08.6补真机Push/正式审批等；F08.6仍BLOCKED，F07/F08整体IN_PROGRESS，其他F09功能不启动。未提交/推送/部署。
 
-#### F09.1 独立验收与新的 F06 阻断（2026-10-09）
+#### F09.1 初次独立验收与F06阻断（2026-10-09，历史；现已关闭）
 
 用户独立检查通过凭据功能；阶段仍 **BLOCKED**。用户本次实际结果：F09.1定向 **42 passed**，RPC集合 **14 passed**，全量 **1292 passed、130 skipped、1 failed**（邮件TLS超时，单例复跑通过），PostgreSQL/真实Worker **130 passed**；Ruff、Mypy232文件、依赖、差异及15项交接摘要均通过。RPC本次未复现，不宣称根治；全量不能称全绿。以上为用户独立证据，未提供完整命令文本，实施者不冒充本轮重新运行。
 
@@ -1598,7 +1657,7 @@ except Exception as error:
 拟定最小修复：先 `wrap_socket(..., do_handshake_on_connect=False)` 创建TLS socket并登记，检查中止标记后显式握手；失败和取消关闭实际连接。改动文件限 `smtp_client.py`、`tests/integration/test_mail_protocol_f06.py`，如确认必须修改测试服务夹具则仅限对应辅助类，以及本轮状态/契约/报告。先写失败反例，增加有界取消测试，分别控制底层socket超时和宿主总时限分支，保留线程回收、连接关闭、零发送断言；随后串行全量及PostgreSQL/Worker完整复验，不重复实现凭据后端。
 
 **待用户另行授权**：依据AGENTS每任务步骤3及用户本轮说明，F06跨范围修复尚未开始、尚未设为NEXT。F09.1/F08.6继续BLOCKED，F07/F08整体IN_PROGRESS，其他F09不推进。当前仅记录状态，无业务代码/测试改动、测试重跑或服务/外部账户操作。2026-10-08报告第8节15项摘要是当时交接快照；本次新增文档记录不改写该历史摘要。
-### F10 — 部署、备份与双入口安全测试（TODO）
+### F10 — 部署、备份与双入口安全测试（IN_PROGRESS，本地实现已复验，生产演练待验收）
 
 范围：Cloudflare Tunnel、Access、Tailscale health-only、6 小时恢复点、异地加密副本与恢复演练。
 
@@ -1616,3 +1675,25 @@ except Exception as error:
 - E2E-B：邮件 → 历史/知识 → 草稿 → Android 编辑 → 精确确认 → 受控真实 SMTP 发送 → 归档。
 
 两条都必须通过；模拟外部系统的测试不能替代最后一次受控真实验收。
+
+
+## 2026-10-13 集中交付状态（历史；当前见文首）
+
+用户授权本批次完成全部后续开发，并提前接入真实模型；仅真实邮箱/通知/站点配置和联调延期。本地开发代码、运行手册和离线wheel已准备，本轮门禁已收尾；F09后续适配/F10运维实现待独立复验。当前唯一待办为 DELIVERY.2 修复与独立复验（BLOCKED），真实条件准备后回到F08.6；不启动新的开发设计。
+
+新增持久运行、调度/事件去重、版本工作流、模型披露/严格提案、规则候选审核/Git回滚、PWA运行入口、本机Admin、Windows主机/进程控制、加密备份/空目标恢复和离线升级。新0012迁移未应用原库，0001–0011未改，原已验收F06三文件摘要保持。本轮没有提交、推送、部署、安装新业务扩展或真实外部动作。
+
+用户已运行DeepSeek deepseek-flash的PUBLIC单次试调用，ok=true/104token；真实任务材料仍须单独披露许可。F07/F08整体IN_PROGRESS，F08.6 BLOCKED，F06.P2/最小F09.1 DONE保持不变。下方历史“其他F09未授权”等说明已由本次授权取代；历史测试数量不作本轮结果。
+
+本轮精确命令、改动文件、门禁结果、未完成项和风险见 [集中开发报告](DEVELOPMENT_DELIVERY_2026-10-13.md)；实际运行方式见 [本地运行手册](RUNBOOK_LOCAL_BETA.md)。
+
+
+### DELIVERY.2 — 集中开发本地独立复验（DONE，本地范围）
+
+2026-10-20用户独立复验通过，本地验收阻断关闭；证据及限制见文首。本轮未重复全量或PostgreSQL/Worker。后续回到F08.6真实条件验收，不据此关闭F07/F08整体或宣称Beta已发布。
+
+以下为2026-10-13实施时的历史证据：
+
+2026-10-13 实施收尾：全量本地1373 passed/132 skipped/7 warnings，Ruff与Mypy263通过；临时PostgreSQL/Worker完整运行128 passed/4 failed（迁移枚举未含0012），补齐精确版本和checksum后受影响集合7 passed。没有再跑完整PostgreSQL门禁，不称全部门禁一次全绿。全部源/SDK/扩展/脚本Mypy269、Ruff、三份JS语法、pip check、diff check通过；最终wheel265条目、10web资源、12迁移逐字节核验，无业务扩展源码。
+
+开发包实现就绪待独立复验。原库未迁移/原服务未重启，未提交/推送/部署；测试容器删除路径已执行但Docker收尾复查超时、剩余数未独立确认；pytest结束。真实配置与验收延期，F08.6继续BLOCKED、F07/F08整体IN_PROGRESS；原已验收F06.P2/F09.1 DONE不变。精确命令、日志、文件清单、历史失败与风险见集中报告。独立本地复验后，才根据用户安排进入API配置/真实环境验收，不提前宣布整体DONE。

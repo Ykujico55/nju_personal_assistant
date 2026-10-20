@@ -16,6 +16,8 @@ from contextvars import ContextVar
 
 import asyncpg
 
+from personal_assistant.core.secrets import SecretHandle, SecretStorePort
+
 from .config import PostgresAdapterConfig, normalize_dsn
 from .migrate import run_migrations
 
@@ -41,6 +43,7 @@ class PostgresDatabase:
             "pa_pg_connection", default=None
         )
         self._extra: list[asyncpg.Connection] = []
+        self._secret: tuple[SecretHandle, SecretStorePort] | None = None
 
     @property
     def config(self) -> PostgresAdapterConfig:
@@ -50,10 +53,26 @@ class PostgresDatabase:
     def started(self) -> bool:
         return self._pool is not None
 
-    async def startup(self) -> tuple[str, ...]:
-        """Connect, then validate/apply migrations. Raises on any failure."""
+    def use_secret_reference(self, handle: SecretHandle, store: SecretStorePort) -> None:
+        if self.started or handle.kind != "database_dsn":
+            raise ValueError("database credential reference cannot change after connection")
+        self._secret = (handle, store)
+        self._dsn = ""
 
+    async def connect(self) -> None:
+        """Connect without migrations, suitable for a read-only backup export."""
         if self._pool is None:
+            if self._secret is not None:
+                try:
+                    handle, store = self._secret
+                    dsn = normalize_dsn(
+                        await store.resolve_for_broker(handle, purpose="database.connect")
+                    )
+                    if not dsn.startswith("postgresql://"):
+                        raise ValueError()
+                    self._dsn = dsn
+                except Exception:
+                    raise ValueError("database credential is unavailable") from None
             self._pool = await asyncpg.create_pool(
                 dsn=self._dsn,
                 min_size=self._config.pool_min_size,
@@ -61,6 +80,10 @@ class PostgresDatabase:
                 command_timeout=self._config.command_timeout,
                 init=_init_connection,
             )
+
+    async def startup(self) -> tuple[str, ...]:
+        """Connect, then validate/apply migrations. Raises on any failure."""
+        await self.connect()
         return await run_migrations(self)
 
     async def close(self) -> None:

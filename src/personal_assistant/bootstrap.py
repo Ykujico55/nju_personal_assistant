@@ -41,6 +41,7 @@ from personal_assistant.core.extensions.lifecycle import (
     LifecycleStore,
 )
 from personal_assistant.core.extensions.models import ExtensionState
+from personal_assistant.core.governance import RuleHistory
 from personal_assistant.core.jobs import JobQueuePort, SideEffectOutboxPort
 from personal_assistant.core.mail import (
     MailAccountRegistry,
@@ -54,6 +55,8 @@ from personal_assistant.core.models import (
     ModelRouter,
     RecipientIdentity,
 )
+from personal_assistant.core.operations import HostControlPort
+from personal_assistant.core.records import RecordStore
 from personal_assistant.core.secrets import SecretHandle, SecretStorePort
 from personal_assistant.core.tasks import TaskService
 from personal_assistant.core.tasks.form_drafts import FormDraftService
@@ -79,6 +82,7 @@ from personal_assistant.infrastructure.database.mail_ledger import (
     PostgresMailDeliveryLedger,
 )
 from personal_assistant.infrastructure.database.push import PostgresPushSubscriptionStore
+from personal_assistant.infrastructure.database.records import PostgresRecordStore
 from personal_assistant.infrastructure.extensions import (
     CompatibleVersionOperator,
     FileExtensionConfigStore,
@@ -121,12 +125,16 @@ from personal_assistant.infrastructure.memory import (
 )
 from personal_assistant.infrastructure.memory.form_drafts import InMemoryFormDraftStore
 from personal_assistant.infrastructure.memory.push import InMemoryPushSubscriptionStore
+from personal_assistant.infrastructure.memory.records import InMemoryRecordStore
 from personal_assistant.infrastructure.models import (
     OllamaChatProvider,
     OllamaConfig,
     OpenAICompatibleChatProvider,
     OpenAICompatibleConfig,
 )
+from personal_assistant.infrastructure.notifications.ntfy import LocalNtfyNotifier
+from personal_assistant.infrastructure.operations.control import HostControl
+from personal_assistant.infrastructure.operations.rules import GitRuleHistory
 from personal_assistant.infrastructure.push.service import PushService
 from personal_assistant.infrastructure.push.transport import HttpWebPushSender
 from personal_assistant.infrastructure.secrets import default_secret_store
@@ -138,9 +146,13 @@ from personal_assistant.settings import ConfigurationError, Settings
 @dataclass(slots=True)
 class Container:
     settings: Settings
+    host_control: HostControlPort
+    rule_history: RuleHistory
     tasks: TaskService
     form_drafts: FormDraftService
     push: PushService
+    ntfy: LocalNtfyNotifier | None
+    records: RecordStore
     approvals: ApprovalService
     extension_registry: ExtensionRegistry
     extension_supervisor: ExtensionSupervisorService
@@ -184,6 +196,11 @@ class Container:
             for descriptor in manifest_tool_descriptors(record.manifest)
         ]
         self.tool_registry.publish(descriptors)
+        self.extension_registry.replace_all(
+            record
+            for record in records
+            if record.state is ExtensionState.ENABLED and record.manifest is not None
+        )
 
     async def aclose(self) -> None:
         """Release adapter-owned transports; storage keeps its own lifecycle."""
@@ -193,6 +210,8 @@ class Container:
             await self.model_router.aclose()
         await self.mail_broker.aclose()
         await self.push.aclose()
+        if self.ntfy is not None:
+            await self.ntfy.aclose()
         if self.browser_broker is not None:
             await self.browser_broker.aclose()
         with contextlib.suppress(Exception):
@@ -287,6 +306,8 @@ def _build_model_providers(
                     model_id=settings.model_remote_model,
                     base_url=settings.model_remote_base_url,
                     timeout_seconds=settings.model_remote_timeout_seconds,
+                    json_mode=settings.model_remote_json_mode,
+                    thinking=settings.model_remote_thinking,
                     secret_handle=SecretHandle(
                         id=settings.model_remote_secret_handle, kind="model_api_key"
                     ),
@@ -303,9 +324,7 @@ def _remote_recipients(
     """Only configured remote providers can ever receive a disclosure consent."""
 
     return {
-        provider.provider_id: provider.recipient
-        for provider in providers
-        if provider.is_remote
+        provider.provider_id: provider.recipient for provider in providers if provider.is_remote
     }
 
 
@@ -394,6 +413,11 @@ def _build_postgres_container(
         PostgresAdapterConfig.from_env(settings.database_url)
     )
     registry = ExtensionRegistry()
+    if settings.database_secret_handle:
+        adapters.database.use_secret_reference(
+            SecretHandle(settings.database_secret_handle, "database_dsn"),
+            secret_store if secret_store is not None else build_secret_store(),
+        )
     operations = PostgresExtensionOperationStore(adapters.database)
     credential_store: SecretStorePort = (
         secret_store if secret_store is not None else build_secret_store()
@@ -404,9 +428,7 @@ def _build_postgres_container(
     )
     config_store = FileExtensionConfigStore(settings.extension_root / "config")
     policy = _mail_policy(settings)
-    mail_accounts = FileMailAccountRegistry(
-        settings.extension_root / "mail" / "accounts.json"
-    )
+    mail_accounts = FileMailAccountRegistry(settings.extension_root / "mail" / "accounts.json")
     mail_broker = ConfiguredMailTransportBroker(
         credential_store,
         mail_accounts,
@@ -426,9 +448,7 @@ def _build_postgres_container(
     browser_sessions = PostgresBrowserSessionStore(adapters.database)
     browser_adapters = PostgresBrowserAdapterStore(adapters.database)
     companion = (
-        browser_companion
-        if browser_companion is not None
-        else _default_browser_companion(settings)
+        browser_companion if browser_companion is not None else _default_browser_companion(settings)
     )
     browser_broker = _build_browser_broker(
         settings,
@@ -483,11 +503,25 @@ def _build_postgres_container(
         secret_handle_id=settings.push_vapid_secret_handle,
         allowed_origins=settings.push_allowed_origins,
     )
+    ntfy = (
+        LocalNtfyNotifier(
+            publish_url=settings.ntfy_publish_url,
+            public_origin=settings.public_origin or "",
+            secret_handle_id=settings.ntfy_secret_handle or "",
+            secrets=credential_store,
+        )
+        if settings.ntfy_publish_url
+        else None
+    )
     return Container(
         settings=settings,
+        host_control=HostControl(settings.extension_root.parent / "control"),
+        rule_history=GitRuleHistory(settings.extension_root.parent / "rules-history"),
         tasks=tasks,
         form_drafts=FormDraftService(tasks, PostgresFormDraftStore(adapters.database)),
         push=push,
+        ntfy=ntfy,
+        records=PostgresRecordStore(adapters.database, owner_id=adapters.config.owner_id),
         approvals=approvals,
         extension_registry=registry,
         extension_supervisor=supervisor,
@@ -525,7 +559,9 @@ def _build_postgres_container(
         tool_registry=tool_registry,
         tool_gateway=ToolGateway(
             registry=tool_registry,
-            policy=ToolPolicy(),
+            policy=ToolPolicy(
+                frozen_probe=HostControl(settings.extension_root.parent / "control").frozen
+            ),
             approvals=approvals,
             executor=CapabilityRoutingExecutor(
                 extension_router=supervisor,
@@ -533,7 +569,7 @@ def _build_postgres_container(
                 browser_actions=browser_actions,
             ),
             outbox=adapters.side_effect_outbox,
-            pending_notifier=push if settings.push_vapid_public_key else None,
+            pending_notifier=ntfy or (push if settings.push_vapid_public_key else None),
         ),
     )
 
@@ -577,9 +613,7 @@ def _build_memory_container(
     browser_sessions = InMemoryBrowserSessionStore()
     browser_adapters = InMemoryBrowserAdapterStore()
     companion = (
-        browser_companion
-        if browser_companion is not None
-        else _default_browser_companion(settings)
+        browser_companion if browser_companion is not None else _default_browser_companion(settings)
     )
     browser_broker = _build_browser_broker(
         settings,
@@ -632,11 +666,25 @@ def _build_memory_container(
         secret_handle_id=settings.push_vapid_secret_handle,
         allowed_origins=settings.push_allowed_origins,
     )
+    ntfy = (
+        LocalNtfyNotifier(
+            publish_url=settings.ntfy_publish_url,
+            public_origin=settings.public_origin or "",
+            secret_handle_id=settings.ntfy_secret_handle or "",
+            secrets=credential_store,
+        )
+        if settings.ntfy_publish_url
+        else None
+    )
     return Container(
         settings=settings,
+        host_control=HostControl(settings.extension_root.parent / "control"),
+        rule_history=GitRuleHistory(settings.extension_root.parent / "rules-history"),
         tasks=tasks,
         form_drafts=FormDraftService(tasks, InMemoryFormDraftStore()),
         push=push,
+        ntfy=ntfy,
+        records=InMemoryRecordStore(),
         approvals=approvals,
         extension_registry=registry,
         extension_supervisor=supervisor,
@@ -674,7 +722,9 @@ def _build_memory_container(
         tool_registry=tool_registry,
         tool_gateway=ToolGateway(
             registry=tool_registry,
-            policy=ToolPolicy(),
+            policy=ToolPolicy(
+                frozen_probe=HostControl(settings.extension_root.parent / "control").frozen
+            ),
             approvals=approvals,
             executor=CapabilityRoutingExecutor(
                 extension_router=supervisor,
@@ -682,7 +732,7 @@ def _build_memory_container(
                 browser_actions=browser_actions,
             ),
             outbox=memory_outbox,
-            pending_notifier=push if settings.push_vapid_public_key else None,
+            pending_notifier=ntfy or (push if settings.push_vapid_public_key else None),
         ),
     )
 

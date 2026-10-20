@@ -368,6 +368,16 @@ class ProcessRuntimeSupervisor:
             raise RpcCallError(-32094, "form.list result must be a list of objects")
         return result
 
+    async def call_slot(self, extension_id: str, method: str,
+                        parameters: Mapping[str, Any]) -> Any:
+        if method not in {"workflow.list", "schedule.list", "event_source.list",
+                          "event_source.poll", "context.retrieve"}:
+            raise RpcCallError(-32601, "slot is not exposed by this host")
+        worker = self._workers.get(extension_id)
+        if worker is None or not worker.client.running:
+            raise RpcCallError(-32090, "extension worker is not running")
+        return await worker.call_slot(method, dict(parameters), timeout_seconds=30.0)
+
     def diagnostics(self, extension_id: str) -> tuple[str, ...]:
         worker = self._workers.get(extension_id)
         return worker.client.diagnostics if worker is not None else ()

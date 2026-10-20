@@ -370,6 +370,7 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0009_f08_form_drafts",
                 "0010_f08_push_subscriptions",
                 "0011_f08_push_subscription_commands",
+                "0012_runtime_records",
             ),
             applied,
         )
@@ -389,6 +390,7 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0009_f08_form_drafts",
                 "0010_f08_push_subscriptions",
                 "0011_f08_push_subscription_commands",
+                "0012_runtime_records",
             ],
             [r["version"] for r in rows],
         )
@@ -415,13 +417,14 @@ class PostgresF01Tests(unittest.IsolatedAsyncioTestCase):
                 "0009_f08_form_drafts",
                 "0010_f08_push_subscriptions",
                 "0011_f08_push_subscription_commands",
+                "0012_runtime_records",
             ),
             await second.startup(),
         )
         versions = await self._fetchval(
             second, "SELECT count(*) FROM schema_migrations"
         )
-        self.assertEqual(11, versions)
+        self.assertEqual(12, versions)
 
     async def test_checksum_drift_is_rejected(self) -> None:
         await self.migrate()

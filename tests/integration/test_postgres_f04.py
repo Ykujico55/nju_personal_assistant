@@ -77,6 +77,7 @@ MIGRATION_NAMES = (
     "0009_f08_form_drafts.sql",
     "0010_f08_push_subscriptions.sql",
     "0011_f08_push_subscription_commands.sql",
+    "0012_runtime_records.sql",
 )
 
 
@@ -225,6 +226,7 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
                 "0009_f08_form_drafts",
                 "0010_f08_push_subscriptions",
                 "0011_f08_push_subscription_commands",
+                "0012_runtime_records",
             ),
             applied,
         )
@@ -257,6 +259,9 @@ class PostgresF04Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             _file_checksum("0011_f08_push_subscription_commands.sql"),
             by_version["0011_f08_push_subscription_commands"],
+        )
+        self.assertEqual(
+            _file_checksum("0012_runtime_records.sql"), by_version["0012_runtime_records"]
         )
 
     async def test_0005_checksum_drift_is_rejected(self) -> None:

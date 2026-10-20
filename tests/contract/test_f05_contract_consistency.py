@@ -137,7 +137,8 @@ class MigrationHistoryContract(unittest.TestCase):
     def test_f05_required_no_new_core_migration_beyond_the_frozen_baseline(self) -> None:
         # F06 added the generic host mail-transport ledger (0006) and F07 the
         # generic supervised-browser session tables (0007); F08 adds task form
-        # drafts (0009) and push subscriptions/commands (0010/0011). F05 itself still
+        # drafts (0009) and push subscriptions/commands (0010/0011); the authorized
+        # delivery runtime adds generic records/commands (0012). F05 itself still
         # required no core migration; the frozen 0001-0005 files above must
         # remain byte-identical.
         extra = [
@@ -153,6 +154,7 @@ class MigrationHistoryContract(unittest.TestCase):
                 "0009_f08_form_drafts.sql",
                 "0010_f08_push_subscriptions.sql",
                 "0011_f08_push_subscription_commands.sql",
+                "0012_runtime_records.sql",
             ],
             extra,
         )

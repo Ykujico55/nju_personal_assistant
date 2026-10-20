@@ -43,6 +43,8 @@ class OpenAICompatibleConfig:
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     secret_handle: SecretHandle | None = None
+    json_mode: bool = False
+    thinking: str | None = None
 
 
 class OpenAICompatibleChatProvider(HttpJsonModelProvider):
@@ -79,6 +81,13 @@ class OpenAICompatibleChatProvider(HttpJsonModelProvider):
             raise ConfigurationError("remote model requires a SecretHandle-backed credential")
         if secret_store is None:
             raise ConfigurationError("remote model requires a host credential store")
+        if type(config.json_mode) is not bool or config.thinking not in {
+            None,
+            "enabled",
+            "disabled",
+        }:
+            raise ConfigurationError("invalid model response options")
+        self._json_mode, self._thinking = config.json_mode, config.thinking
         self._secret_handle = config.secret_handle
         self._secret_store = secret_store
 
@@ -108,16 +117,19 @@ class OpenAICompatibleChatProvider(HttpJsonModelProvider):
         return credential
 
     def _build_payload(self, request: ModelRequest, model_id: str) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "model": model_id,
             "messages": [{"role": "user", "content": render_request_text(request)}],
             "stream": False,
             "max_tokens": self._max_output_tokens,
         }
+        if self._json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        if self._thinking is not None:
+            payload["thinking"] = {"type": self._thinking}
+        return payload
 
-    def _parse_output(
-        self, raw: bytes, recipient: RecipientIdentity
-    ) -> ModelOutput:
+    def _parse_output(self, raw: bytes, recipient: RecipientIdentity) -> ModelOutput:
         payload = self._decode_json(raw)
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:

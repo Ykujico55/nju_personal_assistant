@@ -1,4 +1,4 @@
-# Generated from the verified Python 3.12 Windows environment on 2026-09-16.
+# Generated from the verified Python 3.12 Windows environment on 2026-10-13.
 # Recreate intentionally after changing pyproject.toml; do not hand-upgrade one line.
 alembic==1.20.0
 annotated-doc==0.0.5
@@ -28,10 +28,10 @@ pathspec==1.1.1
 pgvector==0.5.0
 playwright==1.62.0
 pluggy==1.6.0
-pyee==13.0.1
 pycparser==3.0
 pydantic==2.13.5
 pydantic_core==2.46.5
+pyee==13.0.1
 Pygments==2.21.0
 PyJWT==2.14.0
 pytest==8.4.2
@@ -44,7 +44,8 @@ SQLAlchemy==2.0.53
 starlette==1.6.0
 typing-inspection==0.4.4
 typing_extensions==4.16.0
+tzdata==2026.5
 uvicorn==0.53.0
 watchfiles==1.2.0
-wheel==0.48.0
 websockets==17.1
+wheel==0.48.0

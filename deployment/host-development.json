@@ -1,0 +1,13 @@
+{
+  "PA_ENVIRONMENT": "development",
+  "PA_STORAGE_BACKEND": "memory",
+  "PA_PUBLIC_HOST": "127.0.0.1",
+  "PA_PUBLIC_PORT": "18100",
+  "PA_ADMIN_HOST": "127.0.0.1",
+  "PA_ADMIN_PORT": "18101",
+  "PA_HEALTH_HOST": "127.0.0.1",
+  "PA_HEALTH_PORT": "18110",
+  "PA_EMBEDDED_AGENT": "true",
+  "PA_EXTENSION_ROOT": "var/development/extensions",
+  "PA_ARTIFACT_ROOT": "var/development/artifacts"
+}

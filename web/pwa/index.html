@@ -7,17 +7,18 @@
     <meta name="robots" content="noindex,nofollow">
     <link rel="manifest" href="./manifest.webmanifest" crossorigin="use-credentials">
     <link rel="stylesheet" href="./styles.css">
-    <title>Personal Assistant</title>
+    <title>个人助手 | Personal Assistant</title>
   </head>
   <body>
     <header>
-      <p class="eyebrow">LOCAL-FIRST CONTROL PLANE</p>
-      <h1>Personal Assistant</h1>
+      <p class="eyebrow">个人助手</p>
+      <h1>你的任务，交给助手</h1>
       <p>发起任务、查看扩展，并对精确的外部动作做最终确认。</p>
       <p id="connection-state" class="connection-state pending" role="status" aria-live="polite">正在连接服务…</p>
     </header>
 
     <main>
+      <section class="card compact"><h2>助手状态</h2><p id="system-status" role="status">正在读取配置状态…</p></section>
       <section class="card">
         <h2>新任务</h2>
         <form id="task-form">
@@ -55,6 +56,17 @@
       </section>
 
       <section class="card">
+        <h2>可审核的偏好规则</h2>
+        <p>纠正先保存为候选。正反例验证后由你启用；回滚也会重新等待审核。</p>
+        <form id="rule-form">
+          <label for="rule-category">适用分类（仅标识符，例如 general）</label><input id="rule-category" required value="general" pattern="[A-Za-z0-9_.-]{1,128}">
+          <label for="rule-language">回复语言</label><select id="rule-language"><option value="zh">中文</option><option value="en">English</option></select>
+          <label for="rule-style">回答长度</label><select id="rule-style"><option value="brief">简短</option><option value="detailed">详细</option></select>
+          <button type="submit">保存为候选规则</button>
+        </form><p id="rule-status" role="status"></p><div id="rule-list"></div>
+      </section>
+
+      <section class="card">
         <h2>待确认动作</h2>
         <form id="approval-form">
           <label for="approval-id">Approval ID</label>
@@ -64,7 +76,7 @@
           </div>
         </form>
         <div id="approval-preview" hidden>
-          <p class="warning">审批只记录你的确认，不直接发送邮件或提交网页。请核对助手验证的完整内容。</p>
+          <p class="warning">批准后，后台助手仅执行下方精确绑定的动作。请核对收件人、正文和全部附件。</p>
           <p id="approval-status" role="status" aria-live="polite"></p>
           <h3>实际邮件内容</h3>
           <pre id="approval-material"></pre>

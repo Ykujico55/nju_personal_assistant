@@ -1397,7 +1397,7 @@ Agent 只能调用模拟的 R0/`READ` 工具；不能发送邮件、填写真实
 2. 实现 SSE、断线续传、乐观并发和离线状态；Service Worker 只缓存静态资源。
 3. 配置用户固定域名、Cloudflare Tunnel 和 Access allowlist；实现 Access JWT 严格验证。
 4. 实现 CSRF token、Origin 校验、CSP、点击劫持防护和安全 Cookie。
-5. 实现 Android Web Push、订阅撤销和最小化锁屏内容。
+5. 实现 Android Web Push、订阅撤销和最小化锁屏内容。 2026-10-10 用户明确永久不使用 Google Play，并允许 F08.6 增加最小 ntfy 无 Firebase 通道；主机接线不等于手机验收。任务/草稿/审批仍以助手为中心，通知只含最小元数据，接收入口仍受 Access 保护。
 6. 启动独立 health-only Sidecar 端口，配置 Tailscale 只映射该端口；所有恢复性变更只留在本机 CLI。
 7. 在蜂窝网络、家庭/校园 Wi-Fi、网络切换、Cloudflare 中断和主机离线情况下验收。
 

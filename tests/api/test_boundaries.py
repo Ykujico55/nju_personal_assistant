@@ -59,7 +59,7 @@ class NetworkBoundaryTests(unittest.TestCase):
             create_admin_app(settings=settings, container=build_container(settings))
         )
         listed = client.get("/admin/v1/extensions")
-        self.assertEqual("example.echo", listed.json()["items"][0]["id"])
+        self.assertIn("example.echo", [i["id"] for i in listed.json()["items"]])
         # A bare source is not a confirmation: the request is rejected before any
         # staging or execution could happen.
         install = client.post(

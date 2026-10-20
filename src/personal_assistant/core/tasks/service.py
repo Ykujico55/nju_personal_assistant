@@ -176,6 +176,22 @@ class TaskService:
             )
         return task, message
 
+    async def project(self, task_id: str, state: TaskState) -> Task:
+        task = await self._repository.get(task_id)
+        if task.state in {TaskState.CANCELLED, TaskState.SUCCEEDED, TaskState.FAILED}:
+            return task
+        if task.state is state:
+            return task
+        saved = await self._repository.save(Task(id=task.id, objective=task.objective, state=state,
+            version=task.version + 1, created_at=task.created_at), expected_version=task.version)
+        await self.events.publish("task.state_changed", task_id, {"state": state.value})
+        return saved
+
+    async def assistant_message(self, task_id: str, content: str, *, key: str) -> None:
+        task = await self._repository.get(task_id)
+        await self.add_message(task_id=task_id, content=content, expected_version=task.version,
+                               actor="assistant", idempotency_key=key)
+
     async def cancel(
         self,
         *,

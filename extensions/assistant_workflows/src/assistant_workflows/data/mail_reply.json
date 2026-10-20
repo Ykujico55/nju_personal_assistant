@@ -1,0 +1,167 @@
+{
+  "id": "assistant.mail_reply",
+  "version": "1",
+  "name": "邮件回复与发送",
+  "description": "检索与材料缺口→用户草稿→独立精确邮件审批→回执归档",
+  "steps": [
+    {
+      "id": "ask_account_id",
+      "type": "ask",
+      "field": "account_id",
+      "question": "选择已在本机登记的邮箱账号 ID",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    {
+      "id": "ask_query",
+      "type": "ask",
+      "field": "query",
+      "question": "提供检索主题或关键词",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      }
+    },
+    {
+      "id": "mail",
+      "type": "tool",
+      "tool_id": "smail.search",
+      "tool_version": "0.2.0",
+      "arguments": {
+        "account_id": {
+          "$value": "inputs.account_id"
+        },
+        "query": {
+          "$value": "inputs.query"
+        },
+        "limit": 5
+      }
+    },
+    {
+      "id": "evidence",
+      "type": "tool",
+      "tool_id": "knowledge.search",
+      "tool_version": "0.1.0",
+      "arguments": {
+        "query": {
+          "$value": "inputs.query"
+        },
+        "limit": 5
+      }
+    },
+    {
+      "id": "ask_to",
+      "type": "ask",
+      "field": "to",
+      "question": "核对回复收件人邮箱",
+      "schema": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 320
+      }
+    },
+    {
+      "id": "ask_subject",
+      "type": "ask",
+      "field": "subject",
+      "question": "输入或修改邮件主题",
+      "schema": {
+        "type": "string",
+        "maxLength": 998
+      }
+    },
+    {
+      "id": "ask_body_text",
+      "type": "ask",
+      "field": "body_text",
+      "question": "输入或修改回复正文",
+      "schema": {
+        "type": "string",
+        "maxLength": 262144
+      }
+    },
+    {
+      "id": "draft",
+      "type": "tool",
+      "tool_id": "smail.prepare_reply",
+      "tool_version": "0.2.0",
+      "arguments": {
+        "account_id": {
+          "$value": "inputs.account_id"
+        },
+        "to": [
+          {
+            "$value": "inputs.to"
+          }
+        ],
+        "subject": {
+          "$value": "inputs.subject"
+        },
+        "body_text": {
+          "$value": "inputs.body_text"
+        }
+      }
+    },
+    {
+      "id": "ask_review_draft",
+      "type": "ask",
+      "field": "review_draft",
+      "question": "核对草稿与来源；继续后仍须对实际邮件材料另行审批",
+      "schema": {
+        "type": "boolean",
+        "enum": [
+          true
+        ]
+      }
+    },
+    {
+      "id": "send",
+      "type": "tool",
+      "tool_id": "smail.send",
+      "tool_version": "0.2.0",
+      "arguments": {
+        "draft_id": {
+          "$value": "outputs.draft.draft_id"
+        },
+        "canonical_digest": {
+          "$value": "outputs.draft.canonical_digest"
+        },
+        "local_action_id": {
+          "$value": "outputs.draft.local_action_id"
+        },
+        "message_id": {
+          "$value": "outputs.draft.message_id"
+        },
+        "from_address": {
+          "$value": "outputs.draft.from_address"
+        },
+        "to": {
+          "$value": "outputs.draft.to"
+        },
+        "subject": {
+          "$value": "outputs.draft.subject"
+        },
+        "mime_sha256": {
+          "$value": "outputs.draft.mime_sha256"
+        },
+        "account_id": {
+          "$value": "outputs.draft.account_id"
+        },
+        "account_fingerprint": {
+          "$value": "outputs.draft.account_fingerprint"
+        },
+        "draft_version": {
+          "$value": "outputs.draft.version"
+        }
+      }
+    },
+    {
+      "id": "archive",
+      "type": "archive"
+    }
+  ]
+}

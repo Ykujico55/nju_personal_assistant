@@ -1,0 +1,14 @@
+manifest_version = "1"
+id = "assistant.workflows"
+name = "Assistant Workflows"
+version = "0.1.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.14"
+entrypoint = "assistant_workflows.worker:create_extension"
+dependency_lock = "requirements.lock"
+state_schema_version = 1
+healthcheck = "system.health"
+workflows = ["assistant.mail_reply", "assistant.form_prepare", "assistant.form_submit"]
+[capabilities]
+required = []
+optional = []

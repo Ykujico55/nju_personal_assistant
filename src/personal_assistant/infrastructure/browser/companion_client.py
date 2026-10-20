@@ -8,6 +8,7 @@ typed core errors without echoing message bodies into logs.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
@@ -130,34 +131,74 @@ class LoopbackCompanionClient:
         task_id: str,
         extension_id: str,
     ) -> Mapping[str, Any]:
-        data = await self._request(
-            "POST",
-            "/v1/sessions",
-            token=self._root,
-            payload={
-                "session_id": session_id,
-                "purpose": purpose,
-                "allowed_origins": list(allowed_origins),
-                "origin_mode": origin_mode,
-                "task_id": task_id,
-                "extension_id": extension_id,
-            },
-        )
-        capability = data.get("capability")
-        if not isinstance(capability, str) or not capability:
-            raise BrowserUnavailableError("the companion did not issue a session capability")
+        if not isinstance(session_id, str) or not session_id:
+            raise BrowserUnavailableError("a nonempty session id is required")
+        data = None
+        capability = None
+        try:
+            data = await self._request(
+                "POST",
+                "/v1/sessions",
+                token=self._root,
+                payload={
+                    "session_id": session_id,
+                    "purpose": purpose,
+                    "allowed_origins": list(allowed_origins),
+                    "origin_mode": origin_mode,
+                    "task_id": task_id,
+                    "extension_id": extension_id,
+                },
+            )
+            capability = data.get("capability")
+            if not isinstance(capability, str) or not capability:
+                raise BrowserUnavailableError("the companion did not issue a session capability")
+        except BaseException:
+            # No returned session token is needed to retire this known command id.
+            # Scrub response material before preserving the original failure.
+            del data, capability
+            if await self._cleanup_failed_creation(session_id):
+                raise asyncio.CancelledError() from None
+            raise
         self._session_tokens[session_id] = capability
         return data
+
+    async def _revoke_creation(self, session_id: str) -> None:
+        if not isinstance(session_id, str) or not session_id:
+            raise BrowserUnavailableError("a nonempty session id is required")
+        receipt = await self._request(
+            "POST", "/v1/revoke", token=self._root, payload={"session_id": session_id}
+        )
+        if receipt.get("revoked") is not True:
+            raise BrowserUnavailableError("the session revocation was not confirmed")
+
+    async def _cleanup_failed_creation(self, session_id: str) -> bool:
+        cleanup = asyncio.create_task(self._revoke_creation(session_id))
+        interrupted = False
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                interrupted = True
+            except Exception:
+                break
+        if not cleanup.cancelled():
+            # Keep the original create failure if cleanup is unreachable. The
+            # caller can retry root revocation; the server also owns TTL cleanup.
+            with contextlib.suppress(Exception):
+                cleanup.result()
+        return interrupted
 
     async def close_session(self, session_id: str) -> None:
         token = self._session_tokens.pop(session_id, None)
         if token is None:
+            await self._revoke_creation(session_id)
             return
         await self._request("POST", f"/v1/sessions/{session_id}/close", token=token)
 
     async def cancel_session(self, session_id: str) -> None:
         token = self._session_tokens.pop(session_id, None)
         if token is None:
+            await self._revoke_creation(session_id)
             return
         await self._request("POST", f"/v1/sessions/{session_id}/cancel", token=token)
 
@@ -204,9 +245,7 @@ class LoopbackCompanionClient:
             token=self._token(session_id),
         )
 
-    async def select_frame(
-        self, session_id: str, *, origin: str, path: str
-    ) -> Mapping[str, Any]:
+    async def select_frame(self, session_id: str, *, origin: str, path: str) -> Mapping[str, Any]:
         return await self._request(
             "POST",
             f"/v1/sessions/{session_id}/select-frame",
@@ -214,9 +253,7 @@ class LoopbackCompanionClient:
             payload={"origin": origin, "path": path},
         )
 
-    async def fill(
-        self, session_id: str, fields: tuple[tuple[str, str], ...]
-    ) -> Mapping[str, Any]:
+    async def fill(self, session_id: str, fields: tuple[tuple[str, str], ...]) -> Mapping[str, Any]:
         return await self._request(
             "POST",
             f"/v1/sessions/{session_id}/fill",

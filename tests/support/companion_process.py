@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -96,16 +97,22 @@ def pid_alive(pid: int) -> bool:
     if sys.platform != "win32":
         return False
     try:
-        output = subprocess.run(
+        result = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True,
-            text=True,
+            text=False,
             timeout=10,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        ).stdout
-    except Exception:
-        return False
-    return str(pid) in output
+        )
+    except Exception as error:
+        raise RuntimeError("the browser liveness probe is unavailable") from error
+    if result.returncode or not isinstance(result.stdout, bytes):
+        raise RuntimeError("the browser liveness probe failed")
+    # Process names and localized messages use the native Windows codepage.
+    # The PID CSV column is ASCII; match the exact number without decoding it.
+    observed = re.findall(rb'^\s*"[^"]*","([0-9]+)"', result.stdout, flags=re.MULTILINE)
+    return str(pid).encode("ascii") in observed
+
 
 
 __all__ = ["CompanionProcess", "free_loopback_port", "pid_alive", "start_companion"]

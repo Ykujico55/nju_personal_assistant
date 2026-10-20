@@ -120,6 +120,7 @@ async function loadTask(id) {
     if (requestId !== detailRequest) return null;
     renderTaskDetail(detail);
     void loadFormDraft(id);
+    void loadExecution(id);
     return detail;
   } catch (failure) {
     if (requestId !== detailRequest) return null;
@@ -227,7 +228,7 @@ function renderTaskDetail(detail) {
   }
   content.replaceChildren(title, state, created, messagesTitle, messages);
   if (!sameTask) {
-    panel.replaceChildren(content, createMessageComposer(detail.task.id), createFormDraftPanel());
+    panel.replaceChildren(content, createMessageComposer(detail.task.id), createExecutionPanel(detail.task.id), createFormDraftPanel());
     panel.dataset.taskId = detail.task.id;
   } else {
     panel.querySelector(".task-detail-error")?.remove();
@@ -1030,7 +1031,7 @@ function connectEvents() {
     );
   };
   current.onmessage = handleTaskEvent;
-  for (const type of ["task.queued", "task.message_added", "task.cancelled"]) {
+  for (const type of ["task.queued", "task.message_added", "task.cancelled", "task.state_changed"]) {
     current.addEventListener(type, handleTaskEvent);
   }
 }
@@ -1252,7 +1253,10 @@ document.querySelector("#push-disable").addEventListener("click", async () => {
   }
 });
 document.querySelector("#push-refresh").addEventListener("click", () => {
-  void readPushStatus();
+
+
+
+void readPushStatus();
 });
 
 if ("serviceWorker" in navigator) {
@@ -1263,3 +1267,408 @@ void readPushStatus();
 loadExtensions();
 void loadTasks();
 connectEvents();
+
+// Execution edits and request receipts stay in memory, just like form drafts.
+const executionEdits = new Map();
+function executionEdit(taskId) {
+  if (!executionEdits.has(taskId)) executionEdits.set(taskId, {
+    server: null, catalog: [], selected: "", values: {}, attempt: null, notice: "", conflict: false,
+  });
+  return executionEdits.get(taskId);
+}
+function createExecutionPanel(taskId) {
+  const panel = document.createElement("section");
+  panel.id = "execution-panel";
+  const title = document.createElement("h4");
+  title.textContent = "继续任务";
+  const status = document.createElement("p");
+  status.id = "execution-status";
+  status.setAttribute("role", "status");
+  const form = document.createElement("form");
+  const label = document.createElement("label");
+  label.htmlFor = "execution-workflow";
+  label.textContent = "执行方式";
+  const selector = document.createElement("select");
+  selector.id = "execution-workflow";
+  selector.addEventListener("change", () => {
+    const edit = executionEdit(taskId);
+    if (edit.attempt) return;
+    edit.selected = selector.value;
+    edit.values = {};
+    edit.notice = "";
+    renderExecution(taskId);
+  });
+  const fields = document.createElement("div");
+  fields.id = "execution-fields";
+  const button = document.createElement("button");
+  button.id = "execution-submit";
+  button.type = "submit";
+  button.textContent = "继续执行";
+  const conflict = document.createElement("button");
+  conflict.id = "execution-conflict";
+  conflict.type = "button";
+  conflict.className = "secondary";
+  conflict.textContent = "保留输入，按服务端新版本继续";
+  conflict.hidden = true;
+  conflict.addEventListener("click", () => {
+    const edit = executionEdit(taskId);
+    // Only an explicit choice rebases an unexecuted, rejected command.
+    if (!edit.conflict) return;
+    edit.attempt = null;
+    edit.conflict = false;
+    edit.notice = "输入已保留，请再次确认执行。";
+    renderExecution(taskId);
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitExecution(taskId);
+  });
+  form.append(label, selector, fields, button, conflict);
+  const actions = document.createElement("div");
+  actions.id = "execution-actions";
+  panel.append(title, status, form, actions);
+  return panel;
+}
+function executionSchema(item, pending) {
+  const schema = item?.input_schema ?? { type: "object", properties: {}, additionalProperties: false };
+  if (pending?.field) return {
+    type: "object", additionalProperties: false, required: [pending.field],
+    properties: { [pending.field]: { ...pending.schema, title: pending.question } },
+  };
+  return schema;
+}
+function validateWorkflowField(schema, depth = 0) {
+  if (depth > 16 || !schema || typeof schema !== "object" || Array.isArray(schema)) throw new Error("Schema 结构不支持");
+  if (["object", "array"].includes(schema.type)) {
+    const allowed = new Set(["type", "title", "description", "properties", "additionalProperties", "required", "items", "minItems", "maxItems"]);
+    if (!exactKeys(schema, allowed)) throw new Error("结构化 Schema 含未支持能力");
+    for (const [name, child] of Object.entries(schema.properties ?? {})) {
+      if (["__proto__", "constructor", "prototype"].includes(name)) throw new Error("字段名称不支持");
+      validateWorkflowField(child, depth + 1);
+    }
+    if (schema.items) validateWorkflowField(schema.items, depth + 1);
+    return;
+  }
+  validateDraftDescriptor({ task_id: "workflow", extension_id: "host", extension_version: "1", form_id: "workflow", version: 1,
+    json_schema: { type: "object", additionalProperties: false, properties: { field: schema } }, ui_schema: {}, values: {}, sources: { field: "UNKNOWN" } }, "workflow");
+}
+function validateExecutionSchema(schema) {
+  if (!schema || schema.type !== "object" || schema.additionalProperties !== false || !exactKeys(schema, FORM_ROOT_KEYS) || !schema.properties)
+    throw new Error("工作流输入根 Schema 不支持");
+  const names = Object.keys(schema.properties);
+  if (names.length > 100 || names.some((name) => !name || name.length > 128 || ["__proto__", "constructor", "prototype"].includes(name))) throw new Error("字段名称或数量不支持");
+  for (const name of names) validateWorkflowField(schema.properties[name]);
+  return names;
+}
+
+function renderExecution(taskId) {
+  if (selectedTaskId !== taskId || !document.querySelector("#execution-panel")) return;
+  const edit = executionEdit(taskId);
+  const selector = document.querySelector("#execution-workflow");
+  selector.replaceChildren();
+  const agent = document.createElement("option");
+  agent.value = "";
+  agent.textContent = "助手自动规划（需配置模型）";
+  selector.append(agent);
+  for (const item of edit.catalog) {
+    const option = document.createElement("option");
+    option.value = `${item.extension_id}:${item.id}:${item.version}`;
+    option.textContent = `${item.id} · ${item.version}`;
+    try { if (!item.supported) throw new Error("unsupported"); validateExecutionSchema(executionSchema(item)); }
+    catch (_) { option.disabled = true; option.textContent += "（声明不支持，已禁用）"; }
+    selector.append(option);
+  }
+  selector.value = edit.selected;
+  const item = edit.catalog.find((entry) => `${entry.extension_id}:${entry.id}:${entry.version}` === edit.selected);
+  const fields = document.querySelector("#execution-fields");
+  const schema = executionSchema(item, edit.server?.pending_input);
+  const names = validateExecutionSchema(schema);
+  fields.replaceChildren();
+  for (const name of names) {
+    const field = schema.properties[name];
+    const label = document.createElement("label");
+    label.textContent = field.title || name;
+    let input;
+    if (field.enum || field.type === "boolean") {
+      input = document.createElement("select");
+      const blank = document.createElement("option");
+      blank.value = ""; blank.textContent = "未确定"; input.append(blank);
+      for (const value of field.enum ?? [true, false]) {
+        const option = document.createElement("option");
+        option.value = JSON.stringify(value); option.textContent = String(value); input.append(option);
+      }
+      input.value = Object.hasOwn(edit.values, name) ? JSON.stringify(edit.values[name]) : "";
+    } else if (["object", "array"].includes(field.type)) {
+      input = document.createElement("textarea");
+      input.rows = 5; input.maxLength = 200000; input.dataset.json = "true";
+      input.value = edit.rawValues?.[name] ?? (Object.hasOwn(edit.values, name) ? JSON.stringify(edit.values[name], null, 2) : "");
+      label.textContent += "（JSON 材料；由服务器校验）";
+    } else {
+      input = document.createElement("input");
+      input.type = ["number", "integer"].includes(field.type) ? "number" : "text";
+      if (input.type === "number") input.step = field.type === "integer" ? "1" : "any";
+      input.value = edit.values[name] ?? "";
+      for (const [property, attribute] of [["minLength", "minLength"], ["maxLength", "maxLength"],
+        ["minimum", "min"], ["maximum", "max"]]) if (field[property] !== undefined) input[attribute] = field[property];
+    }
+    input.name = name;
+    input.id = `execution-field-${name}`;
+    label.htmlFor = input.id;
+    input.autocomplete = "off";
+    input.required = (schema.required ?? []).includes(name);
+    input.disabled = Boolean(edit.attempt);
+    input.addEventListener("input", () => {
+      if (input.dataset.json) {
+        edit.rawValues ??= {};
+        edit.rawValues[name] = input.value;
+        try {
+          const value = JSON.parse(input.value);
+          if (field.type === "array" ? !Array.isArray(value) : !value || typeof value !== "object" || Array.isArray(value)) throw new Error("类型不符");
+          edit.values[name] = value; input.setCustomValidity("");
+        } catch (_) { input.setCustomValidity("请输入符合该字段类型的完整 JSON；本机输入已保留。"); }
+        return;
+      }
+      if (input.value === "" && (field.type !== "string" || input.tagName === "SELECT")) delete edit.values[name];
+      else edit.values[name] = input.tagName === "SELECT" ? JSON.parse(input.value) :
+        input.type === "number" ? Number(input.value) : input.value;
+    });
+    const source = document.createElement("small");
+    source.textContent = "来源：用户输入；执行请求确认前尚未保存";
+    fields.append(label, input, source);
+  }
+  selector.disabled = Boolean(edit.attempt);
+  const status = document.querySelector("#execution-status");
+  status.textContent = (edit.server ? `当前状态：${edit.server.state} · ` : "") + (edit.notice || (edit.server ? `当前状态：${edit.server.state} · 任务版本：${edit.server.task_version}` : "正在读取执行状态…"));
+  const button = document.querySelector("#execution-submit");
+  button.disabled = !edit.server || edit.attempt?.state === "sending" || edit.conflict ||
+    (!edit.attempt && (["SUCCEEDED", "CANCELLED", "FAILED", "WAITING_APPROVAL", "WAITING_RECONCILIATION", "RUNNING"].includes(edit.server?.state) || (edit.selected && !item)));
+  button.textContent = edit.attempt?.state === "unknown" ? "重试同一执行请求" : "继续执行";
+  document.querySelector("#execution-conflict").hidden = !edit.conflict;
+  const actions = document.querySelector("#execution-actions");
+  actions.replaceChildren();
+  if (edit.server?.execution?.outputs && Object.keys(edit.server.execution.outputs).length) {
+    const title = document.createElement("h5"); title.textContent = "步骤结果与来源（未确定内容需补充）";
+    const outputs = document.createElement("pre"); outputs.textContent = JSON.stringify(edit.server.execution.outputs, null, 2);
+    actions.append(title, outputs);
+  }
+  if (!["SUCCEEDED", "FAILED", "CANCELLED"].includes(edit.server?.state)) {
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "danger"; cancel.textContent = "取消任务，停止后续执行";
+    let attempt = null;
+    cancel.addEventListener("click", async () => {
+      attempt ??= { key: crypto.randomUUID(), body: { version: edit.server.task_version } };
+      cancel.disabled = true;
+      try {
+        const receipt = await jsonRequest(`${api}/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST", headers: commandHeaders(attempt.key), body: JSON.stringify(attempt.body) });
+        const task = receipt.task ?? receipt;
+        if (task.id !== taskId || task.state !== "CANCELLED") throw new Error("取消回执不完整");
+        edit.notice = "任务已取消。若外部动作已开始，其结果仍需核对；助手不会自动重试。";
+        await loadTask(taskId);
+      } catch (failure) { cancel.disabled = false; cancel.textContent = "取消结果未确认，重试同一请求"; edit.notice = failure.message; }
+    });
+    actions.append(cancel);
+  }
+  const reference = edit.server?.execution?.reference;
+  if (edit.server?.state === "WAITING_APPROVAL" && typeof reference === "string") {
+    const review = document.createElement("button");
+    review.type = "button"; review.textContent = "查看完整动作，核对并审批";
+    review.addEventListener("click", () => {
+      document.querySelector("#approval-id").value = reference;
+      document.querySelector("#approval-form").requestSubmit();
+      document.querySelector("#approval-form").scrollIntoView({ behavior: "smooth" });
+    });
+    actions.append(review);
+  }
+  if (edit.server?.model_disclosure?.required) {
+    const preview = document.createElement("button");
+    preview.type = "button"; preview.className = "secondary";
+    preview.textContent = "核对资料披露并允许模型处理";
+    preview.addEventListener("click", async () => {
+      try {
+        const value = await jsonRequest(`${api}/tasks/${encodeURIComponent(taskId)}/model-disclosure/preview`, {
+          method: "POST", headers: commandHeaders(), body: "{}",
+        });
+        if (!value.preview_hash || !Number.isSafeInteger(value.task_version)) throw new Error("披露预览不完整");
+        const material = document.createElement("pre");
+        material.textContent = JSON.stringify({ recipient: value.recipient, purpose: value.purpose,
+          fields: value.fields, ttl_seconds: value.ttl_seconds }, null, 2);
+        const allow = document.createElement("button");
+        allow.type = "button"; allow.textContent = "允许这些字段发给该模型";
+        const attempt = { key: crypto.randomUUID(), body: { version: value.task_version, preview_hash: value.preview_hash } };
+        allow.addEventListener("click", async () => {
+          allow.disabled = true;
+          try {
+            const receipt = await jsonRequest(`${api}/tasks/${encodeURIComponent(taskId)}/model-disclosure`, {
+              method: "POST", headers: commandHeaders(attempt.key), body: JSON.stringify(attempt.body),
+            });
+            if (typeof receipt.id !== "string" || receipt.state !== "ACTIVE" || receipt.field_digest !== value.field_digest ||
+                receipt.recipient_fingerprint !== value.recipient_fingerprint) throw new Error("许可回执不完整");
+            edit.consentId = receipt.id;
+            edit.notice = "披露许可已确认；请点击继续执行。字段变化后需重新核对。";
+            renderExecution(taskId);
+          } catch (_) { allow.disabled = false; allow.textContent = "许可结果未确认，重试同一请求"; }
+        });
+        actions.replaceChildren(material, allow);
+      } catch (failure) { edit.notice = `无法读取披露预览：${failure.message}`; renderExecution(taskId); }
+    });
+    actions.append(preview);
+  }
+  if (edit.server?.state === "WAITING_RECONCILIATION") {
+    const note = document.createElement("p");
+    note.textContent = "外部结果未确认。助手不会自动重试，请在本机核对回执后处理。";
+    actions.append(note);
+  }
+}
+async function loadExecution(taskId) {
+  const edit = executionEdit(taskId);
+  try {
+    const [server, catalog] = await Promise.all([
+      jsonRequest(`${api}/tasks/${encodeURIComponent(taskId)}/execution`), jsonRequest(`${api}/workflows`),
+    ]);
+    if (server.task_id !== taskId || !Number.isSafeInteger(server.task_version) || !Array.isArray(catalog.items))
+      throw new Error("执行状态结构不完整");
+    if (!edit.server || server.task_version >= edit.server.task_version) edit.server = server;
+    edit.catalog = catalog.items;
+    if (!edit.selected && server.workflow) {
+      const flow = server.workflow;
+      edit.selected = `${flow.extension_id}:${flow.id}:${flow.version}`;
+    }
+    renderExecution(taskId);
+  } catch (failure) {
+    edit.notice = `无法读取执行状态：${failure.message}。保留本机输入，恢复连接后重读。`;
+    if (selectedTaskId === taskId) document.querySelector("#execution-status").textContent = edit.notice;
+  }
+}
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+async function submitExecution(taskId) {
+  const edit = executionEdit(taskId);
+  if (edit.attempt?.state === "sending" || edit.conflict) return;
+  if (navigator.onLine === false) { edit.notice = "设备离线，执行请求尚未确认。"; renderExecution(taskId); return; }
+  if (!edit.attempt) {
+    const flow = edit.catalog.find((entry) => `${entry.extension_id}:${entry.id}:${entry.version}` === edit.selected);
+    if (edit.selected && !flow) { edit.notice = "所选工作流版本不可用，输入已保留；请明确选择可用版本或新任务。"; renderExecution(taskId); return; }
+    edit.attempt = { key: crypto.randomUUID(), state: "sending", command: {
+      version: edit.server.task_version, mode: flow ? "workflow" : "agent",
+      workflow: flow ? { id: flow.id, version: flow.version, extension_id: flow.extension_id, extension_version: flow.extension_version } : null,
+      inputs: { ...edit.values }, consent_id: edit.consentId ?? null,
+    } };
+  }
+  const attempt = edit.attempt;
+  attempt.state = "sending";
+  edit.notice = "正在请求执行…";
+  renderExecution(taskId);
+  try {
+    const receipt = await jsonRequest(`${api}/tasks/${encodeURIComponent(taskId)}/execution`, {
+      method: "POST", headers: commandHeaders(attempt.key), body: JSON.stringify(attempt.command),
+    });
+    if (receipt?.task_id !== taskId || receipt.accepted !== true || typeof receipt.job_id !== "string" ||
+        !receipt.job_id || stableJson(receipt.command) !== stableJson(attempt.command))
+      throw new Error("执行回执未绑定原请求");
+    edit.notice = "执行请求已确认，等待助手处理。";
+    renderExecution(taskId);
+    edit.attempt = null;
+    await loadExecution(taskId);
+  } catch (failure) {
+    attempt.state = "unknown";
+    if ([409, 412].includes(failure.status)) {
+      edit.conflict = true;
+      edit.notice = "任务版本或请求冲突；输入已保留，请读取新状态并明确选择。";
+      await loadExecution(taskId);
+    } else edit.notice = "执行结果未确认，输入和原请求已保留。请手动重试同一请求。";
+    renderExecution(taskId);
+  }
+}
+async function loadSystemStatus() {
+  const target = document.querySelector("#system-status");
+  try {
+    const value = await jsonRequest(`${api}/system`);
+    target.textContent = `${value.worker_online ? "后台在线" : "后台未连接"} · ${value.model_configured ? "模型已配置" : "模型待配置"} · ${value.notification_configured ? "通知已配置" : "通知待配置"}`;
+  } catch (_) { target.textContent = "助手配置状态暂时无法读取。"; }
+}
+void loadSystemStatus();
+
+let ruleAttempt = null;
+async function loadRules() {
+  try {
+    const payload = await jsonRequest(`${api}/rules`);
+    if (!Array.isArray(payload.items)) throw new Error("规则结构不完整");
+    const list = document.querySelector("#rule-list");
+    list.replaceChildren();
+    for (const rule of payload.items) {
+      const section = document.createElement("section");
+      const material = document.createElement("pre");
+      material.textContent = JSON.stringify({ id: rule.id, version: rule.version, ...rule.value }, null, 2);
+      const scope = rule.value.scope;
+      const negative = { ...scope };
+      negative[Object.keys(scope)[0]] = "outside_this_rule";
+      const tests = [{ metadata: scope, matches: true }, { metadata: negative, matches: false }];
+      const action = document.createElement("button");
+      action.type = "button";
+      action.textContent = rule.value.state === "ACTIVE" ? "停用此规则" : "验证以下正反例并启用";
+      const examples = document.createElement("pre");
+      examples.textContent = rule.value.state === "ACTIVE" ? "" : JSON.stringify(tests, null, 2);
+      const attempt = { key: crypto.randomUUID(), body: { version: rule.version, tests: rule.value.state === "ACTIVE" ? [] : tests } };
+      action.addEventListener("click", async () => {
+        action.disabled = true;
+        try {
+          const operation = rule.value.state === "ACTIVE" ? "disable" : "activate";
+          const receipt = await jsonRequest(`${api}/rules/${encodeURIComponent(rule.id)}/${operation}`, {
+            method: "POST", headers: commandHeaders(attempt.key), body: JSON.stringify(attempt.body),
+          });
+          if (receipt.id !== rule.id || receipt.version !== rule.version + 1 || receipt.value.state !== (operation === "activate" ? "ACTIVE" : "DISABLED")) throw new Error("规则回执不完整");
+          document.querySelector("#rule-status").textContent = "规则状态已确认，新任务将读取新的规则快照。";
+          await loadRules();
+        } catch (failure) { action.disabled = false; action.textContent = "结果未确认，重试同一规则请求"; document.querySelector("#rule-status").textContent = failure.message; }
+      });
+      const history = document.createElement("button");
+      history.type = "button"; history.className = "secondary"; history.textContent = "查看可回滚版本";
+      history.addEventListener("click", async () => {
+        try {
+          const response = await jsonRequest(`${api}/rules/${encodeURIComponent(rule.id)}/history`);
+          const select = document.createElement("select");
+          for (const version of response.versions) { const option = document.createElement("option"); option.value = version; option.textContent = version.slice(0, 12); select.append(option); }
+          const rollback = document.createElement("button");
+          rollback.type = "button"; rollback.textContent = "将所选版本恢复为候选，重新审核";
+          let retry = null;
+          rollback.addEventListener("click", async () => {
+            retry ??= { key: crypto.randomUUID(), body: { version: rule.version, revision: select.value } };
+            rollback.disabled = true; select.disabled = true;
+            try {
+              const receipt = await jsonRequest(`${api}/rules/${encodeURIComponent(rule.id)}/rollback`, { method: "POST", headers: commandHeaders(retry.key), body: JSON.stringify(retry.body) });
+              if (receipt.id !== rule.id || receipt.value.state !== "CANDIDATE" || receipt.value.rollback_from !== retry.body.revision) throw new Error("回滚回执不完整");
+              await loadRules();
+            } catch (_) { rollback.disabled = false; rollback.textContent = "结果未确认，重试同一回滚请求"; }
+          });
+          if (select.options.length) section.append(select, rollback);
+          else document.querySelector("#rule-status").textContent = "尚无规则历史。";
+        } catch (failure) { document.querySelector("#rule-status").textContent = failure.message; }
+      });
+      section.append(material, examples, action, history);
+      list.append(section);
+    }
+  } catch (failure) { document.querySelector("#rule-status").textContent = `无法读取规则：${failure.message}`; }
+}
+document.querySelector("#rule-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  ruleAttempt ??= { key: crypto.randomUUID(), body: { scope: { category: document.querySelector("#rule-category").value },
+    preferences: { language: document.querySelector("#rule-language").value, answer_style: document.querySelector("#rule-style").value } } };
+  button.disabled = true;
+  for (const input of form.querySelectorAll("input,select")) input.disabled = true;
+  try {
+    const receipt = await jsonRequest(`${api}/rules`, { method: "POST", headers: commandHeaders(ruleAttempt.key), body: JSON.stringify(ruleAttempt.body) });
+    if (typeof receipt.id !== "string" || receipt.value?.state !== "CANDIDATE" || stableJson(receipt.value.scope) !== stableJson(ruleAttempt.body.scope) || stableJson(receipt.value.preferences) !== stableJson(ruleAttempt.body.preferences)) throw new Error("候选回执不完整");
+    ruleAttempt = null;
+    for (const input of form.querySelectorAll("input,select")) input.disabled = false;
+    button.textContent = "保存为候选规则";
+    document.querySelector("#rule-status").textContent = "候选已保存，尚未启用。";
+    await loadRules();
+  } catch (_) { button.textContent = "结果未确认，重试同一候选请求"; }
+  finally { button.disabled = false; }
+});
+void loadRules();

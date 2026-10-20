@@ -1,0 +1,118 @@
+{
+  "id": "assistant.form_prepare",
+  "version": "1",
+  "name": "事务材料与提交前填写",
+  "description": "邮件与资料证据→材料补充→受监督宿主填写；最终提交单独发起",
+  "steps": [
+    {
+      "id": "ask_account_id",
+      "type": "ask",
+      "field": "account_id",
+      "question": "选择已在本机登记的邮箱账号 ID",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      }
+    },
+    {
+      "id": "ask_query",
+      "type": "ask",
+      "field": "query",
+      "question": "提供检索主题或关键词",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      }
+    },
+    {
+      "id": "mail",
+      "type": "tool",
+      "tool_id": "smail.search",
+      "tool_version": "0.2.0",
+      "arguments": {
+        "account_id": {
+          "$value": "inputs.account_id"
+        },
+        "query": {
+          "$value": "inputs.query"
+        },
+        "limit": 5
+      }
+    },
+    {
+      "id": "evidence",
+      "type": "tool",
+      "tool_id": "knowledge.search",
+      "tool_version": "0.1.0",
+      "arguments": {
+        "query": {
+          "$value": "inputs.query"
+        },
+        "limit": 5
+      }
+    },
+    {
+      "id": "ask_session_id",
+      "type": "ask",
+      "field": "session_id",
+      "question": "由本机受监督浏览器提供会话 ID",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    {
+      "id": "ask_transaction_id",
+      "type": "ask",
+      "field": "transaction_id",
+      "question": "核对声明事务 ID",
+      "schema": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      }
+    },
+    {
+      "id": "ask_values",
+      "type": "ask",
+      "field": "values",
+      "question": "根据来源明确补齐字段值（结构化 JSON）",
+      "schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "plan",
+      "type": "tool",
+      "tool_id": "ehall.prepare_preview",
+      "tool_version": "0.1.0",
+      "arguments": {
+        "session_id": {
+          "$value": "inputs.session_id"
+        },
+        "transaction_id": {
+          "$value": "inputs.transaction_id"
+        },
+        "values": {
+          "$value": "inputs.values"
+        }
+      }
+    },
+    {
+      "id": "fill",
+      "type": "tool",
+      "tool_id": "ehall.fill_form",
+      "tool_version": "0.1.0",
+      "arguments": {
+        "$value": "outputs.plan.plan"
+      }
+    },
+    {
+      "id": "archive",
+      "type": "archive"
+    }
+  ]
+}

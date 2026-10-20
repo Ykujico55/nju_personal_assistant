@@ -33,6 +33,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             )
         # Fixed-name UI files are refreshed through the versioned worker cache;
         # HTTP/CDN caches must not keep serving scripts from an older release.
-        if request.url.path.startswith(("/api/", "/ui/")):
+        if request.url.path.startswith(("/api/", "/ui/", "/admin/")):
             response.headers["Cache-Control"] = "no-store"
         return response

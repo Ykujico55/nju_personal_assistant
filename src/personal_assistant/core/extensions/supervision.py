@@ -65,6 +65,8 @@ def _command_fingerprint(request_scope: str, material: str) -> str:
     payload = {"scope": request_scope, "material": material}
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 _TRANSIENT_MAPPING = {
     ExtensionState.DISCOVERED: ExtensionState.REJECTED,
     ExtensionState.STAGED: ExtensionState.REJECTED,
@@ -96,6 +98,10 @@ class ExtensionRuntime(RuntimeSupervisor, ExtensionInvoker, Protocol):
     """Runtime ports required by the supervisor service."""
 
     async def list_forms(self, extension_id: str) -> list[Mapping[str, Any]]: ...
+
+    async def call_slot(
+        self, extension_id: str, method: str, parameters: Mapping[str, Any]
+    ) -> Any: ...
 
 
 class ExtensionSupervisorService:
@@ -154,16 +160,12 @@ class ExtensionSupervisorService:
                 }
             ),
         )
-        replay = await self._replay_or_none(
-            INSTALL_REQUEST_SCOPE, idempotency_key, fingerprint
-        )
+        replay = await self._replay_or_none(INSTALL_REQUEST_SCOPE, idempotency_key, fingerprint)
         if replay is not None:
             return replay
         preview = self._coordinator.preview_for(plan_id)
         if preview.mode != "install":
-            raise ExtensionOperationError(
-                "PLAN_MODE_MISMATCH", "plan is an upgrade candidate"
-            )
+            raise ExtensionOperationError("PLAN_MODE_MISMATCH", "plan is an upgrade candidate")
         self._coordinator.validate(plan_id, confirmation)
         return await self._begin(
             preview.extension_id,
@@ -233,9 +235,7 @@ class ExtensionSupervisorService:
             lambda: self._manager.enable(extension_id),
             request_scope=_extension_request_scope(extension_id, "enable"),
             idempotency_key=idempotency_key,
-            fingerprint=_command_fingerprint(
-                _extension_request_scope(extension_id, "enable"), ""
-            ),
+            fingerprint=_command_fingerprint(_extension_request_scope(extension_id, "enable"), ""),
         )
 
     async def begin_disable(
@@ -342,9 +342,8 @@ class ExtensionSupervisorService:
                     "FORM_SCHEMA_DRIFT", "form list differs from manifest"
                 )
             for item in returned:
-                if (
-                    not isinstance(item.get("json_schema"), dict)
-                    or not isinstance(item.get("ui_schema", {}), dict)
+                if not isinstance(item.get("json_schema"), dict) or not isinstance(
+                    item.get("ui_schema", {}), dict
                 ):
                     raise ExtensionOperationError(
                         "FORM_SCHEMA_DRIFT", "form descriptor is incomplete"
@@ -359,6 +358,88 @@ class ExtensionSupervisorService:
                     }
                 )
         return tuple(forms)
+
+    async def list_declarations(self, method: str) -> tuple[dict[str, Any], ...]:
+        slots = {
+            "workflow.list": "workflows",
+            "schedule.list": "schedules",
+            "event_source.list": "event_sources",
+        }
+        attribute = slots.get(method)
+        if attribute is None:
+            raise ExtensionOperationError("CAPABILITY_NOT_PUBLISHED", "unsupported enumeration")
+        result: list[dict[str, Any]] = []
+        for record in await self._store.all():
+            if record.state is not ExtensionState.ENABLED or record.manifest is None:
+                continue
+            declared = set(getattr(record.manifest, attribute))
+            if not declared:
+                continue
+            await self._runtime.start(record)
+            returned = await self._runtime.call_slot(record.manifest.id, method, {})
+            if (
+                not isinstance(returned, list)
+                or not all(isinstance(item, dict) for item in returned)
+                or len(returned) != len(declared)
+                or {item.get("id") for item in returned} != declared
+            ):
+                raise ExtensionOperationError(
+                    "MANIFEST_INVALID", "declarations differ from manifest"
+                )
+            result.extend(
+                {
+                    **item,
+                    "extension_id": record.manifest.id,
+                    "extension_version": record.manifest.version,
+                }
+                for item in returned
+            )
+        return tuple(result)
+
+    async def poll_source(
+        self, extension_id: str, extension_version: str, request: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        record = await self._store.get(extension_id)
+        if (
+            record is None
+            or record.state is not ExtensionState.ENABLED
+            or record.manifest.version != extension_version
+            or request.get("source_id") not in record.manifest.event_sources
+        ):
+            raise ExtensionOperationError(
+                "EXTENSION_NOT_ENABLED", "event source/version unavailable"
+            )
+        await self._runtime.start(record)
+        result = await self._runtime.call_slot(
+            extension_id, "event_source.poll", {"request": request}
+        )
+        if not isinstance(result, dict):
+            raise ExtensionOperationError("MANIFEST_INVALID", "event poll result must be an object")
+        declarations = await self._runtime.call_slot(extension_id, "event_source.list", {})
+        source = (
+            next(
+                (
+                    s
+                    for s in declarations
+                    if isinstance(s, dict) and s.get("id") == request.get("source_id")
+                ),
+                None,
+            )
+            if isinstance(declarations, list)
+            else None
+        )
+        if (
+            source is None
+            or not isinstance(result.get("events"), list)
+            or any(
+                not isinstance(e, dict) or e.get("type") not in source.get("event_types", [])
+                for e in result["events"]
+            )
+        ):
+            raise ExtensionOperationError(
+                "MANIFEST_INVALID", "event type differs from the declared source"
+            )
+        return result
 
     async def invoke_tool(
         self,
@@ -458,9 +539,7 @@ class ExtensionSupervisorService:
                 return await self._quarantine_recovered(record, starting, exc)
             return enabled
         if state is ExtensionState.UNINSTALLING:
-            installed = (
-                record.install_path is not None and Path(record.install_path).is_dir()
-            )
+            installed = record.install_path is not None and Path(record.install_path).is_dir()
             if installed:
                 mapped = replace(record, state=ExtensionState.DISABLED)
             else:
@@ -520,9 +599,7 @@ class ExtensionSupervisorService:
     ) -> ExtensionOperation | None:
         if not idempotency_key:
             return None
-        existing = await self._operations.find_by_request_scope(
-            request_scope, idempotency_key
-        )
+        existing = await self._operations.find_by_request_scope(request_scope, idempotency_key)
         if existing is None:
             return None
         if existing.command_fingerprint == fingerprint:
@@ -571,9 +648,7 @@ class ExtensionSupervisorService:
             if exc.code != "IDEMPOTENCY_CONFLICT" or not idempotency_key:
                 raise
             # Lost a cross-process race on the unique key: replay or conflict.
-            existing = await self._operations.find_by_request_scope(
-                request_scope, idempotency_key
-            )
+            existing = await self._operations.find_by_request_scope(request_scope, idempotency_key)
             if existing is not None and existing.command_fingerprint == fingerprint:
                 return existing
             raise

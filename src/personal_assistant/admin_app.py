@@ -7,17 +7,25 @@ or Tailscale.  Code-level changes require an exact, preview-bound confirmation.
 
 from __future__ import annotations
 
+import sysconfig
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
+from personal_assistant.api.admin_operations import router as operations_router
 from personal_assistant.api.dependencies import get_container
 from personal_assistant.api.errors import ApplicationError, install_error_handlers
-from personal_assistant.api.middleware import IdempotencyKeyMiddleware, RequestIdMiddleware
+from personal_assistant.api.middleware import (
+    IdempotencyKeyMiddleware,
+    RequestIdMiddleware,
+    SecurityHeadersMiddleware,
+)
 from personal_assistant.bootstrap import Container, build_container
 from personal_assistant.core.extensions import (
     ExtensionManifest,
@@ -80,9 +88,7 @@ class MailAccountsUpdateRequest(BaseModel):
     accounts: list[MailAccountRequest] = Field(default_factory=list, max_length=32)
 
 
-def _manifest_view(
-    manifest: ExtensionManifest, state: str = "DISCOVERED"
-) -> dict[str, object]:
+def _manifest_view(manifest: ExtensionManifest, state: str = "DISCOVERED") -> dict[str, object]:
     return {
         "id": manifest.id,
         "name": manifest.name,
@@ -172,15 +178,11 @@ def _config_schema(manifest: ExtensionManifest) -> dict[str, Any] | None:
         ) from exc
 
 
-async def _resolve_manifest(
-    selected: Container, extension_id: str
-) -> ExtensionManifest:
+async def _resolve_manifest(selected: Container, extension_id: str) -> ExtensionManifest:
     record = await selected.extension_supervisor.record(extension_id)
     if record is not None:
         return record.manifest
-    manifests = selected.extension_registry.discover(
-        str(selected.bundled_extensions_root)
-    )
+    manifests = selected.extension_registry.discover(str(selected.bundled_extensions_root))
     manifest = next((item for item in manifests if item.id == extension_id), None)
     if manifest is None:
         raise ApplicationError("EXTENSION_NOT_FOUND", "Extension was not discovered.", 404)
@@ -228,9 +230,7 @@ def _confirmation(payload: InstallConfirmationRequest) -> InstallationConfirmati
     )
 
 
-def create_app(
-    *, settings: Settings | None = None, container: Container | None = None
-) -> FastAPI:
+def create_app(*, settings: Settings | None = None, container: Container | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     container = container or build_container(settings)
     supervisor = container.extension_supervisor
@@ -261,7 +261,16 @@ def create_app(
     application.state.container = container
     application.add_middleware(IdempotencyKeyMiddleware)
     application.add_middleware(RequestIdMiddleware)
+    application.add_middleware(SecurityHeadersMiddleware, settings=settings)
     install_error_handlers(application)
+    application.include_router(operations_router)
+    assets = Path(__file__).resolve().parents[2] / "web/admin"
+    if not assets.is_dir():
+        assets = Path(sysconfig.get_path("data")) / "share/personal-assistant/admin"
+    if assets.is_dir():
+        application.mount(
+            "/admin/ui", StaticFiles(directory=assets, html=True), name="local-admin-ui"
+        )
 
     @application.get("/healthz")
     async def health() -> dict[str, str]:
@@ -271,19 +280,14 @@ def create_app(
     async def extensions(
         selected: Container = Depends(get_container),
     ) -> dict[str, object]:
-        manifests = selected.extension_registry.discover(
-            str(selected.bundled_extensions_root)
-        )
+        manifests = selected.extension_registry.discover(str(selected.bundled_extensions_root))
         records = {
-            record.manifest.id: record
-            for record in await selected.extension_supervisor.records()
+            record.manifest.id: record for record in await selected.extension_supervisor.records()
         }
         items = []
         for manifest in manifests:
             record = records.pop(manifest.id, None)
-            items.append(
-                _record_view(record) if record is not None else _manifest_view(manifest)
-            )
+            items.append(_record_view(record) if record is not None else _manifest_view(manifest))
         items.extend(_record_view(record) for _, record in sorted(records.items()))
         return {"items": items}
 
@@ -295,9 +299,7 @@ def create_app(
         record = await selected.extension_supervisor.record(extension_id)
         if record is not None:
             return _record_view(record)
-        manifests = selected.extension_registry.discover(
-            str(selected.bundled_extensions_root)
-        )
+        manifests = selected.extension_registry.discover(str(selected.bundled_extensions_root))
         manifest = next((item for item in manifests if item.id == extension_id), None)
         if manifest is None:
             raise ApplicationError("EXTENSION_NOT_FOUND", "Extension was not discovered.", 404)

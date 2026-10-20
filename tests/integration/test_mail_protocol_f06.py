@@ -9,15 +9,19 @@ substitute for a real smail account, which the project does not have.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import ssl
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from personal_assistant.core.mail import (
     MailAccountRecord,
+    MailDeliveryReceipt,
     MailDeliveryRequest,
     MailDeliveryStatus,
     MailError,
@@ -528,57 +532,176 @@ class MailProtocolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(sender._active)  # noqa: SLF001
 
 
-    async def test_timeout_during_tls_handshake_fails_closed_and_reaps(self) -> None:
-        stall = SimulatedTcpStallServer()
+    async def _assert_stalled_tls_handshake(
+        self, *, tls_mode: str, outcome: str
+    ) -> None:
+        stall = SimulatedTcpStallServer(starttls=tls_mode == "starttls")
         await stall.start()
+        account = replace(self.account(smtp_port=stall.port), tls_mode=tls_mode)
+        sender = TlsSmtpSender(
+            binding_for(account), PASSWORD,
+            policy=MailPolicy(allow_send=True, allowed_recipients=frozenset({GOOD})),
+            ssl_context=self.tls.client_context,
+            timeout_seconds=0.5 if outcome == "total_timeout" else 30.0,
+        )
+        tls_sockets: list[ssl.SSLSocket] = []
+        original_handshake = ssl.SSLSocket.do_handshake
+        socket_timeout = 0.15 if outcome == "socket_timeout" else 2.0
+
+        def handshake(sock: ssl.SSLSocket, block: bool = False) -> None:
+            # The socket deadline is deliberately different from the host's.
+            # Capture the actual TLS object, not the detached raw socket.
+            tls_sockets.append(sock)
+            sock.settimeout(socket_timeout)
+            original_handshake(sock, block)
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        task: asyncio.Task[MailDeliveryReceipt] | None = None
         try:
-            account = self.account(smtp_port=stall.port)
-            sender = TlsSmtpSender(
-                binding_for(account),
-                PASSWORD,
-                policy=MailPolicy(
-                    allow_send=True, allowed_recipients=frozenset({GOOD})
-                ),
-                ssl_context=self.tls.client_context,
-                timeout_seconds=0.5,
-            )
-            receipt = await sender.send(self.delivery_request())
-            self.assertEqual(MailDeliveryStatus.FAILED, receipt.status)
-            self.assertEqual(0, sender.running_threads)
-            self.assertIsNone(sender._active)  # noqa: SLF001
-            self.assertTrue(sender._abort.is_set())  # noqa: SLF001
-            self.assertGreaterEqual(stall.connections, 1)
-            self.assertEqual([], self.smtp_state.messages)
+            with patch.object(ssl.SSLSocket, "do_handshake", new=handshake):
+                task = asyncio.create_task(sender.send(self.delivery_request()))
+                await asyncio.wait_for(stall.client_hello.wait(), timeout=2.0)
+                self.assertEqual(1, stall.connections)
+                self.assertGreater(stall.received, 0)
+                self.assertEqual(1, sender.running_threads)
+                self.assertEqual("connect", sender.phase)
+                if outcome == "cancel":
+                    started = loop.time()
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    self.assertTrue(sender._abort.is_set())  # noqa: SLF001
+                    self.assertLess(loop.time() - started, 0.75)
+                else:
+                    receipt = await task
+                    self.assertEqual(MailDeliveryStatus.FAILED, receipt.status)
+                    self.assertEqual(
+                        outcome == "total_timeout", sender._abort.is_set()  # noqa: SLF001
+                    )
+                    self.assertLess(loop.time() - started, 1.25)
+                self.assertEqual(0, sender.running_threads)
+                self.assertIsNone(sender._active)  # noqa: SLF001
+                self.assertEqual(1, len(tls_sockets))
+                self.assertEqual(-1, tls_sockets[0].fileno())
+                await asyncio.wait_for(stall.peer_closed.wait(), timeout=0.75)
+                self.assertEqual([], self.smtp_state.messages)
+                self.assertEqual(0, self.smtp_state.auth_attempts)
+                self.assertFalse(any(
+                    line.upper().startswith(("AUTH", "MAIL", "RCPT", "DATA"))
+                    for line in stall.commands
+                ))
         finally:
+            if task is not None:
+                if not task.done():
+                    task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await stall.stop()
 
+    async def test_timeout_during_tls_handshake_fails_closed_and_reaps(self) -> None:
+        await self._assert_stalled_tls_handshake(
+            tls_mode="implicit", outcome="total_timeout"
+        )
+
     async def test_cancellation_during_tls_handshake_closes_and_reaps(self) -> None:
-        stall = SimulatedTcpStallServer()
-        await stall.start()
+        await self._assert_stalled_tls_handshake(tls_mode="implicit", outcome="cancel")
+
+    async def test_socket_timeout_during_tls_handshake_closes_and_reaps(self) -> None:
+        await self._assert_stalled_tls_handshake(
+            tls_mode="implicit", outcome="socket_timeout"
+        )
+
+    async def test_starttls_cancellation_during_handshake_closes_and_reaps(self) -> None:
+        await self._assert_stalled_tls_handshake(tls_mode="starttls", outcome="cancel")
+
+    async def test_starttls_total_timeout_during_handshake_closes_and_reaps(self) -> None:
+        await self._assert_stalled_tls_handshake(
+            tls_mode="starttls", outcome="total_timeout"
+        )
+
+    async def test_starttls_socket_timeout_during_handshake_closes_and_reaps(self) -> None:
+        await self._assert_stalled_tls_handshake(
+            tls_mode="starttls", outcome="socket_timeout"
+        )
+
+    async def _assert_starttls_preparation_failure_closes(
+        self, *, supported: bool = True, upgrade_code: int = 220, ehlo_code: int = 250
+    ) -> None:
+        state = SmtpState(
+            username=USERNAME, password=PASSWORD,
+            starttls_supported=supported, starttls_code=upgrade_code, ehlo_code=ehlo_code,
+        )
+        server = SimulatedSmtpServer(state, self.tls.server_context, starttls=True)
+        await server.start()
+        account = replace(self.account(smtp_port=server.port), tls_mode="starttls")
+        sender = TlsSmtpSender(
+            binding_for(account), PASSWORD,
+            policy=MailPolicy(allow_send=True, allowed_recipients=frozenset({GOOD})),
+            ssl_context=self.tls.client_context,
+            timeout_seconds=5.0,
+        )
         try:
-            account = self.account(smtp_port=stall.port)
-            sender = TlsSmtpSender(
-                binding_for(account),
-                PASSWORD,
-                policy=MailPolicy(
-                    allow_send=True, allowed_recipients=frozenset({GOOD})
-                ),
-                ssl_context=self.tls.client_context,
-                timeout_seconds=30.0,
-            )
-            task = asyncio.create_task(sender.send(self.delivery_request()))
-            for _ in range(50):
-                if stall.connections:
-                    break
-                await asyncio.sleep(0.02)
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await task
+            request = self.delivery_request()
+            if ehlo_code != 250:
+                with self.assertRaises(MailError) as captured:
+                    await sender.send(request)
+                self.assertEqual(MailErrorCode.PROTOCOL_ERROR, captured.exception.code)
+            else:
+                receipt = await sender.send(request)
+                self.assertEqual(MailDeliveryStatus.FAILED, receipt.status)
+                self.assertEqual(request.local_action_id, receipt.local_action_id)
+                self.assertEqual("NOT_SUBMITTED", receipt.recipient_results[0].error_code)
+            self.assertEqual(1, state.connections)
             self.assertEqual(0, sender.running_threads)
             self.assertIsNone(sender._active)  # noqa: SLF001
-            self.assertEqual([], self.smtp_state.messages)
+            self.assertEqual("connect", sender.phase)
+            self.assertEqual(0, state.auth_attempts)
+            self.assertEqual([], state.messages)
+            self.assertEqual([], state.recipients)
+            self.assertEqual(
+                ["EHLO", "STARTTLS"] if supported and ehlo_code == 250 else ["EHLO"],
+                state.commands,
+            )
+            sockets = sender._sockets  # noqa: SLF001
+            self.assertTrue(sockets)
+            self.assertEqual([-1] * len(sockets), [sock.fileno() for sock in sockets])
+            # Observe the client closing before test cleanup stops the server.
+            await asyncio.wait_for(state.peer_closed.wait(), timeout=0.75)
         finally:
-            await stall.stop()
+            sender._abort_transport()  # noqa: SLF001 - reap leaks even on a red test
+            await server.stop()
+
+    async def test_starttls_unsupported_closes_tcp_without_auth_or_send(self) -> None:
+        await self._assert_starttls_preparation_failure_closes(supported=False)
+
+    async def test_starttls_454_closes_tcp_without_auth_or_send(self) -> None:
+        await self._assert_starttls_preparation_failure_closes(upgrade_code=454)
+
+    async def test_starttls_ehlo_refusal_closes_tcp_and_preserves_error(self) -> None:
+        await self._assert_starttls_preparation_failure_closes(ehlo_code=550)
+
+    async def test_starttls_still_sends_the_exact_message(self) -> None:
+        state = SmtpState(username=USERNAME, password=PASSWORD)
+        server = SimulatedSmtpServer(state, self.tls.server_context, starttls=True)
+        await server.start()
+        try:
+            account = replace(self.account(smtp_port=server.port), tls_mode="starttls")
+            sender = TlsSmtpSender(
+                binding_for(account), PASSWORD,
+                policy=MailPolicy(allow_send=True, allowed_recipients=frozenset({GOOD})),
+                ssl_context=self.tls.client_context,
+                timeout_seconds=5.0,
+            )
+            request = self.delivery_request()
+            receipt = await sender.send(request)
+            self.assertEqual(MailDeliveryStatus.SUCCEEDED, receipt.status)
+            self.assertEqual([request.mime_bytes], state.messages)
+            self.assertEqual(1, state.auth_attempts)
+            self.assertEqual(0, sender.running_threads)
+            self.assertIsNone(sender._active)  # noqa: SLF001
+        finally:
+            await server.stop()
 
     async def test_completed_send_wins_over_deadline_classification(self) -> None:
         """A just-in-time 250 must never be reclassified as FAILED by a timeout."""

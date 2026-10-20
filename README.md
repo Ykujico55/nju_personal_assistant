@@ -4,7 +4,13 @@
 
 完整设计见 [DESIGN_AND_DEVELOPMENT.md](./DESIGN_AND_DEVELOPMENT.md)，简要接力列表见 [TODO.md](./TODO.md)，后续实现顺序见 [docs/NEXT_STEPS.md](./docs/NEXT_STEPS.md)，稳定接口与持久化契约见 [docs/CONTRACTS_AND_INTERFACES.md](./docs/CONTRACTS_AND_INTERFACES.md)。
 
+## 2026-10-13 开发交付
+
+新增持续任务执行、声明式组合工作流、模型披露审核、规则候选审核、本机管理页、Windows主机控制、加密备份/隔离恢复及离线升级入口。用户已配置 DeepSeek `deepseek-flash` 并完成单次公开自检；真实任务编排和外部动作的独立验收仍待进行。启动方式见 [本地运行手册](docs/RUNBOOK_LOCAL_BETA.md)，本轮实际门禁和边界见 [集中交付报告](docs/DEVELOPMENT_DELIVERY_2026-10-13.md)。开发主机18100与原线上8000独立，不在本轮自行部署。
+
 ## 当前可用范围
+
+2026-10-10：按用户无 Google Play 的固定约束，F08.6 新增默认关闭的本机 ntfy 通知适配器及最小接线。当前仅本地测试，真实通知服务与手机未接入；F08.6 仍 BLOCKED。范围与实际证据见 [主机接线报告](docs/F08_6_NTFY_LOCAL_REPORT_2026-10-10.md)。
 
 - 可启动的用户 API、本机管理 API、独立 health-only API。
 - 持久 Agent 状态机、工具风险门、精确审批、上下文与模型披露接口的基础实现。
@@ -17,7 +23,7 @@
 - smail 邮件扩展（F06 DONE，六轮独立审计及补充复验通过）：`extensions/nju_smail` 提供只读 IMAP 轮询（`smail.poll_inbox`、`smail.sync`）、线程上下文（`smail.thread_history`）、检索（`smail.search` READ）、版本化草稿（`smail.prepare_reply` INTERNAL_WRITE）与受控发送（`smail.send` EXTERNAL_WRITE）；通用宿主能力 `core/mail` + `infrastructure/mail`（真实 TLS IMAP 只读客户端、显式阶段 SMTP 客户端、唯一连接建立者 `MailTransportBroker`、审批快照校验执行器 `MailSendExecutor`）与 `host.artifact.*` 制品能力。消息去重以 `(账户, 文件夹, UIDVALIDITY, UID)` 为主、`Message-ID + 规范化内容哈希` 为辅；草稿每次编辑产生新版本与新的稳定动作 ID/Message-ID；发送必须经过 Tool Gateway、R2 审批与 SideEffect Outbox，实际发送的 MIME 字节/收件人/附件哈希与审批快照一致；部分拒收保存逐收件人明细；UNKNOWN 不自动重发并由 Sent 只读对账。客户端专用密码只经 `SecretHandle` 由宿主解析，扩展不建立 IMAP/SMTP 连接；读取与发送能力独立配置（`PA_MAIL_SEND_ENABLED` + `PA_MAIL_TEST_RECIPIENTS` 受控地址 allowlist）；宿主账户注册表持有端点与凭据句柄，扩展只提交 `account_id` 与宿主计算的账户 fingerprint；注册表 generation 删除后不复用，派发期间账户变更会经可失效 guard 在连接/认证/DATA 前中止。发送结果只由宿主权威账本决定，扩展没有写入工具（`smail.send_status` 仅把宿主状态投影到本地视图）。真实 smail 账号 E2E 未执行：缺少用户账号、凭据与受控地址，当前证据为协议级模拟服务器 + 真实 TLS/socket + 真实 PostgreSQL + 真实 Worker/组合根测试。
 - ehall 受监督办事基架（F07 IN_PROGRESS，等待完整真实验收与独立复审）：核心 `BrowserSessionBroker`（会话状态机、origin/路径策略、永久 R3 分类、页面 fingerprint（含表单 action/method）、canonical 结构化预览（含提交目标绑定）、宿主驱动只读对账、过期会话释放）与 `infrastructure/browser` 的 Desktop Companion（唯一导入 Playwright 的 `driver.py`，强制 `headless=False`，256 bit 会话 capability、仅内存、TTL、可撤销且不经异常链泄漏；默认允许规范 HTTPS origin，可由用户在本机启动时切换为精确 origin 白名单模式；`fill` 后持久阻断全部写请求，提交临界区只放行一条精确匹配 method/origin/path 的写请求，延迟 autosave/二次 POST/动态改写 action 均被 abort 并计数；正文扫描不完整即安全暂停）以及宿主 `BrowserActionExecutor`（`browser.fill`/`browser.submit` 只能经 Tool Gateway + R2 审批 + Outbox；结果不明为 `UNKNOWN`，不自动重试，由宿主 `host.browser.reconcile` 只读对账）。扩展 `extensions/nju_ehall` 提供只读发现/检视/预览、声明式“进入事项”导航与受控填写，R3（退课/撤回/支付/选课变更/法律声明/未知事务/未知页面版本）在策略层永久阻断；适配器必须携带人工核验的页面指纹集合与提交目标，并按事务拆分（`proof.json` 在读证明 + `transcript.json` 成绩单打印）。宿主执行工具 `ehall.open_transaction`（INTERNAL_WRITE）只点击适配器声明、绑定 `transaction_id`/落地路径的导航动作：实时页面必须存在同 label 动作，落地路径与事务指纹双重校验，漂移即 `SAFETY_PAUSED`；提交仍必须 R2 审批。真实 ehall 验收仍在进行：受监督链路已完成真实门户/SSO 只读采集；本机 `assistantctl ehall` 已由用户反馈成功打开成绩查询，并对教室借用真实表单部分试填及程序化选择一个下拉选项。完整填写至权威预览、真实适配器指纹和提交回执尚未验收；本机入口不替代受监督链路。
 - CLI、单元/契约测试以及面向后续模型的任务清单。
-- 响应式 PWA 的 F08.1–F08.5 已通过各自约定范围的独立验收：通过公共 API 与 SSE 显示任务/连接状态、发送版本化消息、编辑 Schema 草稿、核对并批准已有的权威邮件审批，以及管理 Web Push 订阅与最小元数据通知；F07 试填记录仍不可手机批准。F08.6 是唯一当前子任务，经用户明确授权，原库迁移与助手/health 后台启动已完成，固定域名 Access + Tunnel 已接通，本机与无认证边缘黑盒通过。私有 Tailscale Serve 只代理 health 8010，`AllowFunnel=false`，同节点 HTTPS 黑盒通过。Android首次登录/SSE、私有健康三项已有本人反馈；随后本人确认Chrome标识的桌面入口无地址栏启动、空任务列表/事件连接正常，Wi-Fi切至移动数据后恢复连接。联网时切后台或锁屏约一分钟后返回，列表与连接自动恢复，也已获本人确认；后台与锁屏来自合并提问，未分别验证两个场景。本人又确认断网时出现“设备离线”或“事件连接中断”的提示，恢复联网后自动连接。手机本地自检任务及第一条消息创建成功，刷新后各一条，已获本人确认；后续新增操作之前的原库只读聚合快照确认匹配任务1条、消息1条。本人还确认电脑以同身份PWA新增任务及新增消息均自动同步至手机。手机任务/消息使用后，CacheStorage四条固定静态路径已有截图，唯一节点及名称 `assistant-static-v12` 已有本人文本反馈；任务GET的200、`Cache-Control: no-store`、`Cf-Cache-Status: DYNAMIC` 已有手机Network截图，检查时Disable cache未勾选。此确认限于上述CacheStorage及任务GET响应头；HTTP缓存底层、LocalStorage/IndexedDB、未访问的真机Schema草稿/审批、其余私有边界及真实Push仍待验收，F08.6保持 `BLOCKED`。F09.1 最小凭据后端已实现但回归门禁未过，原部署尚未更新；F07 与 F08 整体保持 `IN_PROGRESS`。Service Worker 只缓存固定静态资源。`assistantctl extension scaffold` 提供扩展生成器。
+- 响应式 PWA 的 F08.1–F08.5 已通过各自约定范围的独立验收：通过公共 API 与 SSE 显示任务/连接状态、发送版本化消息、编辑 Schema 草稿、核对并批准已有的权威邮件审批，以及管理 Web Push 订阅与最小元数据通知；F07 试填记录仍不可手机批准。F08.6 保持BLOCKED，是最小F09.1/F06.P2 DONE后的唯一后续验收项；此前经用户明确授权，原库迁移与助手/health 后台启动已完成，固定域名 Access + Tunnel 已接通，本机与无认证边缘黑盒通过。私有 Tailscale Serve 只代理 health 8010，`AllowFunnel=false`，同节点 HTTPS 黑盒通过。Android首次登录/SSE、私有健康三项已有本人反馈；随后本人确认Chrome标识的桌面入口无地址栏启动、空任务列表/事件连接正常，Wi-Fi切至移动数据后恢复连接。联网时切后台或锁屏约一分钟后返回，列表与连接自动恢复，也已获本人确认；后台与锁屏来自合并提问，未分别验证两个场景。本人又确认断网时出现“设备离线”或“事件连接中断”的提示，恢复联网后自动连接。手机本地自检任务及第一条消息创建成功，刷新后各一条，已获本人确认；后续新增操作之前的原库只读聚合快照确认匹配任务1条、消息1条。本人还确认电脑以同身份PWA新增任务及新增消息均自动同步至手机。手机任务/消息使用后，CacheStorage四条固定静态路径已有截图，唯一节点及名称 `assistant-static-v12` 已有本人文本反馈；任务GET的200、`Cache-Control: no-store`、`Cf-Cache-Status: DYNAMIC` 已有手机Network截图，检查时Disable cache未勾选。此确认限于上述CacheStorage及任务GET响应头；HTTP缓存底层、LocalStorage/IndexedDB、未访问的真机Schema草稿/审批、其余私有边界及真实Push仍待验收，F08.6保持 `BLOCKED`。F09.1 最小凭据后端已独立验收DONE，当前恢复的Windows公共进程已接线Credential Manager及VAPID配置，真实Push尚未验收；F07 与 F08 整体保持 `IN_PROGRESS`。Service Worker 只缓存固定静态资源。`assistantctl extension scaffold` 提供扩展生成器。
 
 2026-09-30 用户调整实施顺序：F07 仍为 `IN_PROGRESS` 时，允许先完成不依赖其剩余真实站点工作的 F08 子任务；F08.1–F08.5 已按各自范围验收，F08.6 的完整真机与网络验收仍在补齐证据。F07 的一次登录自动路由与七字段试填烟测已通过，未点击最终提交；正式真实事务 Adapter、绑定实际提交目标及完整材料/后果的受监督权威预览、正式 Gateway/Outbox 实站链路仍未验收。真实完整填报因暂无确有需要的事务延期，不制造申请。F08 当前阻塞项与本轮测试证据见 [NEXT_STEPS](./docs/NEXT_STEPS.md)。
 
@@ -42,7 +48,7 @@ Invoke-RestMethod -Method Put -Uri http://127.0.0.1:8001/admin/v1/extensions/per
 
 个人知识扩展的索引数据位于 PostgreSQL `ext_personal_2e_knowledge` Schema，不写入核心表；源目录始终只读。
 
-Cloudflare Access JWT 验证已实现并通过三轮独立验收（F03 DONE）；F08.6 已经用户授权手动临时接通 Tunnel 与私有 health Serve，服务守护、开机自启及完整部署编排仍待 F09/F10。真实 ehall 方面，**门户/SSO 只读采集已运行，真实教室借用已部分试填，完整填写至权威预览尚未验收；真实适配器指纹和提交回执未验收**。Windows Credential Manager 的最小 F09.1 后端已实现并通过定向验证，2026-10-09 凭据功能独立检查通过，但既有 F06 SMTP 握手取消 P2 尚未修复，阶段保持 BLOCKED；原运行服务尚未更新。Web Push 的 F08.5 本地范围已通过独立复验，F08.6 已运行本机、无认证公网边缘及同节点私有 HTTPS 检查，真实 Android/Push 服务验收尚未完成，不能用模拟结果替代真实投递。smail 已完成一次**受控真实只读同步**（2026-09-19）：经本机回环页面录入客户端专用密码（仅进程内存），真实 `imap.exmail.qq.com:993` 只读同步入库 15 封邮件/15 个事件（INBOX 13 + Sent Messages 2），第二次同步 0 新、0 发送动作；真实 SMTP 发送与凭据持久化仍需 F09。F07 的受监督浏览器基架与 `nju.ehall` 扩展已实现；审计前快照的自动化套件曾全绿，随后独立复验有 1 项锁等待计时失败（单项复跑通过），当前快照的完整结果见 `docs/NEXT_STEPS.md`；真实门户/SSO 只读采集已由用户亲自完成（证据 `docs/evidence/real_ehall_2026-09-21.md`），真实完整填写、权威预览和提交回执仍需用户实时参与，F07 保持 `IN_PROGRESS`。当前运行的部署尚未加载 F09.1，远程模型凭据、邮件客户端密码及 VAPID 私钥后端仍是拒绝操作的占位（`UnavailableSecretStore`），不会静默使用内存明文；本轮源码的 Windows PostgreSQL 组合根已接线 Credential Manager，尚未部署；协议行为只能通过注入 HTTP transport 或模拟服务测试，尚未完成真实厂商/邮箱/Push 服务端到端验证。
+Cloudflare Access JWT 验证已实现并通过三轮独立验收（F03 DONE）；F08.6 已经用户授权手动临时接通 Tunnel 与私有 health Serve，服务守护、开机自启及完整部署编排仍待 F09/F10。真实 ehall 方面，**门户/SSO 只读采集已运行，真实教室借用已部分试填，完整填写至权威预览尚未验收；真实适配器指纹和提交回执未验收**。Windows Credential Manager 的最小 F09.1 后端及相邻 F06.P2 修复已于 2026-10-09 通过独立验收，均为 DONE；本日恢复的 Windows PostgreSQL 公共进程已加载该后端并配置 VAPID 公钥/句柄，手机真实 Push 尚未开始。Web Push 的 F08.5 本地范围已通过独立复验，F08.6 已运行本机、无认证公网边缘及同节点私有 HTTPS 检查，真实 Android/Push 服务验收尚未完成，不能用模拟结果替代真实投递。smail 已完成一次**受控真实只读同步**（2026-09-19）：经本机回环页面录入客户端专用密码（仅进程内存），真实 `imap.exmail.qq.com:993` 只读同步入库 15 封邮件/15 个事件（INBOX 13 + Sent Messages 2），第二次同步 0 新、0 发送动作；真实 SMTP 发送及实际邮件凭据配置仍未完成。F07 的受监督浏览器基架与 `nju.ehall` 扩展已实现；审计前快照的自动化套件曾全绿，随后独立复验有 1 项锁等待计时失败（单项复跑通过），当前快照的完整结果见 `docs/NEXT_STEPS.md`；真实门户/SSO 只读采集已由用户亲自完成（证据 `docs/evidence/real_ehall_2026-09-21.md`），真实完整填写、权威预览和提交回执仍需用户实时参与，F07 保持 `IN_PROGRESS`。当前恢复的 Windows PostgreSQL 组合根使用 Credential Manager，VAPID 私钥只存该后端；远程模型与实际邮件凭据尚未配置，原库 DSN 仍沿用已授权的临时本机文件例外；非 Windows 平台继续使用拒绝操作的 `UnavailableSecretStore`，不会静默使用内存明文；协议行为只能通过注入 HTTP transport 或模拟服务测试，尚未完成真实厂商/邮箱/Push 服务端到端验证。
 
 开发模式创建的任务会可靠进入内存队列，但 Agent Worker 仍有意锁定，因此会停在 `QUEUED`。这是基架状态，不是可用的完整助理。
 
@@ -186,4 +192,14 @@ Windows 的 PostgreSQL 组合根现在按平台使用 Credential Manager；非 W
 
 缺失的同格式引用可重复删除；类型或命名空间不匹配不能读写其他记录。无读取/导出命令，无 `--value`、文件或管道输入；隐藏终端不可用时拒绝。宿主端口可保存 Unicode/多行文本，UTF-8 上限 2560 字节；CLI 提示仅适用于单行值。VAPID 宿主期望 32 字节标量的未填充 base64url；本轮只用生成的合成密钥验证解析，尚未配置真实 Push。
 
-本轮F09.1属用户授权的最小排期例外，凭据功能独立检查通过，阶段因既有 F06 SMTP 握手取消 P2 仍为 BLOCKED，跨范围修复等待用户另行授权。实现报告见 [F09.1 报告](docs/F09_1_IMPLEMENTATION_REPORT_2026-10-08.md)。F08.6 仍 `BLOCKED`，F07/F08 整体 `IN_PROGRESS`；未重启原助手、未部署、未启用自动发信/填表或其他 F09 功能。
+最小F09.1排期例外已独立验收通过（DONE），原TLS取消及STARTTLS准备失败连接收尾F06.P2也已DONE。实现及历史门禁见 [F09.1报告](docs/F09_1_IMPLEMENTATION_REPORT_2026-10-08.md)，最新验收见 [F06报告第10节](docs/F06_TLS_CANCELLATION_REPAIR_2026-10-09.md)。F08.6继续BLOCKED，F07/F08整体IN_PROGRESS；回到真机/真实Push等缺口，不启动其他F09。此次仅记录验收，无源码/服务/部署或新提交推送操作。
+
+### F06 SMTP握手取消修复（2026-10-09，以下两段为实施历史）
+
+用户要求先提交推送，快照 `9891102` 已推送 `origin/main`，随后才修复F06。隐式TLS和STARTTLS现在先登记实际TLS socket再握手，失败/取消关闭连接并等待线程结束。定向86 passed；完整门禁1298 passed、130 skipped、11 warnings，Ruff/Mypy232通过；PostgreSQL/真实Worker130 passed、1 warning。未连接真实邮箱、未部署或再次提交推送。F06.P2待独立复验，F09.1/F08.6仍BLOCKED；详见 [修复报告](docs/F06_TLS_CANCELLATION_REPAIR_2026-10-09.md)。
+
+2026-10-09 独立复验确认原TLS取消已修好；新检出STARTTLS缺能力或454拒绝仍遗留TCP。已按局部范围补统一准备异常清理，新增缺能力/454/EHLO拒绝3 failed→3 passed，相邻回归**89 passed，134.30秒**。本轮未重跑全量/PostgreSQL，以上完整门禁为补修前历史结果；F06.P2仍待独立复验，F09.1/F08.6仍BLOCKED，未再次提交/推送/部署。当前证据见修复报告第8/9节。
+
+### 最新独立验收（2026-10-09）
+
+F06.P2与最小授权F09.1均DONE。用户独立邮件回归89 passed及额外10项通过，全量1301 passed/130 skipped/9 warnings，PostgreSQL/真实Worker130 passed/1 warning；Ruff、Mypy232、依赖/差异/摘要/wheel通过，记录25个测试进程均退出。既有警告保留，未连接真实邮箱。实施者本轮仅核对日志摘要并更新文档，不重跑上述测试。F08.6仍BLOCKED，唯一下一步是补其真机与真实Push等证据；未部署或启用其他F09。

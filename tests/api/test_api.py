@@ -85,7 +85,7 @@ class PublicApiTests(unittest.TestCase):
     def test_example_extension_is_visible_but_not_core_special_cased(self) -> None:
         response = self.client.get("/api/v1/extensions")
         self.assertEqual(200, response.status_code, response.text)
-        item = response.json()["items"][0]
+        item = next(i for i in response.json()["items"] if i["id"] == "example.echo")
         self.assertEqual("example.echo", item["id"])
         self.assertEqual("DISCOVERED", item["state"])
         self.assertEqual("no-store", response.headers["cache-control"])
@@ -111,7 +111,7 @@ class PublicApiTests(unittest.TestCase):
         asyncio.run(container.lifecycle_store.save(record))
         response = self.client.get("/api/v1/extensions")
         self.assertEqual(200, response.status_code)
-        item = response.json()["items"][0]
+        item = next(i for i in response.json()["items"] if i["id"] == "example.echo")
         self.assertEqual("example.echo", item["id"])
         self.assertEqual("ENABLED", item["state"])
 

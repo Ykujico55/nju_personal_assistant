@@ -1,0 +1,17 @@
+{
+  "PA_ENVIRONMENT": "production",
+  "PA_STORAGE_BACKEND": "postgres",
+  "PA_DATABASE_SECRET_HANDLE": "REPLACE_DATABASE_HANDLE",
+  "PA_PUBLIC_HOST": "127.0.0.1",
+  "PA_PUBLIC_PORT": "8000",
+  "PA_ADMIN_HOST": "127.0.0.1",
+  "PA_ADMIN_PORT": "8001",
+  "PA_HEALTH_HOST": "127.0.0.1",
+  "PA_HEALTH_PORT": "8010",
+  "PA_TRUST_CLOUDFLARE_ACCESS": "true",
+  "PA_PUBLIC_ORIGIN": "https://assistant.example.com",
+  "PA_CF_ACCESS_TEAM_DOMAIN": "team.cloudflareaccess.com",
+  "PA_CF_ACCESS_AUD": "REPLACE_ACCESS_AUD",
+  "PA_EXTENSION_ROOT": "var/extensions",
+  "PA_ARTIFACT_ROOT": "var/artifacts"
+}

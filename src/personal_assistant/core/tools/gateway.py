@@ -236,6 +236,10 @@ class ToolGateway:
         )
 
         try:
+            try:
+                self._policy.check(descriptor, call)
+            except DomainError:
+                raise DefinitiveToolFailure("host policy changed before execution") from None
             raw_result = await asyncio.wait_for(
                 self._executor.execute(descriptor, call.arguments, execution_context),
                 timeout=descriptor.timeout_seconds,

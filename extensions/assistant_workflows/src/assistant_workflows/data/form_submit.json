@@ -1,0 +1,30 @@
+{
+  "id": "assistant.form_submit",
+  "version": "1",
+  "name": "独立最终提交",
+  "description": "仅接受宿主已绑定的实际目标、完整载荷、材料、后果和一次性预览；试填预览不可用",
+  "steps": [
+    {
+      "id": "ask_submit_request",
+      "type": "ask",
+      "field": "submit_request",
+      "question": "提供受监督宿主生成的完整提交请求；试验预览不能用于批准",
+      "schema": {
+        "type": "object"
+      }
+    },
+    {
+      "id": "submit",
+      "type": "tool",
+      "tool_id": "ehall.submit",
+      "tool_version": "0.1.0",
+      "arguments": {
+        "$value": "inputs.submit_request"
+      }
+    },
+    {
+      "id": "archive",
+      "type": "archive"
+    }
+  ]
+}

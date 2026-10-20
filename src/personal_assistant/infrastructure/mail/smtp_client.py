@@ -48,11 +48,10 @@ class _SendAborted(Exception):
 
 
 class _TrackedSmtp(smtplib.SMTP):
-    """SMTP client whose socket is registered before DNS/TLS/commands run.
+    """SMTP client registering raw/TLS sockets before connect/handshake.
 
-    Registering the raw socket *before* the TLS handshake means an abort during
-    connect or handshake can still shut it down; every command path also checks
-    the abort flag before proceeding.
+    Wrapping transfers ownership away from the raw socket. Register the actual
+    TLS socket before handshaking so cancellation can close that connection.
     """
 
     def __init__(
@@ -68,6 +67,7 @@ class _TrackedSmtp(smtplib.SMTP):
     ) -> None:
         self._owner = owner
         self._tls_context = context
+        self._tls_hostname = host
         self._family = family
         self._sockaddr = sockaddr
         super().__init__(host=host, port=port, timeout=timeout)
@@ -83,14 +83,58 @@ class _TrackedSmtp(smtplib.SMTP):
             raw.connect(self._sockaddr)
             self._owner._check_abort()
             if self._tls_context is not None:
-                wrapped = self._tls_context.wrap_socket(raw, server_hostname=host)
-                self._owner._register_socket(wrapped)
-                return wrapped
+                return self._wrap_tls_socket(raw, self._tls_context, host)
             return raw
         except BaseException:
             with contextlib.suppress(OSError):
                 raw.close()
             raise
+
+
+    def _wrap_tls_socket(
+        self, raw: socket.socket, context: ssl.SSLContext, host: str
+    ) -> ssl.SSLSocket:
+        wrapped: ssl.SSLSocket | None = None
+        try:
+            wrapped = context.wrap_socket(
+                raw, server_hostname=host, do_handshake_on_connect=False
+            )
+            self._owner._register_socket(wrapped)
+            self._owner._check_abort()
+            wrapped.do_handshake()
+            self._owner._check_abort()
+            return wrapped
+        except BaseException:
+            with contextlib.suppress(OSError):
+                (wrapped if wrapped is not None else raw).close()
+            raise
+
+    def starttls(self, *, context: ssl.SSLContext | None = None) -> tuple[int, bytes]:
+        # Retain smtplib's STARTTLS capability check and RFC 3207 state reset;
+        # only the TLS socket ownership/handshake sequence differs.
+        self.ehlo_or_helo_if_needed()
+        if not self.has_extn("starttls"):
+            raise smtplib.SMTPNotSupportedError("STARTTLS is not supported")
+        self._owner._check_abort()
+        code, reply = self.docmd("STARTTLS")
+        if code != 220:
+            raise smtplib.SMTPResponseException(code, reply)
+        if self.sock is None:
+            raise smtplib.SMTPServerDisconnected("SMTP connection is closed")
+        try:
+            self.sock = self._wrap_tls_socket(
+                self.sock, context or default_ssl_context(), self._tls_hostname
+            )
+        except BaseException:
+            with contextlib.suppress(OSError):
+                self.close()
+            raise
+        self.file = None
+        self.helo_resp = None
+        self.ehlo_resp = None
+        self.esmtp_features = {}
+        self.does_esmtp = False
+        return code, reply
 
 
 class TlsSmtpSender:
@@ -558,19 +602,26 @@ class TlsSmtpSender:
             family=family,
             sockaddr=sockaddr,
         )
-        if connection.sock is not None:
-            self._register_socket(connection.sock)
-        code, _ = connection.ehlo()
-        if code != 250:
-            raise MailError(MailErrorCode.PROTOCOL_ERROR, "SMTP EHLO failed")
-        self._check_abort()
-        code, _ = connection.starttls(context=self._ssl_context)
-        if code != 220:
-            raise MailError(MailErrorCode.TLS_FAILED, "SMTP STARTTLS failed")
-        if connection.sock is not None:
-            self._register_socket(connection.sock)
-        connection.ehlo()
-        return connection
+        try:
+            if connection.sock is not None:
+                self._register_socket(connection.sock)
+            code, _ = connection.ehlo()
+            if code != 250:
+                raise MailError(MailErrorCode.PROTOCOL_ERROR, "SMTP EHLO failed")
+            self._check_abort()
+            code, _ = connection.starttls(context=self._ssl_context)
+            if code != 220:
+                raise MailError(MailErrorCode.TLS_FAILED, "SMTP STARTTLS failed")
+            if connection.sock is not None:
+                self._register_socket(connection.sock)
+            connection.ehlo()
+            return connection
+        except BaseException:
+            # The caller owns this connection only after preparation returns.
+            # Close on every preparation failure without replacing its error.
+            with contextlib.suppress(Exception):
+                connection.close()
+            raise
 
     def _login(self, connection: smtplib.SMTP) -> None:
         try:
