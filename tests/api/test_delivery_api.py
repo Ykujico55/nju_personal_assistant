@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import unittest
 from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -14,8 +16,12 @@ from personal_assistant.settings import Settings
 
 class DeliveryApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        root = Path(self.enterContext(TemporaryDirectory()))
         with patch.dict(os.environ, {}, clear=True):
-            self.settings = Settings.from_env()
+            self.settings = replace(
+                Settings.from_env(),
+                extension_root=root / "extensions", artifact_root=root / "artifacts",
+            )
         self.container = build_container(self.settings)
         self.client = TestClient(create_app(settings=self.settings, container=self.container))
 
@@ -77,10 +83,12 @@ class DeliveryApiTests(unittest.TestCase):
 
 class TaskDisclosureApiTests(unittest.TestCase):
     def test_task_disclosure_is_built_by_host_and_binds_task_version(self):
+        root = Path(self.enterContext(TemporaryDirectory()))
         with patch.dict(os.environ, {}, clear=True):
             base = Settings.from_env()
         settings = replace(
             base,
+            extension_root=root / "extensions", artifact_root=root / "artifacts",
             model_remote_base_url="https://model.example.test",
             model_remote_model="fixture",
             model_remote_secret_handle="fixture",
@@ -142,8 +150,12 @@ class EmbeddedAgentApiTests(unittest.TestCase):
     def test_explicit_dev_worker_processes_queue_and_stops_on_shutdown(self):
         import time
 
+        root = Path(self.enterContext(TemporaryDirectory()))
         with patch.dict(os.environ, {}, clear=True):
-            settings = replace(Settings.from_env(), embedded_agent=True)
+            settings = replace(
+                Settings.from_env(), embedded_agent=True,
+                extension_root=root / "extensions", artifact_root=root / "artifacts",
+            )
         container = build_container(settings)
         with TestClient(create_app(settings=settings, container=container)) as client:
             task = client.post(

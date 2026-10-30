@@ -3,6 +3,9 @@ from __future__ import annotations
 import copy
 import os
 import unittest
+from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
@@ -36,8 +39,12 @@ def workflow(identifier="fixture.first", version="1", extension_version="1"):
 
 class ExecutionBindingRemediationTests(unittest.TestCase):
     def setUp(self):
+        root = Path(self.enterContext(TemporaryDirectory()))
         with patch.dict(os.environ, {}, clear=True):
-            self.settings = Settings.from_env()
+            self.settings = replace(
+                Settings.from_env(),
+                extension_root=root / "extensions", artifact_root=root / "artifacts",
+            )
         self.container = build_container(self.settings)
         self.client = TestClient(create_app(settings=self.settings, container=self.container))
         self.client.__enter__()

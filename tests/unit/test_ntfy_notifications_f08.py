@@ -6,6 +6,8 @@ import json
 import os
 import unittest
 from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
 
@@ -71,6 +73,11 @@ class NtfySettingsTests(unittest.TestCase):
 
 class NtfyNotificationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        directory = self.enterContext(TemporaryDirectory())
+        root = Path(directory)
+        self.settings = replace(
+            defaults(), extension_root=root / "extensions", artifact_root=root / "artifacts",
+        )
         self.secrets = InMemorySecretStore()
         self.handle = await self.secrets.put(
             name="synthetic notification writer", kind="ntfy_publish_token", value=TOKEN,
@@ -196,7 +203,7 @@ class NtfyNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([], self.requests)
 
     async def test_gateway_wires_ntfy_without_web_push_fallback_or_tool_execution(self) -> None:
-        configured = replace(defaults(), ntfy_publish_url=URL,
+        configured = replace(self.settings, ntfy_publish_url=URL,
                              ntfy_secret_handle=self.handle.id, public_origin=ORIGIN)
         public = ec.derive_private_key(7, ec.SECP256R1()).public_key().public_bytes(
             Encoding.X962, PublicFormat.UncompressedPoint,
@@ -233,7 +240,7 @@ class NtfyNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(b"private", self.requests[0].content)
 
     async def test_ntfy_resource_is_closed_with_container(self) -> None:
-        configured = replace(defaults(), ntfy_publish_url=URL,
+        configured = replace(self.settings, ntfy_publish_url=URL,
                              ntfy_secret_handle=self.handle.id, public_origin=ORIGIN)
         container = build_container(configured, secret_store=self.secrets)
         self.assertIsNotNone(container.ntfy)
@@ -253,7 +260,7 @@ class NtfyNotificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(1, len(self.requests))
 
     async def test_postgres_root_wires_ntfy_with_proxy_disabled(self) -> None:
-        configured = replace(defaults(), ntfy_publish_url=URL,
+        configured = replace(self.settings, ntfy_publish_url=URL,
                              ntfy_secret_handle=self.handle.id, public_origin=ORIGIN,
                              storage_backend="postgres", environment="production",
                              trust_cloudflare_access=True,

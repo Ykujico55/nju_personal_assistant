@@ -84,6 +84,57 @@ class RecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restored["tables"]["runtime_records"][0]["value"]["enabled"])
         self.assertEqual("RUNNING", snapshot["tables"]["tasks"][0]["status"])
 
+    async def test_legacy_snapshot_keeps_its_original_table_set_when_frozen(self):
+        from personal_assistant.infrastructure.operations.recovery import freeze_snapshot
+
+        snapshot = {
+            "format": 1,
+            "tables": {"tasks": [{"status": "RUNNING", "version": 2}]},
+            "artifacts": {},
+            "migrations": [{"version": "0011_fixture", "checksum": "0" * 64}],
+        }
+        restored = freeze_snapshot(snapshot)
+        self.assertEqual(set(snapshot["tables"]), set(restored["tables"]))
+        self.assertEqual("PAUSED_SAFETY", restored["tables"]["tasks"][0]["status"])
+        self.assertEqual(3, restored["tables"]["tasks"][0]["version"])
+        self.assertEqual(snapshot["migrations"], restored["migrations"])
+        self.assertEqual({"tasks": [{"status": "RUNNING", "version": 2}]}, snapshot["tables"])
+
+    async def test_explicit_empty_runtime_table_is_preserved(self):
+        from personal_assistant.infrastructure.operations.recovery import freeze_snapshot
+
+        snapshot = {"format": 1, "tables": {"runtime_records": []}, "artifacts": {}}
+        restored = freeze_snapshot(snapshot)
+        self.assertEqual({"runtime_records": []}, restored["tables"])
+        self.assertIsNot(
+            snapshot["tables"]["runtime_records"], restored["tables"]["runtime_records"]
+        )
+
+    async def test_runtime_hosts_are_removed_and_execution_controls_remain_frozen(self):
+        from copy import deepcopy
+
+        from personal_assistant.infrastructure.operations.recovery import freeze_snapshot
+
+        records = [
+            {"bucket": "hosts", "value": {"enabled": True}},
+            {"bucket": "schedules", "value": {"enabled": True}},
+            {"bucket": "event-bindings", "value": {"enabled": True}},
+            {"bucket": "requests", "value": {"consent_id": "old-permission"}},
+            {"bucket": "executions", "value": {"state": "RUNNING", "reference": "old"}},
+        ]
+        original = deepcopy(records)
+        snapshot = {"format": 1, "tables": {"runtime_records": records}, "artifacts": {}}
+        restored = freeze_snapshot(snapshot)["tables"]["runtime_records"]
+        by_bucket = {row["bucket"]: row["value"] for row in restored}
+        self.assertNotIn("hosts", by_bucket)
+        self.assertFalse(by_bucket["schedules"]["enabled"])
+        self.assertFalse(by_bucket["event-bindings"]["enabled"])
+        self.assertIsNone(by_bucket["requests"]["consent_id"])
+        self.assertEqual("PAUSED_SAFETY", by_bucket["executions"]["state"])
+        self.assertIsNone(by_bucket["executions"]["reference"])
+        self.assertEqual("RESTORE_REVIEW_REQUIRED", by_bucket["executions"]["reason"])
+        self.assertEqual(original, records)
+
     async def test_retention_keeps_latest_daily_weekly_monthly_points(self):
         from datetime import UTC, datetime, timedelta
 

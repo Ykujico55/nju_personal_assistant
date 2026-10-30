@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from personal_assistant.bootstrap import build_container
@@ -95,8 +97,12 @@ class DecisionDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
 class RuntimeDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        root = Path(self.enterContext(TemporaryDirectory()))
         with patch.dict("os.environ", {}, clear=True):
-            settings = Settings.from_env()
+            settings = replace(
+                Settings.from_env(),
+                extension_root=root / "extensions", artifact_root=root / "artifacts",
+            )
         self.container = build_container(settings)
         self.addAsyncCleanup(self.container.aclose)
 

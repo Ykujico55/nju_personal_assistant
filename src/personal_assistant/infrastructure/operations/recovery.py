@@ -191,9 +191,10 @@ def freeze_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
             row["value"].update(
                 state="PAUSED_SAFETY", reference=None, reason="RESTORE_REVIEW_REQUIRED"
             )
-    tables["runtime_records"] = [
-        r for r in tables.get("runtime_records", []) if r.get("bucket") != "hosts"
-    ]
+    if "runtime_records" in tables:
+        tables["runtime_records"] = [
+            r for r in tables["runtime_records"] if r.get("bucket") != "hosts"
+        ]
     result["credential_rebind_required"] = True
     return result
 

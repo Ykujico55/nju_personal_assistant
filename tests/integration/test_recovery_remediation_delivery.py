@@ -20,7 +20,15 @@ from personal_assistant.core.jobs.outbox import SideEffectIntent, SideEffectStat
 from personal_assistant.core.mail.ports import MailDeliveryRecord, MailDeliveryStatus
 from personal_assistant.domain.enums import ApprovalState
 from personal_assistant.domain.models import utc_now
-from personal_assistant.infrastructure.operations.recovery import export_database, restore_database
+from personal_assistant.infrastructure.database import PostgresAdapterConfig, PostgresDatabase
+from personal_assistant.infrastructure.memory.secrets import InMemorySecretStore
+from personal_assistant.infrastructure.operations.recovery import (
+    RecoveryVault,
+    export_database,
+    preflight_restore_target,
+    restore_database,
+    stage_artifacts,
+)
 from personal_assistant.settings import Settings
 
 BASE = os.getenv("PA_TEST_DATABASE_URL")
@@ -175,3 +183,112 @@ class RecoveryApprovalPostgresTests(unittest.IsolatedAsyncioTestCase):
                 1, await connection.fetchval("SELECT count(*) FROM mail_delivery_actions")
             )
         self.assertEqual(ApprovalState.EXECUTING, (await source.approvals.get(waiting.id)).state)
+
+
+@unittest.skipUnless(BASE, "set PA_TEST_DATABASE_URL for local temporary PostgreSQL")
+class LegacyRecoveryPostgresTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        if not BASE or not urlsplit(BASE).path.endswith("_test"):
+            raise RuntimeError("dedicated *_test base required")
+        self.admin_url = database_url(BASE, "postgres")
+        self.created = []
+        self.databases = []
+        self.tmp = tempfile.TemporaryDirectory(prefix="pa_legacy_recovery_")
+        self.addCleanup(self.tmp.cleanup)
+        self.addAsyncCleanup(self.cleanup_databases)
+        self.root = Path(self.tmp.name)
+        migrations = self.root / "migrations"
+        migrations.mkdir()
+        source_dir = PostgresAdapterConfig(BASE).resolved_migrations_dir()
+        historical = [p for p in sorted(source_dir.glob("*.sql")) if p.name < "0012_"]
+        self.assertEqual(11, len(historical))
+        for path in historical:
+            (migrations / path.name).write_bytes(path.read_bytes())
+        admin = await asyncpg.connect(self.admin_url)
+        try:
+            for suffix in ("_test", "_restore"):
+                name = "pa_legacy_recovery_" + uuid4().hex + suffix
+                await admin.execute(f'CREATE DATABASE "{name}"')
+                self.created.append(name)
+        finally:
+            await admin.close()
+        for name in self.created:
+            database = PostgresDatabase(
+                PostgresAdapterConfig(
+                    database_url(BASE, name),
+                    pool_max_size=2,
+                    migrations_dir=migrations,
+                )
+            )
+            self.databases.append(database)
+        self.source, self.target = self.databases
+        await self.source.startup()
+        await self.target.connect()
+        await preflight_restore_target(database_url(BASE, self.created[0]), self.target)
+        await self.target.startup()
+        async with self.source.connection() as connection:
+            await connection.execute(
+                "INSERT INTO tasks (id,owner_id,objective,status,version) "
+                "VALUES ('legacy-task','owner','synthetic restore fixture','RUNNING',3)"
+            )
+        snapshot = await export_database(self.source, self.root / "source-artifacts")
+        self.assertEqual(11, len(snapshot["migrations"]))
+        self.assertNotIn("runtime_records", snapshot["tables"])
+        store = InMemorySecretStore()
+        handle = await store.put(name="fixture", kind="backup_key", value="03" * 32)
+        vault = RecoveryVault(store, handle)
+        self.snapshot = await vault.open(await vault.seal(snapshot))
+
+    async def cleanup_databases(self):
+        try:
+            for database in self.databases:
+                await database.close()
+        finally:
+            admin = await asyncpg.connect(self.admin_url)
+            try:
+                for name in self.created:
+                    await admin.execute(f'DROP DATABASE "{name}" WITH (FORCE)')
+            finally:
+                await admin.close()
+
+    async def upgrade_target(self):
+        upgraded = PostgresDatabase(replace(self.target.config, migrations_dir=None))
+        self.databases.append(upgraded)
+        applied = await upgraded.startup()
+        self.assertEqual(("0012_runtime_records",), applied)
+        return upgraded
+
+    async def test_matching_legacy_restore_then_upgrade_preserves_frozen_task(self):
+        stage_artifacts(self.snapshot["artifacts"], self.root / "restored-artifacts")
+        await restore_database(self.snapshot, self.target)
+        async with self.target.connection() as connection:
+            self.assertEqual(
+                "PAUSED_SAFETY",
+                await connection.fetchval("SELECT status FROM tasks WHERE id='legacy-task'"),
+            )
+            self.assertEqual(4, await connection.fetchval("SELECT version FROM tasks"))
+            self.assertIsNone(await connection.fetchval("SELECT to_regclass('runtime_records')"))
+        with self.assertRaisesRegex(ValueError, "nonempty"):
+            await restore_database(self.snapshot, self.target)
+        upgraded = await self.upgrade_target()
+        async with upgraded.connection() as connection:
+            self.assertIsNotNone(await connection.fetchval("SELECT to_regclass('runtime_records')"))
+            self.assertEqual("PAUSED_SAFETY", await connection.fetchval("SELECT status FROM tasks"))
+        async with self.source.connection() as connection:
+            self.assertEqual("RUNNING", await connection.fetchval("SELECT status FROM tasks"))
+            self.assertEqual(
+                11, await connection.fetchval("SELECT count(*) FROM schema_migrations")
+            )
+
+    async def test_legacy_restore_still_rejects_checksum_and_version_mismatch(self):
+        from copy import deepcopy
+
+        changed = deepcopy(self.snapshot)
+        changed["migrations"][0]["checksum"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "version/checksum mismatch"):
+            await restore_database(changed, self.target)
+        upgraded = await self.upgrade_target()
+        with self.assertRaisesRegex(ValueError, "version/checksum mismatch"):
+            await restore_database(self.snapshot, upgraded)
+        async with upgraded.connection() as connection:
+            self.assertEqual(0, await connection.fetchval("SELECT count(*) FROM tasks"))
