@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -11,6 +12,8 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from personal_assistant.core.models.cleanup import run_cleanup
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HANDSHAKE_TIMEOUT_SECONDS = 30.0
@@ -45,6 +48,15 @@ class CompanionProcess:
             await self.process.wait()
 
 
+async def _reap_failed_start(spawning: asyncio.Task[asyncio.subprocess.Process]) -> None:
+    # The child may exist before create_subprocess_exec returns its handle.
+    process = await spawning
+    if process.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+    await process.wait()
+
+
 async def start_companion(
     *,
     test_mode: bool = True,
@@ -53,42 +65,75 @@ async def start_companion(
 ) -> CompanionProcess:
     env = dict(os.environ)
     env["PA_COMPANION_PORT"] = "0"
-    if test_mode:
-        env["PA_COMPANION_TEST_MODE"] = "1"
-        env["PA_COMPANION_CDP_PORT"] = str(cdp_port or free_loopback_port())
-    if allow_insecure_tls:
-        env["PA_COMPANION_ALLOW_INSECURE_TLS"] = "1"
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "personal_assistant.infrastructure.browser.companion_entry",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-        cwd=str(REPO_ROOT),
-        env=env,
-    )
-    assert process.stdout is not None
+    env["PA_COMPANION_TEST_MODE"] = "1" if test_mode else "0"
+    env["PA_COMPANION_ALLOW_INSECURE_TLS"] = "1" if allow_insecure_tls else "0"
+    env.pop("PA_COMPANION_CDP_PORT", None)
+    reservation: socket.socket | None = None
+    reserved_port: int | None = None
+    spawning: asyncio.Task[asyncio.subprocess.Process] | None = None
     try:
+        if test_mode:
+            reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            if sys.platform == "win32":
+                reservation.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            # Keep CDP unavailable to RPC bind(0), including SO_REUSEADDR on Windows.
+            # Chromium starts only after this helper returns and a session is created.
+            reservation.bind(("127.0.0.1", cdp_port or 0))
+            reserved_port = int(reservation.getsockname()[1])
+            env["PA_COMPANION_CDP_PORT"] = str(reserved_port)
+        spawning = asyncio.create_task(
+            asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "personal_assistant.infrastructure.browser.companion_entry",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                cwd=str(REPO_ROOT),
+                env=env,
+            )
+        )
+        process = await asyncio.shield(spawning)
+        assert process.stdout is not None
         line = await asyncio.wait_for(process.stdout.readline(), timeout=HANDSHAKE_TIMEOUT_SECONDS)
-    except TimeoutError:
-        process.kill()
-        await process.wait()
-        raise RuntimeError("the companion did not print a handshake") from None
-    if not line:
-        code = await process.wait()
-        raise RuntimeError(f"the companion exited with code {code} before its handshake")
-    handshake = json.loads(line.decode("utf-8").strip())
-    if handshake.get("type") != "pa.desktop_companion.handshake":
-        process.kill()
-        await process.wait()
-        raise RuntimeError("unexpected companion handshake")
-    return CompanionProcess(
-        process=process,
-        port=int(handshake["port"]),
-        capability=str(handshake["capability"]),
-        cdp_port=handshake.get("cdp_port"),
-        test_mode=bool(handshake.get("test_mode")),
-    )
+        if not line:
+            raise RuntimeError("the companion exited before its handshake")
+        try:
+            handshake = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise RuntimeError("invalid companion handshake") from None
+        if (
+            not isinstance(handshake, dict)
+            or handshake.get("type") != "pa.desktop_companion.handshake"
+        ):
+            raise RuntimeError("unexpected companion handshake")
+        port = handshake.get("port")
+        capability = handshake.get("capability")
+        if (
+            type(port) is not int
+            or not 0 < port < 65536
+            or not isinstance(capability, str)
+            or not capability
+            or handshake.get("test_mode") is not test_mode
+            or handshake.get("cdp_port") != reserved_port
+            or port == reserved_port
+        ):
+            raise RuntimeError("invalid companion handshake ports or mode")
+        return CompanionProcess(
+            process=process,
+            port=port,
+            capability=capability,
+            cdp_port=reserved_port,
+            test_mode=test_mode,
+        )
+    except BaseException as error:
+        if spawning is not None:
+            await run_cleanup(_reap_failed_start(spawning))
+        if isinstance(error, TimeoutError):
+            raise RuntimeError("the companion did not print a handshake") from None
+        raise
+    finally:
+        if reservation is not None:
+            reservation.close()
 
 
 def pid_alive(pid: int) -> bool:

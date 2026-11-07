@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "properties": {
+    "plan_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "required": [
+    "plan_id"
+  ],
+  "additionalProperties": false
+}

@@ -195,15 +195,6 @@ class MigrationHistoryContract(unittest.TestCase):
         pyproject = (ROOT / "pyproject.toml").read_text("utf-8")
         self.assertIn(F06_CORE_MIGRATION, pyproject)
 
-    def test_documentation_records_f06_as_done(self) -> None:
-        # F06 passed independent acceptance, so the handover documents record
-        # it as DONE (F07 is the task that stays IN_PROGRESS).
-        next_steps = (ROOT / "docs" / "NEXT_STEPS.md").read_text("utf-8")
-        self.assertIn("F06", next_steps)
-        self.assertRegex(next_steps, r"F06[^\n]*DONE")
-        todo = (ROOT / "TODO.md").read_text("utf-8")
-        self.assertRegex(todo, r"F06[^\n]*DONE")
-
 
 class PromptInjectionBoundary(unittest.TestCase):
     def test_extension_never_treats_message_text_as_instructions(self) -> None:

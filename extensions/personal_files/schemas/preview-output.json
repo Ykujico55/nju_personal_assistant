@@ -1,0 +1,5 @@
+{
+  "type": "object",
+  "description": "Operation facts; a stored or replayed receipt is historical, not proof of current filesystem state. Check current files via files.read and directories via files.list; files.status also returns historical records. UNKNOWN never authorizes automatic retry.",
+  "additionalProperties": true
+}

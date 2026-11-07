@@ -56,6 +56,16 @@ class InMemorySideEffectOutbox:
         self._lock = asyncio.Lock()
         self._approvals = approvals
 
+    async def get_by_call(
+        self, tool_id: str, idempotency_key: str,
+    ) -> SideEffectIntent | None:
+        async with self._lock:
+            return next(
+                (deepcopy(item) for item in self._intents.values()
+                 if item.tool_id == tool_id and item.idempotency_key == idempotency_key),
+                None,
+            )
+
     async def create_with_approval_consumption(self, intent: SideEffectIntent) -> None:
         if not intent.action_fingerprint:
             raise ValidationError(

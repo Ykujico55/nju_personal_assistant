@@ -1127,3 +1127,30 @@ TUI 初始刷新、远程操作前及远程确认返回后协商。确认窗口�
 - 仅完整读取且成功 UTF-8 解码的全空白 TXT/Markdown 可跳过；如果已有旧正文，先 CAS 删除其索引。空 PDF、抽取无片段、解码或读取失败仍阻断完整扫描；未完成删除或版本竞争也不能误报 READY。文件来源哈希校验及根目录隔离不变，不修改原文件。
 - `knowledge.workspace` 文件项新增已编码的 `source_uri`；清单本身的 `knowledge-workspace://` 和状态证据 URI 不可用于文件直读。`knowledge.read` 输入 Schema 说明精确资源格式，经通用工具注册进入 Planner，无业务专用宿主路由。
 - 无迁移、SDK/RPC、风险等级或审批/熔断变更。候选本地验证不等于原实例部署或真实模型回答验收；后续本人授权后已安装0.1.6、受控重启并完成一次原目录全文索引/检索核验，状态READY，未调用模型。具体证据见NEXT_STEPS的本项记录。
+
+
+## CORE.RECONCILE.1 — 原动作对账事实与显式任务恢复（2026-11-07）
+
+- `POST /api/v1/tasks/{task_id}/reconcile`，工作台同名路径复用；请求仅 `{version: int}`，额外结果/证明字段拒绝。认证、幂等键及 `no-store` 沿用控制面契约。客户端不能裁定外部动作成功。
+- `ReconciliationPort.resolve` 只读取与原调用绑定的持久宿主证据，不调用工具、模型、SMTP或浏览器点击。缺失或不确定返回无证明；支持邮件发送台账与浏览器宿主跟踪证明，不能用新动作或新审批替代原动作证据。
+- 校验检查点任务/Run版本、原ToolCall、固定工具/扩展版本、审批已消费及完整action fingerprint、Outbox调用键/payload，以及宿主台账/会话字段。原审批与Outbox终态不重写、不重新授权。
+- 成功在同一生产数据库事务保存独立 `runtime_records/reconciliations` 事实、更新Run/任务/检查点、事件及原命令回执。重复键重放原答复；并发版本冲突拒绝；失败回滚。
+- 任务仅转 `WAITING_USER`，不排队、不自动规划或重发。检查点 `reconciliation_resume_required` 阻止残留旧作业推进；之后新的显式继续命令用CAS解除门闩。工作流成功步骤只推进一次；熔断保护不删除或弱化。
+- TUI通过可选能力 `task_reconciliation` 显示“核对外部结果”，旧后台不调用缺失接口。PWA没有新增按钮。
+- 具体命令、测试与限制见 `docs/CORE_RECONCILIATION_2026-11-07.md`。
+
+
+## FILES.1 — 实例共享的本地文件工具（2026-11-07）
+
+独立 `personal.files` 通过既有 ToolProvider/ContextProvider 接入，无新宿主路由、业务表或迁移。目录授权取实例配置，不随task_id变化；既有配置apply和旧任务工具快照规则不变。
+
+- `files.roots/list/read/status` 为READ；`files.preview/write` 为R1。预览持久化精确root/path、旧SHA、新正文、完整diff、配置/计划哈希、期限。新建旧SHA为null，表示必须不存在；修改必须核对现有SHA。
+- `files.preview` 也支持 `operation=mkdir`：expected_sha256必须null、不带content；父目录须已存在，每次只创建一层，不覆盖已有目标。仍由 `files.write` 执行，不增加工具或目录删除。
+- 执行只引用plan_id/plan_hash；SQLite先记录APPLYING再变更文件，原幂等键绑定命令。旧回执仅证明原操作，不证明当前文件或目录仍相同。
+- 同一规范目标存在APPLYING/UNKNOWN时，不接受更换计划来重试。未知结果无自动解除入口；不以当前SHA吻合推断原命令已完成。
+- 模型工具只能准备单文件删除。执行删除由独立本机TTY确认精确计划，再核对期限、配置和旧SHA；不存在模型confirmed参数，不更改R2审批语义。
+- `files.workspace` 返回授权根/明确目录URI元数据；`files.document` 读取明确URI的UTF-8正文，标记SENSITIVE/USER_SOURCE。空查询/limit0探针不访问文件。
+- 首版仅已有父目录内<=256KiB UTF-8文件及单层目录创建；拒绝穿越、链接/重解析点、硬链接、Windows短路径别名和控制/凭据路径。检查全部现有路径组件后才允许缺失末级；配置根也复核规范路径的禁入名称。state_directory须预先存在且与资料根隔离。
+- stdlib最终哈希检查与replace不构成对任意外部编辑器的原子CAS，ACL/扩展属性不保证保留；私有计划目录含正文须单独保护备份。扩展为可信本机代码，不是沙箱。
+
+具体使用、测试范围与安装状态见 `FILES1_LOCAL_FILES_2026-11-07.md` 及 `extensions/personal_files/README.md`。

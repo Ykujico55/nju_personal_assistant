@@ -241,7 +241,8 @@ class FileExtensionConfigStore:
         )
 
     def _report(self, extension_id: str, instance_id: str, value: Mapping[str, Any]) -> None:
-        with self._lease_guard:
+        # Status readers must not open the runtime file during replacement on Windows.
+        with self._mutation_lock(extension_id), self._lease_guard:
             if instance_id not in self._leases:
                 stream = _open_lock(self._root / ".runtime" / (instance_id + ".lock"))
                 if not _try_lock(stream):

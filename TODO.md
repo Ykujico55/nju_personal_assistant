@@ -1,8 +1,71 @@
 # 项目接力 TODO
 
-## 当前交接状态（2026-11-07）
+## 2026-11-08 当前唯一待办：WORKSPACE.1（NEXT，已授权，尚未实施）
 
-六项日用修复及知识正文读取已部署。本次 **CORE.KNOWLEDGE.INDEX.1 DONE**：按本人精确授权升级到 **personal.knowledge 0.1.6 / ENABLED** 并受控重启；原实例索引已READY，40份活动版本/747分块保留，真实关键词检索返回带正文及定位的CURRENT结果。Worker在线、配置已应用、恢复原先未冻结策略，15个原任务状态/版本保持。当前唯一NEXT为 **CORE.RECONCILE.1**，本轮不开始该项。F08.6 BLOCKED、F07/F08 IN_PROGRESS不变；下方较早的部署状态、测试结果和“下一编号”属于历史记录，以本段及本次部署证据为准。
+本人已明确要求实现统一实例工作区：由同一份实例级目录授权供文件读写和知识库索引共同使用，更换工作区后两者同步更新。随后要求先提交并推送现有成果，因此本次提交不包含该功能的代码实现。FILES.BACKUP.1顺延为WAITING，待统一目录配置完成后推进。
+
+当前必须明确：FILES.1虽已验收安装，但personal.files与personal.knowledge仍各自保存roots；安装时仅一次复制为相同目录，不会动态跟随。仅在聊天里提供任意目录不会自动新增授权；知识库目录变更也不会自动撤销旧文件目录的读写权限。下一项将统一配置来源与应用状态，保持旧计划版本/配置绑定、UNKNOWN和旧任务工具快照保护。
+
+FILES.1 DONE；CORE.RECONCILE.1 WAITING正式验收/部署；F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。以下日期段落为历史状态，本节排期优先。
+
+## 历史：2026-11-07 FILES.1（DONE，已验收并安装）；当时后继为FILES.BACKUP.1
+
+本人要求验收和安装，并明确授权整个知识库目录读写及动态子目录。已完成独立插件 `personal.files@0.1.0` 安装与ENABLED持久登记：沿用已应用的知识库根 `personal`，配置read_write供整个实例共享，允许受支持文本新建/修改和逐层创建目录；删除仍限本机本人确认。无新核心业务分支、迁移或第三方运行依赖。
+
+本轮先发现并修复Windows 8.3路径别名P1，原样独立复验3 passed，新增mkdir独立组合4 passed；完整文件插件专项72 passed，关键回归643 passed/6 warnings，Ruff、Mypy宿主290/插件7文件及依赖检查通过。按本人避免过度验证要求未重复完整本地/完整PostgreSQL-Worker套件。原失败记录保留，不将通过数量混合相加。
+
+安装材料 `sha256:f32fdf9804bac410a3dc4f2bae7c87d6865eedd34755b7d9a1d4311353717829`，正式inspect/confirm/install/enable、真实Worker及配置应用核验通过，安装载荷摘要相同。原15任务、知识库40版本/747分块、其他扩展及控制状态不变；未改知识库现有文件、索引或原任务工具快照。原助手本来停止且manual冻结，本轮保持；只启动并回收了安装验证Worker，不启动全宿主、不迁移、不调用模型或外部动作。
+
+完整证据与可复现命令见 `docs/FILES1_ACCEPTANCE_AND_INSTALL_2026-11-07.md`（从本目录阅读时为 `FILES1_ACCEPTANCE_AND_INSTALL_2026-11-07.md`），日志在 `var/verification/files1-accept-2026-11-07/`。后台正常启动后从新对话/新任务使用文件工具；冻结需由本人按日常操作解除，旧任务不自动继续。
+
+下一唯一编号 **FILES.BACKUP.1**：工作区备份，需覆盖授权资料根与文件计划SQLite，并验证隔离恢复；本轮只登记下一项，没有开工。**CORE.RECONCILE.1仍WAITING正式验收/部署；F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。** 未提交或推送。
+
+以下内容保留历史状态，当前结论以上节为准。
+
+## 历史：2026-11-07 FILES.1本地实现交接（当时待验收/安装）
+
+按本人明确排期，先结束 CORE.RECONCILE.1 的本地实现收尾，再开发通用本地文件扩展。**CORE.RECONCILE.1 为 WAITING（本地实现完成，等待正式验收/部署）**；本轮只读复核未发现新的具体实现阻断，没有把复核称为独立验收，也没有操作原实例。此状态调整不代表完整阶段门禁或真实外部对账已通过。
+
+可复用的既有证据：Runtime/API/TUI/能力 23 项与宿主证据 14 项，共 **37 passed**；`var/verification/core-reconcile-2026-11-07/final/postgres-directed.log` 为 **5 passed，82.93 秒**；随后测试维护的 `var/verification/test-suite-trim-2026-11-07/core-final.log` 为 **643 passed、6 warnings，97.20 秒**，Ruff 和 Mypy 290 文件通过。它们是不同范围的既有运行，不相加、不冒称本轮重跑；旧完整门禁失败日志保留。正式验收及受控部署仍须分别记录。
+
+FILES.1 已完成 `extensions/personal_files` 独立插件及对应测试/文档和测试入口，不向核心加入文件业务分支：
+
+- `personal.files@0.1.0` 通过实例级 roots 配置为所有对话/任务提供共享授权目录；列举、读取、状态查询为 READ，持久差异预览和写入为 INTERNAL_WRITE。
+- 首版限已有父目录内、最多 256 KiB 的 UTF-8 文本新建/替换；使用持久计划、SHA-256 版本复核和同键回执，冲突不覆盖。状态 SQLite 在全部授权目录外。
+- 删除仅由本人在本机交互终端核对精确计划后确认；Agent 工具不暴露执行删除。配置应用复用既有实例同步，旧任务的工具快照与权限不静默变化。
+- 原实例尚未安装此插件；安装前仍须正式静态审查和本人确认。首版不含 Office/PDF/图片编辑、任意 shell、目录删除或工作区备份。
+
+本轮实际验证：新插件专项 **56 passed（20.41秒，无skip）**；关键回归 **643 passed、6 warnings（137.30秒）**，Ruff通过，宿主Mypy290文件、插件Mypy7文件通过。未运行完整本地/完整PostgreSQL套件；没有部署、操作原实例、真实模型或外部动作。日志在 `var/verification/files1-2026-11-07/`。可复现命令、材料摘要和边界见 `docs/FILES1_LOCAL_FILES_2026-11-07.md`（NEXT同目录下为 `FILES1_LOCAL_FILES_2026-11-07.md`）。**F08.6 BLOCKED、F07/F08 IN_PROGRESS 不变**。当前交接 FILES.1 审查与安装材料，原计划后继为工作区备份，不在本轮擅自启动。
+
+以下章节是按时间保留的历史记录；其中“当前”“NEXT”、测试数量及实例状态仅描述当时，当前排期以本节为准。
+
+## 历史：2026-11-07 测试精简（本地维护完成）
+
+按本人新要求整理测试，不推进新产品功能。删除17项文档历史状态/源码拼写等低价值测试；保留架构、迁移、安全、审批、UNKNOWN和真实故障反例。修正RPC deadline计时/进程管道收尾、知识库旧版本硬编码，重命名同名PG测试避免收集冲突。
+
+日常 `scripts/test.ps1` 改为643项关键回归；`-Suite full` 显式运行主项目及两个独立插件，`-Suite integration` / `-Suite plugins` / `-TestPath` 用于专项。完整收集主项目2157项、两个插件119+73项；PostgreSQL清单补至18文件/160项。没有通过skip隐藏失败。
+
+实际验证：关键回归 **643 passed、6 warnings，97.20秒**；Ruff通过，Mypy **290文件**通过。剩余契约90项通过，RPC14项通过且受控错误注入能被拒绝；完整及PG仅收集，不算执行通过。首次关键集642 passed/1 failed为过期版本断言，已修正；日志保留于 `var/verification/test-suite-trim-2026-11-07/`。命令、删除映射及维护原则见 `docs/TESTING.md`（本目录阅读时为 `TESTING.md`）。
+
+此前RPC测试阻断已修好，但本轮是测试维护，未重复完整门禁，不自动宣称CORE.RECONCILE.1整项验收或部署完成；当时唯一NEXT为CORE.RECONCILE.1 / BLOCKED，F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。下一步回到CORE.RECONCILE.1验收评估，必要时仅跑受影响专项，不再为每次局部修正循环全量。邮件取消慢用例保留并记录待查，不以删测试掩盖潜在问题。未重启、解冻、操作原库、真实发送、提交或推送。
+
+## 历史：2026-11-07 CORE.RECONCILE.1（当时 BLOCKED，本地实现与 CDP 修复已完成）
+
+本轮已实现“宿主权威对账事实 → 显式恢复任务”：API/TUI核对入口、完整原动作绑定、独立持久证据、CAS与同键回执、工作流只推进一次。任务先转WAITING_USER，残留旧作业不能自动推进，必须另行明确继续；原审批/Outbox UNKNOWN历史保留，不重发、不复用旧批准。
+
+目标证据：对账Runtime/API/TUI/能力 **23 passed**、host resolver **14 passed**、隔离PostgreSQL **5 passed**。已获授权修复的模型配置常量依赖方向 **13 passed**、配置运行状态读写互斥 **38 passed**。本次继续修复CDP测试夹具：8项反例先7 failed/1 passed，修复后与PID探针合计 **10 passed**；原浏览器失败节点及握手即就绪 **2 passed**；真实强制RPC/CDP重号被拒绝并回收子进程。改动仅测试helper及新增回归，未改生产浏览器。Ruff/Mypy/差异检查通过。
+
+本轮仅运行一次完整串行本地门禁，结果 **1070 passed、160 skipped、1 failed、8 warnings，1466.31秒（24分26秒）**。此前CDP与配置同步失败节点均已通过。新失败为 `tests/unit/test_extension_rpc_robustness.py::RpcRobustnessTests::test_rpc_call_timeout_includes_lock_wait`：elapsed0.813秒超过0.7秒断言，并有Windows子进程管道析构警告。单例复跑 **1 passed，1.86秒**；不计作完整通过。
+
+只读确认：RPC在取锁前建立单一deadline，取锁后使用剩余预算；本测试却将超时后最多0.25秒进程等待及管道清理也计入0.7秒。断言失败会跳过first任务和client收尾；日志不足以确定额外耗时分配或全部管道警告的唯一来源。失败测试、rpc.py与async_utils.py均与HEAD相同，本轮未修改。
+
+日志：`var/verification/core-reconcile-2026-11-07/full-after-cdp.log`、`rpc-lock-deadline-recheck.log`；CDP目标日志和准确命令见[本轮实现报告](CORE_RECONCILIATION_2026-11-07.md)（从TODO阅读时位于docs目录）。保留所有历史失败，不合并多次中止运行冒称全绿。
+
+该历史轮次的唯一NEXT为CORE.RECONCILE.1，因完整门禁未关闭而保持BLOCKED。当时建议修正RPC测试的deadline触发与资源回收分离验证及失败finally收尾；后续修复与当前排期见本文顶部。FILES.1在该历史轮次尚未开始。未部署、重启、解冻、真实发送、操作原库、提交或推送；F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。
+
+## 历史交接状态（2026-11-07）
+
+六项日用修复及知识正文读取已部署。本次 **CORE.KNOWLEDGE.INDEX.1 DONE**：按本人精确授权升级到 **personal.knowledge 0.1.6 / ENABLED** 并受控重启；原实例索引已READY，40份活动版本/747分块保留，真实关键词检索返回带正文及定位的CURRENT结果。Worker在线、配置已应用、恢复原先未冻结策略，15个原任务状态/版本保持。该索引部署记录之后已推进CORE.RECONCILE.1，最新状态以上方本轮记录为准。F08.6 BLOCKED、F07/F08 IN_PROGRESS不变；下方较早的部署状态、测试结果和“下一编号”属于历史记录，以本段及本次部署证据为准。
 
 ## CORE.KNOWLEDGE.INDEX.1（DONE，已授权部署并核验原索引）— 索引状态编码与可用性修复
 
@@ -361,9 +424,9 @@ Ruff（本轮源码/测试7文件）、Mypy（worker/runtime/planner三源码）
 
 受影响源码Ruff/Mypy通过；验证覆盖auto策略下真实Planner/Router/Runtime/Gateway仍WAITING_APPROVAL且外部执行器0次、SECRET拒绝、取消收尾、同键查询和Token只计一次。按本人避免过度完整套件要求，本轮仅运行受影响路径/安全回归与隔离HTTP联测，未重跑全量或PostgreSQL/Worker；不把本地通过当成真实DeepSeek/手机验收。TUI /ask真实流已实现，Agent规划/手机回复/Ollama增量仍不在本轮范围。F08.6 BLOCKED及F07/F08 IN_PROGRESS保持，下一编号回到CORE.RECONCILE.1。
 
-## CORE.RECONCILE.1（NEXT）— 外部动作对账到任务恢复的闭环
+## 历史：CORE.RECONCILE.1（当时 BLOCKED）— 外部动作对账到任务恢复的闭环
 
-本轮TUI.POLISH.1、CORE.FIX.1/2及MAINT.1/2/4的局部实现与文档校准已收尾；CORE.FIX.2的两项真实PG回归因测试环境未就绪尚待补证。下一编号先固化“宿主已对账成功但任务仍WAITING_RECONCILIATION”的跨层反例，再设计绑定原动作与权威回执的显式恢复接口。禁止普通继续、直接清unknown标记或重新派发旧外部动作；此较大功能尚未实施，不算本轮小修完成。后续范围、实际命令和未验项见项目细节清单。原F08.6 BLOCKED及F07/F08 IN_PROGRESS保持。
+实现及目标验证已完成：原动作绑定的宿主证明、显式恢复接口与TUI入口、同事务回执/CAS、旧作业门闩和工作流单次推进均已落地。原UNKNOWN及审批不可复用，不接受客户端伪造结果。目标37项与隔离PG5项通过；原CLI模型配置跨层依赖已按授权修复，架构/模型配置13项通过；补跑完整门禁的配置同步文件竞争已获授权修复，目标38项通过；CDP夹具也已修复（目标10项、真实浏览器2项通过）；本轮完整门禁1070 passed/160 skipped/1 failed，停于既有RPC耗时断言，单例复跑通过但不能算整套通过。状态、精确命令、日志及后续最小修复方案见本文顶部本轮记录与docs/CORE_RECONCILIATION_2026-11-07.md。本轮未部署或推进其他编号。
 
 
 ## MAINT.4（DONE，文档校准）— 当前能力与操作文档校准

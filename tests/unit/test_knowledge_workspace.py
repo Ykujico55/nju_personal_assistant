@@ -43,7 +43,7 @@ async def test_workspace_lists_configured_files_without_index_or_body_reads(tmp_
     assert str(tmp_path) not in result[0].text
     assert result[0].metadata["sensitivity"] == "SENSITIVE"
     assert result[0].metadata["trust"] == "USER_SOURCE"
-    assert result[0].metadata["extension_version"] == "0.1.5"
+    assert result[0].metadata["extension_version"] == EXTENSION_VERSION
     assert result[0].metadata["status"] == "CURRENT"
     assert result[0].metadata["snapshot_kind"] == "workspace_metadata"
     assert not worker._require_index.called

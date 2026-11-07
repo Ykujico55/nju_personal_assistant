@@ -15,6 +15,7 @@ from personal_assistant.core.tools.gateway import DefinitiveToolFailure
 from personal_assistant.domain import ToolCall, ValidationError
 from personal_assistant.infrastructure.mail.executor import MAIL_SEND_CAPABILITY
 from personal_assistant.infrastructure.operations.control import HostControl
+from personal_assistant.infrastructure.operations.reconciliation import HostReconciliationResolver
 
 
 def build_runtime(container: Container) -> TaskRuntime:
@@ -126,4 +127,8 @@ def build_runtime(container: Container) -> TaskRuntime:
         paused_probe=HostControl(settings.extension_root.parent / "control").frozen,
         unit_of_work=getattr(container.storage, "database", None),
         poll_job=poll_job,
+        reconciliation=HostReconciliationResolver(
+            approvals=container.approvals, outbox=container.side_effect_outbox,
+            mail_ledger=container.mail_ledger, browser_sessions=container.browser_sessions,
+        ),
     )

@@ -18,6 +18,18 @@ from urllib.parse import unquote, urlsplit
 from personal_assistant.core.browser.errors import BrowserPolicyError
 from personal_assistant.core.browser.policy import normalize_origin
 
+# Public model configuration schema shared by local setup and the workbench.
+MODEL_CONFIG_KEYS = frozenset(
+    {
+        "PA_MODEL_REMOTE_PROVIDER_ID",
+        "PA_MODEL_REMOTE_BASE_URL",
+        "PA_MODEL_REMOTE_MODEL",
+        "PA_MODEL_REMOTE_SECRET_HANDLE",
+        "PA_MODEL_REMOTE_JSON_MODE",
+        "PA_MODEL_REMOTE_THINKING",
+    }
+)
+
 
 class ConfigurationError(RuntimeError):
     pass

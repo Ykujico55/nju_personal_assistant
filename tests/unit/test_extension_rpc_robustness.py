@@ -13,6 +13,8 @@ import time
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
+from unittest.mock import AsyncMock, Mock, patch
 
 from personal_assistant.core.extensions.errors import (
     ExtensionOperationError,
@@ -94,42 +96,6 @@ while True:
     time.sleep(60)
 """
 
-DELAYED_DRAIN = """
-import json, sys, time
-while True:
-    line = sys.stdin.buffer.readline()
-    if not line:
-        break
-    request = json.loads(line)
-    delay = 0.4 if request["method"] == "system.drain" else 0.3
-    time.sleep(delay)
-    sys.stdout.write(
-        json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "id": request["id"],
-                "result": {"drained": True, "active_calls": 0},
-            }
-        )
-        + "\\n"
-    )
-    sys.stdout.flush()
-"""
-
-SLOW_RESPONSES = """
-import json, sys, time
-while True:
-    line = sys.stdin.buffer.readline()
-    if not line:
-        break
-    request = json.loads(line)
-    time.sleep(0.4)
-    sys.stdout.write(
-        json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": {}}) + "\\n"
-    )
-    sys.stdout.flush()
-"""
-
 UNCLEAN_DRAIN = """
 import json, sys, time
 line = sys.stdin.buffer.readline()
@@ -157,6 +123,68 @@ time.sleep(60)
 class RpcRobustnessTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="pa_f02_rpc_"))
+        self.clients: list[JsonRpcProcessClient] = []
+        self.processes: list[asyncio.subprocess.Process] = []
+        self.io_tasks: list[asyncio.Task[None]] = []
+        original_start = JsonRpcProcessClient.start
+
+        async def tracked_start(client: JsonRpcProcessClient) -> None:
+            if client not in self.clients:
+                self.clients.append(client)
+            try:
+                await original_start(client)
+            finally:
+                # Keep every generation, including restart after a timeout.
+                if client._process is not None and client._process not in self.processes:
+                    self.processes.append(client._process)
+                for task in (client._reader_task, client._stderr_task):
+                    if task is not None and task not in self.io_tasks:
+                        self.io_tasks.append(task)
+
+        self.enterContext(patch.object(JsonRpcProcessClient, "start", tracked_start))
+
+    async def asyncTearDown(self) -> None:
+        # close() may already have cleared _process while bounded reaping is
+        # still pending. Retained handles must finish before this test's loop
+        # closes, even when an assertion earlier in the test failed.
+        failures: list[Exception] = []
+        try:
+            for client in self.clients:
+                try:
+                    await client.close()
+                except Exception as exc:
+                    failures.append(exc)
+        finally:
+            for process in self.processes:
+                try:
+                    if process.returncode is None:
+                        with contextlib.suppress(ProcessLookupError):
+                            process.kill()
+                    # returncode can precede pipe EOF (notably after an
+                    # oversized frame pauses reading). Close all pipe
+                    # transports while this test's event loop is still alive.
+                    transport = cast(
+                        asyncio.SubprocessTransport,
+                        process._transport,  # type: ignore[attr-defined]
+                    )
+                    transport.close()
+                    await asyncio.wait_for(process.wait(), 5)
+                except Exception as exc:
+                    failures.append(exc)
+            for task in self.io_tasks:
+                if not task.done():
+                    task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass  # RPC teardown deliberately cancels its pipe readers.
+                except Exception as exc:
+                    failures.append(exc)
+            self.clients.clear()
+            self.processes.clear()
+            self.io_tasks.clear()
+        if failures:
+            raise ExceptionGroup("RPC test cleanup failed", failures)
 
     def tearDown(self) -> None:
         resolved = self.tmp.resolve()
@@ -262,41 +290,82 @@ class RpcRobustnessTests(unittest.IsolatedAsyncioTestCase):
         await client.close()
 
     async def test_rpc_call_timeout_includes_lock_wait(self) -> None:
-        client = self._client("slowresponses", SLOW_RESPONSES)
+        probe = self.tmp / "lock-wait-calls.txt"
+        client = self._client("lockwait", SILENT, environment={"PA_RPC_PROBE": str(probe)})
         await client.start()
-        first = asyncio.create_task(
-            client.call("system.health", {}, timeout_seconds=10)
-        )
-        await asyncio.sleep(0.05)
-        started = time.monotonic()
-        with self.assertRaises(RpcTimeoutError):
-            await client.call("system.health", {}, timeout_seconds=0.5)
-        elapsed = time.monotonic() - started
-        # The lock wait plus the response must fit inside the 0.5s budget.
-        self.assertLess(elapsed, 0.7, f"call took {elapsed:.3f}s")
-        self.assertFalse(client.running)
-        with contextlib.suppress(Exception):
-            await first
-        await client.close()
+        process = client._process
+        assert process is not None
+        first = asyncio.create_task(client.call("system.health", {}, timeout_seconds=30))
+
+        async def wait_for_first_request() -> None:
+            while not probe.exists():
+                if first.done():
+                    first.result()
+                    self.fail("the first call completed instead of holding the RPC lock")
+                await asyncio.sleep(0.01)
+
+        try:
+            # Readiness is a worker receipt, not a sleep that races process startup.
+            await asyncio.wait_for(wait_for_first_request(), 5)
+            self.assertTrue(client._lock.locked())
+            with self.assertRaises(RpcTimeoutError):
+                # This outer guard detects an unbounded wait. Exact deadline and
+                # remaining-budget arithmetic are checked separately below.
+                async with asyncio.timeout(5):
+                    await client.call("system.health", {}, timeout_seconds=0.05)
+            self.assertFalse(client.running)
+            with self.assertRaises(RpcCallError):
+                await first
+            # Process exit is independently awaited, not included in an RPC
+            # latency assertion. Retain this handle after client._process clears.
+            await asyncio.wait_for(process.wait(), 5)
+            self.assertIsNotNone(process.returncode)
+            with self.assertRaises(RpcCallError):
+                await client.call("system.health", {}, timeout_seconds=0.05)
+            self.assertEqual(["call"], probe.read_text("utf-8").splitlines())
+        finally:
+            if not first.done():
+                first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+            await client.close()
+            if process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+            await asyncio.wait_for(process.wait(), 5)
 
     async def test_drain_budget_covers_lock_wait_and_response(self) -> None:
-        client = self._client("delayed", DELAYED_DRAIN)
-        await client.start()
-        in_flight = asyncio.create_task(
-            client.call("tool.invoke", {}, timeout_seconds=10)
-        )
-        await asyncio.sleep(0.05)
-        budget = 0.5
-        deadline = time.time() + budget
-        started = time.monotonic()
-        with self.assertRaises(RpcTimeoutError):
-            await client.drain(deadline, timeout_seconds=10)
-        elapsed = time.monotonic() - started
-        self.assertLess(elapsed, budget + 0.25, f"drain took {elapsed:.3f}s")
-        self.assertFalse(client.running)
-        with contextlib.suppress(Exception):
-            await in_flight
-        await client.close()
+        # Simulate 0.3 seconds spent acquiring the lock. Real OS process cleanup
+        # must not be confused with the single 0.5-second request deadline.
+        for operation in ("call", "drain"):
+            with self.subTest(operation=operation):
+                client = self._client("budget", SILENT)
+                clock = Mock()
+                clock.time.side_effect = [100.0, 100.3]
+                timeout_guard = AsyncMock()
+                result = {"drained": True, "active_calls": 0}
+                exchange = AsyncMock(return_value=result)
+                with (
+                    patch(
+                        "personal_assistant.core.extensions.rpc.asyncio.get_running_loop",
+                        return_value=clock,
+                    ),
+                    patch(
+                        "personal_assistant.core.extensions.rpc.asyncio.timeout_at",
+                        return_value=timeout_guard,
+                    ) as deadline,
+                    patch.object(client, "_exchange", exchange),
+                ):
+                    if operation == "call":
+                        actual = await client.call("system.health", {}, timeout_seconds=0.5)
+                    else:
+                        actual = await client.drain(time.time() + 100, timeout_seconds=0.5)
+                self.assertEqual(result, actual)
+                deadline.assert_called_once_with(100.5)
+                self.assertEqual(2, clock.time.call_count)
+                exchange.assert_awaited_once()
+                self.assertAlmostEqual(0.2, exchange.call_args.args[2])
+                self.assertFalse(client._lock.locked())
+                self.assertFalse(client.in_flight)
 
     async def test_cancellation_during_write_stops_the_worker(self) -> None:
         client = self._client(

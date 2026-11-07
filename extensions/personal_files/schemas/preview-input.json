@@ -1,0 +1,42 @@
+{
+  "type": "object",
+  "properties": {
+    "operation": {
+      "type": "string",
+      "enum": [
+        "write",
+        "mkdir",
+        "delete"
+      ]
+    },
+    "root_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "content": {
+      "type": "string",
+      "maxLength": 262144
+    }
+  },
+  "required": [
+    "operation",
+    "root_key",
+    "path",
+    "expected_sha256"
+  ],
+  "additionalProperties": false,
+  "description": "The SDK worker also enforces operation-specific semantics before any filesystem/state access: write requires content; mkdir requires expected_sha256=null and no content, with an existing parent and absent target; delete forbids content and requires a non-null existing file hash. Only write/mkdir plans execute via files.write. mkdir creates one directory, never parents; deletion of directories is unsupported."
+}

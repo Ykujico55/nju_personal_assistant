@@ -43,6 +43,11 @@ class SideEffectIntent:
 
 
 class SideEffectOutboxPort(Protocol):
+    async def get_by_call(
+        self, tool_id: str, idempotency_key: str,
+    ) -> SideEffectIntent | None:
+        """Read the original durable intent without changing its outcome."""
+
     async def create_with_approval_consumption(self, intent: SideEffectIntent) -> None:
         """Persist intent and consume approval in one database transaction.
 

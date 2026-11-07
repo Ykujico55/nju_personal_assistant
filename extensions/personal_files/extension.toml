@@ -1,0 +1,56 @@
+manifest_version = "1"
+id = "personal.files"
+name = "Personal Files"
+version = "0.1.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.14"
+entrypoint = "personal_files.worker:create_extension"
+dependency_lock = "requirements.lock"
+config_schema = "schemas/config.json"
+state_schema_version = 1
+healthcheck = "system.health"
+context_providers = ["files.workspace", "files.document"]
+
+[context_provider_descriptions]
+"files.workspace" = "Show instance-wide authorized root IDs and modes. To list one directory, query an exact files://root_key/relative_directory/ URI (files://root_key/ for its root); otherwise only root metadata is returned. Listing is paginated, nonrecursive, and does not read bodies."
+"files.document" = "Read one complete authorized UTF-8 text file (maximum 256 KiB) without indexing. Query MUST be an exact files://root_key/percent-encoded-relative-path URI from files.workspace/list, not a sentence or guessed path. An unavailable, binary, oversized or invalid target returns explicit status, never invented content."
+
+[[tools]]
+id = "files.roots"
+risk = "READ"
+input_schema = "schemas/roots-input.json"
+output_schema = "schemas/roots-output.json"
+
+[[tools]]
+id = "files.list"
+risk = "READ"
+input_schema = "schemas/list-input.json"
+output_schema = "schemas/list-output.json"
+
+[[tools]]
+id = "files.read"
+risk = "READ"
+input_schema = "schemas/read-input.json"
+output_schema = "schemas/read-output.json"
+
+[[tools]]
+id = "files.preview"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/preview-input.json"
+output_schema = "schemas/preview-output.json"
+
+[[tools]]
+id = "files.write"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/write-input.json"
+output_schema = "schemas/write-output.json"
+
+[[tools]]
+id = "files.status"
+risk = "READ"
+input_schema = "schemas/status-input.json"
+output_schema = "schemas/status-output.json"
+
+[capabilities]
+required = []
+optional = []

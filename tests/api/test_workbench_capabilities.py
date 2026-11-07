@@ -15,7 +15,8 @@ async def test_capabilities_are_explicit_local_and_read_only(workbench):
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.json() == {
-        "protocol_version": 1, "server_version": __version__, "features": sorted(FEATURES),
+        "protocol_version": 1, "server_version": __version__,
+        "features": sorted([*FEATURES, "task_reconciliation"]),
     }
     assert await container.tasks.list_recent(limit=10) == ()
 

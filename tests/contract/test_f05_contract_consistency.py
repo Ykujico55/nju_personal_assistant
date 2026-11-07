@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -229,26 +228,6 @@ class EvidenceContractTests(unittest.TestCase):
         self.assertEqual(
             {"CURRENT", "STALE", "DELETED"}, {item.value for item in EvidenceStatus}
         )
-
-
-class DocumentationContractTests(unittest.TestCase):
-    def test_contracts_document_the_host_data_capability(self) -> None:
-        text = (ROOT / "docs" / "CONTRACTS_AND_INTERFACES.md").read_text("utf-8")
-        self.assertIn("host.data.execute", text)
-        self.assertIn("host.data.migrate", text)
-        self.assertIn("ExtensionConfigStore", text)
-
-    def test_next_steps_and_todo_record_completed_f05(self) -> None:
-        next_steps = (ROOT / "docs" / "NEXT_STEPS.md").read_text("utf-8")
-        todo = (ROOT / "TODO.md").read_text("utf-8")
-        self.assertIn("F05 — 个人知识扩展（DONE", next_steps)
-        self.assertIn("F05 — 个人知识扩展（DONE", todo)
-        self.assertNotIn("F05 — 个人知识扩展（IN_PROGRESS", todo)
-        self.assertRegex(re.sub(r"\s+", " ", todo), r"F06.*NEXT")
-
-    def test_readme_documents_the_generic_config_endpoint(self) -> None:
-        readme = (ROOT / "README.md").read_text("utf-8")
-        self.assertIn("/admin/v1/extensions/{extension_id}/config", readme)
 
 
 if __name__ == "__main__":

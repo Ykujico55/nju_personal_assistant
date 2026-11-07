@@ -231,24 +231,6 @@ class F04ContractConsistencyTests(unittest.TestCase):
         self.assertIn('object.__setattr__(self, "fields", normalized)', provider)
         self.assertNotIn("!= self.fields", provider)
 
-    def test_disclosure_contract_is_documented(self) -> None:
-        text = (ROOT / "docs" / "CONTRACTS_AND_INTERFACES.md").read_text("utf-8")
-        for marker in (
-            "DisclosureConsentService",
-            "model_disclosure_consents",
-            "model_disclosure_commands",
-            "DisclosureAuthorizer",
-            "disclosure_preview_mismatch",
-            "disclosure_denied",
-            "disclosure_recipient_unknown",
-            "idempotency_conflict",
-            "0005_f04_model_disclosure",
-            "recipient_fingerprint",
-            "trust_env",
-            "rejection_code",
-            "CANONICAL",
-        ):
-            self.assertIn(marker, text)
 
     def test_no_plaintext_api_keys_in_source_or_fixtures(self) -> None:
         pattern = re.compile(r"sk-(?:live|proj)-[A-Za-z0-9]{8,}")

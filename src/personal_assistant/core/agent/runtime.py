@@ -38,6 +38,7 @@ from .engine import DecisionKind
 from .failure_diagnostics import diagnostic_message, failure_diagnostic, new_failure_diagnostic
 from .planner import StructuredPlanner, plain
 from .progress_detector import ProgressDetector
+from .reconciliation import ReconciliationPort, reconciliation_binding
 from .safety_fuse import EmergencyFuse
 from .state_machine import resume_as_new_segment, transition_run
 
@@ -67,6 +68,7 @@ class TaskRuntime:
         prepare: Preparer | None = None,
         paused_probe: Callable[[], bool] | None = None,
         unit_of_work: UnitOfWorkPort | None = None,
+        reconciliation: ReconciliationPort | None = None,
         poll_job: Callable[[dict[str, Any], str], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.tasks, self.jobs, self.runs, self.checkpoints = tasks, jobs, runs, checkpoints
@@ -74,6 +76,7 @@ class TaskRuntime:
         self.approvals, self.grants, self.prepare = approvals, grants, prepare
         self.paused_probe = paused_probe
         self.uow = unit_of_work
+        self.reconciliation = reconciliation
         self.poll_job = poll_job
         self.worker_id = "agent-" + uuid4().hex
         self.fuse, self.progress = EmergencyFuse(), ProgressDetector()
@@ -139,7 +142,20 @@ class TaskRuntime:
                 "requests", task_id, request, expected_version=old["version"] if old else 0
             )
             async with self.scope():
-                await self.tasks.project(task_id, TaskState.QUEUED)
+                if snapshot.get("reconciliation_resume_required"):
+                    run = await self.runs.get("run_" + task_id)
+                    if (run.version != snapshot.get("run_version")
+                            or run.state is not TaskState.WAITING_USER):
+                        raise ConcurrentModificationError("reconciled checkpoint changed")
+                    released = replace(run, version=run.version + 1)
+                    await self.runs.save(released, expected_version=run.version)
+                    snapshot.pop("reconciliation_resume_required")
+                    await self.checkpoints.save(released, snapshot)
+                    await self.tasks.project(
+                        task_id, TaskState.QUEUED, expected_version=version,
+                    )
+                else:
+                    await self.tasks.project(task_id, TaskState.QUEUED)
                 if task.state is TaskState.QUEUED:
                     job = await self.jobs.enqueue(
                         kind="agent.start",
@@ -155,6 +171,107 @@ class TaskRuntime:
                         idempotency_key="resume:" + key,
                     )
             return {"task_id": task_id, "job_id": job.id, "accepted": True}
+
+        return await self.records.command(key, request, apply)
+
+    async def reconcile(self, task_id: str, *, version: int, key: str) -> dict[str, Any]:
+        """Record an authoritative success, without scheduling or reissuing an action."""
+        request = {"operation": "task.reconcile", "task_id": task_id, "version": version}
+
+        async def apply() -> dict[str, Any]:
+            async with self.scope():
+                task = await self.tasks.get(task_id)
+                if type(version) is not int or task.version != version:
+                    raise ConcurrentModificationError("task version changed; keep local inputs")
+                run = await self.runs.get("run_" + task_id)
+                if (
+                    task.state is not TaskState.WAITING_RECONCILIATION
+                    or run.state is not TaskState.WAITING_RECONCILIATION
+                ):
+                    raise ValidationError("只有等待对账的任务可以核对原动作结果。")
+                snapshot = await self.checkpoints.load(run.id)
+                pending = snapshot.get("pending_call")
+                if (
+                    not isinstance(pending, dict)
+                    or snapshot.get("run_version") != run.version
+                    or snapshot.get("risk") not in {
+                        RiskLevel.EXTERNAL_WRITE.value, RiskLevel.EXTERNAL_WRITE.code,
+                    }
+                ):
+                    raise ValidationError("原动作检查点不完整，不能安全解除等待。")
+                call = self.restore_call(pending)
+                if not call.approval_id:
+                    call = replace(call, approval_id=snapshot.get("pending_approval_id"))
+                if call.task_id != task_id or not call.approval_id or not call.idempotency_key:
+                    raise ValidationError("原动作缺少任务、审批或幂等绑定，不能安全解除等待。")
+                descriptor = self.registry.snapshot().resolve(call.tool_id, call.tool_version)
+                pinned = snapshot.get("tools", {}).get(call.tool_id, {})
+                if (
+                    descriptor.risk is not RiskLevel.EXTERNAL_WRITE
+                    or pinned.get("version") != descriptor.version
+                    or pinned.get("extension_version") != descriptor.extension_version
+                ):
+                    raise ValidationError("原工具版本已变化；保持等待对账，不修改旧任务权限。")
+                if self.reconciliation is None:
+                    raise ValidationError("宿主未配置权威对账来源，任务继续等待核对。")
+                assert descriptor.extension_version is not None
+                identity: dict[str, Any] = {
+                    "extension_id": descriptor.extension_id,
+                    "extension_version": descriptor.extension_version,
+                    "required_capabilities": descriptor.required_capabilities,
+                }
+                proof = await self.reconciliation.resolve(call, **identity)
+                if proof is None:
+                    return {"task_id": task_id, "state": task.state.value,
+                            "resolved": False, "version": task.version}
+                binding = reconciliation_binding(call, **identity)
+                if proof.call_binding != binding or not proof.receipt:
+                    raise ValidationError("权威回执不匹配原动作；任务继续等待核对。")
+                # Validate serialization before any mutation. Evidence never comes from HTTP.
+                fingerprint({"receipt": proof.receipt, "result": proof.result})
+                request_record = await self.records.get("requests", task_id)
+                original: dict[str, Any] = (
+                    request_record["value"] if request_record else {"mode": "agent"}
+                )
+                self.ensure_workflow_binding(snapshot, original)
+                if original.get("mode") == "workflow":
+                    workflow = original["workflow"]
+                    cursor = snapshot.get("cursor", 0)
+                    if type(cursor) is not int or not 0 <= cursor < len(workflow["steps"]):
+                        raise ValidationError("工作流原步骤不完整，不能推进检查点。")
+                    step = workflow["steps"][cursor]
+                    if (step["id"] != snapshot.get("step_id") or step["type"] != "tool"
+                            or step["tool_id"] != call.tool_id
+                            or step["tool_version"] != call.tool_version):
+                        raise ValidationError("工作流原步骤与对账动作不一致。")
+                    snapshot["cursor"] = cursor + 1
+                    snapshot.setdefault("outputs", {})[step["id"]] = plain(proof.result)
+                fact = {
+                    "task_id": task_id, "run_id": run.id, "run_version": run.version,
+                    "call": self.serialize_call(call), "call_binding": binding,
+                    "receipt": proof.receipt, "result": proof.result,
+                }
+                # Claim the exact task version before other writes. In production the command
+                # receipt, fact, run, checkpoint, task and events share one transaction.
+                await self.tasks.project(task_id, TaskState.WAITING_USER, expected_version=version)
+                await self.records.put("reconciliations", binding, fact, expected_version=0)
+                snapshot.setdefault("reconciliations", []).append(binding)
+                snapshot["reconciliation_resume_required"] = True
+                snapshot["observations"] = [
+                    *snapshot.get("observations", []), plain(proof.result),
+                ][-16:]
+                for field in ("unresolved_external", "pending_call", "pending_approval_id",
+                              "approved_id", "step_id", "validation_failure", "failure_diagnostic"):
+                    snapshot.pop(field, None)
+                # Count the original successful observation once, without erasing fuse history.
+                progressed = self.progress.record(run, call, ToolOutcome.success(proof.result))
+                await self.finish(
+                    replace(progressed, version=run.version), TaskState.WAITING_USER, snapshot,
+                    "原外部动作已由宿主回执确认成功；未再次发送。可明确继续剩余任务。",
+                )
+                current = await self.tasks.get(task_id)
+                return {"task_id": task_id, "state": current.state.value, "resolved": True,
+                        "version": current.version, "reconciliation_id": binding}
 
         return await self.records.command(key, request, apply)
 
@@ -285,6 +402,9 @@ class TaskRuntime:
             run = TaskRun(id=run_id, task_id=task.id, objective=task.objective)
             await self.runs.add(run)
         snapshot = await self.checkpoints.load(run_id)
+        if snapshot.get("reconciliation_resume_required"):
+            # Historical at-least-once approval/resume jobs cannot replace a new user command.
+            return
         unresolved = await self.requires_reconciliation(snapshot, run.waiting_reference)
         if unresolved or snapshot.get("phase") == "dispatching":
             state = TaskState.WAITING_RECONCILIATION if unresolved else TaskState.WAITING_USER

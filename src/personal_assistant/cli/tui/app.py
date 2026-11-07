@@ -303,6 +303,7 @@ class WorkbenchApp(App[None]):
                 with Horizontal(classes="buttons", id="task-actions"):
                     yield Button("追加消息", id="task-message-send")
                     yield Button("继续处理", id="task-resume")
+                    yield Button("核对外部结果", id="task-reconcile")
                     yield Button("携原目标新建", id="task-recreate")
                     yield Button("模型披露", id="task-disclosure")
                     yield Button("上移", id="task-move-up")
@@ -491,6 +492,14 @@ class WorkbenchApp(App[None]):
                         isinstance(task.get("queue_job_id"), str)
                         and type(task.get("queue_version")) is int
                         and not task.get("requires_reconciliation")
+                    )
+                elif button.id == "task-resume":
+                    disabled |= bool(task.get("requires_reconciliation"))
+                elif button.id == "task-reconcile":
+                    button.display = bool(task.get("requires_reconciliation"))
+                    disabled |= not self.selected_task_id or not task.get("requires_reconciliation")
+                    disabled |= "task_reconciliation" not in self._backend_capabilities.get(
+                        "features", []
                     )
                 elif button.id == "task-remove":
                     disabled |= not self._queue_target_selected()
@@ -868,6 +877,7 @@ class WorkbenchApp(App[None]):
             "discard-reply",
             "task-message-send",
             "task-resume",
+            "task-reconcile",
             "task-recreate",
             "task-disclosure",
             "task-move-up",
@@ -1317,7 +1327,28 @@ class WorkbenchApp(App[None]):
             await self._call(
                 self.service.add_message(identifier, content, version, self._key()), added
             )
+        elif action == "task-reconcile":
+            if "task_reconciliation" not in self._backend_capabilities.get("features", []):
+                self.notice("后台不支持外部结果核对，请重启更新后的后台。")
+                return
+            if not self._tasks.get(identifier, {}).get("requires_reconciliation"):
+                self.notice("当前没有待核对的外部动作，请刷新任务状态。")
+                return
+
+            async def reconciled(result: Payload) -> None:
+                await self._refresh()
+                if result.get("resolved") is True and result.get("state") == "WAITING_USER":
+                    self.notice("原外部动作已确认；尚未执行后续步骤，需要时点击“继续处理”。")
+                else:
+                    self.notice("外部结果仍未决，任务保持等待；未重发原动作。")
+
+            await self._call(
+                self.service.reconcile_task(identifier, version, self._key()), reconciled
+            )
         elif action == "task-resume":
+            if self._tasks.get(identifier, {}).get("requires_reconciliation"):
+                self.notice("原外部动作结果未决，请先核对外部结果；不能直接继续。")
+                return
             await self._call(
                 self.service.resume_task(
                     identifier, version, self._key(), consent_id=self._task_consents.get(identifier)

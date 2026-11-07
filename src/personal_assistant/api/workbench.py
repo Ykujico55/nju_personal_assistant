@@ -69,6 +69,7 @@ _ALLOWED = {
     "/tasks/{task_id}",
     "/tasks/{task_id}/messages",
     "/tasks/{task_id}/cancel",
+    "/tasks/{task_id}/reconcile",
     "/system",
     "/tasks/{task_id}/execution",
     "/tasks/{task_id}/model-disclosure/preview",
@@ -89,7 +90,7 @@ router.add_api_route("/usage", usage, methods=["GET"])
 WORKBENCH_PROTOCOL_VERSION = 1
 WORKBENCH_FEATURES = frozenset({
     "task_queue", "task_trace", "toolset_projection", "configuration_apply",
-    "conversation_stream", "conversation_discard", "chat_stream",
+    "conversation_stream", "conversation_discard", "chat_stream", "task_reconciliation",
 })
 
 

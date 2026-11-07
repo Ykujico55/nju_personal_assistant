@@ -1,0 +1,56 @@
+{
+  "type": "object",
+  "properties": {
+    "state_directory": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "description": "Existing private absolute local state directory outside all roots; create it explicitly before applying configuration."
+    },
+    "roots": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "read_only",
+              "read_write"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "path",
+          "mode"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "state_directory",
+    "roots"
+  ],
+  "additionalProperties": false
+}

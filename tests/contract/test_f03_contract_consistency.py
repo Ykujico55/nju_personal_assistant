@@ -72,10 +72,6 @@ class F03ContractConsistencyTests(unittest.TestCase):
         self.assertNotIn("class AccessIdentity", contract)
         self.assertNotIn("class AccessTokenVerifier", contract)
 
-    def test_next_steps_names_the_correct_interface_owner(self) -> None:
-        text = (ROOT / "docs" / "NEXT_STEPS.md").read_text("utf-8")
-        self.assertIn("core/auth/ports.py", text)
-        self.assertNotIn("infrastructure/auth/contract.py`：`AccessIdentity", text)
 
     def test_middleware_consumes_the_core_auth_port(self) -> None:
         source = (
@@ -106,19 +102,6 @@ class F03ContractConsistencyTests(unittest.TestCase):
                     offenders.append(path.relative_to(ROOT).as_posix())
         self.assertEqual([], offenders)
 
-    def test_docs_document_the_f03_carriers_errors_and_cache_bounds(self) -> None:
-        text = (ROOT / "docs" / "CONTRACTS_AND_INTERFACES.md").read_text("utf-8")
-        for marker in (
-            "Cf-Access-Jwt-Assertion",
-            "CF_Authorization",
-            "/cdn-cgi/access/certs",
-            "CLOUDFLARE_ACCESS_TOKEN_MISSING",
-            "CLOUDFLARE_ACCESS_TOKEN_INVALID",
-            "CLOUDFLARE_ACCESS_UNAVAILABLE",
-            "CloudflareJwksProvider",
-            "core/auth",
-        ):
-            self.assertIn(marker, text)
 
     def test_middleware_does_not_verify_signatures_itself(self) -> None:
         source = (

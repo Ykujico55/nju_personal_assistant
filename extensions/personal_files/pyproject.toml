@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-assistant-personal-files"
+version = "0.1.0"
+description = "Instance-wide authorized local files with versioned plans and receipts"
+requires-python = ">=3.12,<3.14"
+dependencies = ["personal-assistant-extension-sdk==1.0.0"]
+
+[project.scripts]
+personal-files = "personal_files.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["personal_files*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "../../extension_sdk/src"]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = ["src", "../../extension_sdk/src"]

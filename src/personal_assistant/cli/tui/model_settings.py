@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from personal_assistant.infrastructure.models.setup import KEYS
+from personal_assistant.settings import MODEL_CONFIG_KEYS as KEYS
 from personal_assistant.settings import normalize_model_id
 
 

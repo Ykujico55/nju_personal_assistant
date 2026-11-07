@@ -30,6 +30,31 @@ class ExecutionCommand(BaseModel):
     consent_id: str | None = Field(default=None, max_length=256)
 
 
+class ReconciliationCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    version: int = Field(ge=0, strict=True)
+
+
+@router.post("/tasks/{task_id}/reconcile")
+async def reconcile_task(
+    task_id: str,
+    payload: ReconciliationCommand,
+    request: Request,
+    container: Container = Depends(get_container),
+) -> dict[str, Any]:
+    # Only the host can resolve the original pending action and its trusted evidence.
+    async def apply() -> dict[str, Any]:
+        return await build_runtime(container).reconcile(
+            task_id, version=payload.version, key="reconcile:" + request.state.idempotency_key,
+        )
+
+    return await container.records.command(
+        "task-reconcile:" + request.state.idempotency_key,
+        {"task_id": task_id, **payload.model_dump()},
+        apply,
+    )
+
+
 class RuleProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: dict[str, Any]

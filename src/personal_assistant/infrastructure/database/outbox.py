@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 from typing import Any
 
 import asyncpg
@@ -30,6 +31,29 @@ _TERMINAL_APPROVAL = {SideEffectState.SUCCEEDED, SideEffectState.FAILED, SideEff
 class PostgresSideEffectOutbox:
     def __init__(self, database: PostgresDatabase) -> None:
         self._db = database
+
+    async def get_by_call(
+        self, tool_id: str, idempotency_key: str,
+    ) -> SideEffectIntent | None:
+        async with self._db.connection() as connection:
+            row = await connection.fetchrow(
+                "SELECT id, task_id, tool_id, idempotency_key, approval_id, "
+                "canonical_payload_sha256, action_fingerprint, state, receipt, created_at "
+                "FROM side_effect_intents WHERE tool_id = $1 AND idempotency_key = $2",
+                tool_id, idempotency_key,
+            )
+        if row is None:
+            return None
+        receipt = row["receipt"]
+        if isinstance(receipt, str):
+            receipt = json.loads(receipt)
+        return SideEffectIntent(
+            id=row["id"], task_id=row["task_id"], tool_id=row["tool_id"],
+            idempotency_key=row["idempotency_key"], approval_id=row["approval_id"],
+            canonical_payload_sha256=row["canonical_payload_sha256"],
+            action_fingerprint=row["action_fingerprint"], state=SideEffectState(row["state"]),
+            receipt=dict(receipt), created_at=row["created_at"],
+        )
 
     async def create_with_approval_consumption(self, intent: SideEffectIntent) -> None:
         """Consume the APPROVED approval and insert the intent in one transaction.

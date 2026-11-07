@@ -529,6 +529,12 @@ class WorkbenchService:
             key,
         )
 
+    async def reconcile_task(self, task_id: str, version: int, key: str) -> dict[str, Any]:
+        return await self._request(
+            "POST", PREFIX + "/tasks/" + self._id(task_id) + "/reconcile",
+            {"version": version}, key,
+        )
+
     async def resume_task(
         self,
         task_id: str,

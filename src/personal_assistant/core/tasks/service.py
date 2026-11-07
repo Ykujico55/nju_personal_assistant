@@ -10,7 +10,13 @@ from uuid import uuid4
 from personal_assistant.core.audit import AuditEvent, AuditWriterPort
 from personal_assistant.core.jobs import JobQueuePort
 from personal_assistant.core.unit_of_work import UnitOfWorkPort
-from personal_assistant.domain import Task, TaskState, ValidationError, utc_now
+from personal_assistant.domain import (
+    ConcurrentModificationError,
+    Task,
+    TaskState,
+    ValidationError,
+    utc_now,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,8 +182,14 @@ class TaskService:
             )
         return task, message
 
-    async def project(self, task_id: str, state: TaskState) -> Task:
+    async def project(
+        self, task_id: str, state: TaskState, *, expected_version: int | None = None,
+    ) -> Task:
         task = await self._repository.get(task_id)
+        if expected_version is not None and (
+            type(expected_version) is not int or task.version != expected_version
+        ):
+            raise ConcurrentModificationError("task version changed before projection")
         if task.state in {TaskState.CANCELLED, TaskState.SUCCEEDED, TaskState.FAILED}:
             return task
         if task.state is state:

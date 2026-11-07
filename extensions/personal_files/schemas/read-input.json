@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "root_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 262144
+    }
+  },
+  "required": [
+    "root_key",
+    "path"
+  ],
+  "additionalProperties": false
+}

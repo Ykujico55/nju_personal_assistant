@@ -19,22 +19,15 @@ from personal_assistant.infrastructure.models.openai_compatible import (
     OpenAICompatibleConfig,
 )
 from personal_assistant.settings import (
+    MODEL_CONFIG_KEYS,
     normalize_model_endpoint,
     normalize_model_id,
     normalize_provider_id,
     normalize_secret_handle_id,
 )
 
-KEYS = frozenset(
-    {
-        "PA_MODEL_REMOTE_PROVIDER_ID",
-        "PA_MODEL_REMOTE_BASE_URL",
-        "PA_MODEL_REMOTE_MODEL",
-        "PA_MODEL_REMOTE_SECRET_HANDLE",
-        "PA_MODEL_REMOTE_JSON_MODE",
-        "PA_MODEL_REMOTE_THINKING",
-    }
-)
+# Keep the existing public import compatible for host configuration consumers.
+KEYS = MODEL_CONFIG_KEYS
 
 
 def load_config(path: Path) -> dict[str, str]:
