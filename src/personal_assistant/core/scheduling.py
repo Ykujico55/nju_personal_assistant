@@ -48,26 +48,55 @@ def cron_fields(expression: str) -> tuple[frozenset[int], ...]:
     return tuple(parsed)
 
 
+def _cron_matches(cursor: datetime, fields: tuple[frozenset[int], ...], zone: ZoneInfo) -> bool:
+    local = cursor.astimezone(zone)
+    dow = (local.weekday() + 1) % 7
+    day = local.day in fields[2]
+    weekday = dow in fields[4]
+    day = day or weekday if len(fields[2]) != 31 and len(fields[4]) != 7 else day and weekday
+    return (
+        local.minute in fields[0]
+        and local.hour in fields[1]
+        and local.month in fields[3]
+        and day
+    )
+
+
 def cron_next(expression: str, after: datetime, timezone: str) -> datetime:
     fields = cron_fields(expression)
     zone = ZoneInfo(timezone)
     cursor = _aware(after).replace(second=0, microsecond=0) + timedelta(minutes=1)
     # Bound work and explicitly reject impossible/sparse schedules, never reinterpret them.
     for _ in range(527_040):
-        local = cursor.astimezone(zone)
-        dow = (local.weekday() + 1) % 7
-        day = local.day in fields[2]
-        weekday = dow in fields[4]
-        day = day or weekday if len(fields[2]) != 31 and len(fields[4]) != 7 else day and weekday
-        if (
-            local.minute in fields[0]
-            and local.hour in fields[1]
-            and local.month in fields[3]
-            and day
-        ):
+        if _cron_matches(cursor, fields, zone):
             return cursor
         cursor += timedelta(minutes=1)
     raise ValidationError("cron has no occurrence within the supported one-year horizon")
+
+
+def _cron_recent(
+    expression: str, due: datetime, current: datetime, timezone: str, limit: int
+) -> list[datetime]:
+    """Find only the newest bounded set, independent of the number missed offline."""
+    fields = cron_fields(expression)
+    zone = ZoneInfo(timezone)
+    earliest = _aware(due)
+    cursor = _aware(current).replace(second=0, microsecond=0)
+    occurrences: list[datetime] = []
+    for _ in range(limit):
+        # Retain the same per-occurrence horizon as the forward search. Walking UTC
+        # minutes preserves nonexistent/repeated local times across DST changes.
+        for _ in range(527_040):
+            if cursor < earliest:
+                return list(reversed(occurrences))
+            if _cron_matches(cursor, fields, zone):
+                occurrences.append(cursor)
+                cursor -= timedelta(minutes=1)
+                break
+            cursor -= timedelta(minutes=1)
+        else:
+            raise ValidationError("cron has no occurrence within the supported one-year horizon")
+    return list(reversed(occurrences))
 
 
 class DurableScheduler:
@@ -157,21 +186,22 @@ class DurableScheduler:
                     latest - timedelta(seconds=interval * i) for i in reversed(range(count))
                 ]
             else:
-                cursor = due
-                for _ in range(1440):
-                    if cursor > current:
-                        break
-                    occurrences.append(cursor)
-                    occurrences = occurrences[-definition.get("max_catch_up", 1) :]
-                    cursor = cron_next(definition["cron"], cursor, definition["timezone"])
-                else:
-                    raise ValidationError("too many missed cron periods; explicit review required")
-                latest, next_at = occurrences[-1], cursor
+                policy = definition["misfire_policy"]
+                next_at = cron_next(definition["cron"], current, definition["timezone"])
+                if policy != "skip" or current - due <= timedelta(seconds=60):
+                    count = definition.get("max_catch_up", 1) if policy == "catch_up" else 1
+                    occurrences = _cron_recent(
+                        definition["cron"], due, current, definition["timezone"], count
+                    )
+                    if not occurrences:
+                        raise ValidationError(
+                            "cron has no occurrence at or after its stored due time"
+                        )
             policy = definition["misfire_policy"]
             if policy == "skip" and current - due > timedelta(seconds=60):
                 occurrences = []
             elif policy != "catch_up":
-                occurrences = [latest]
+                occurrences = occurrences[-1:]
 
             async def apply(
                 r: dict[str, Any] = record,

@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import asyncpg
 
+from personal_assistant.core.jobs.management import (
+    MAX_REORDER_JOBS,
+    TASK_JOB_KINDS,
+    reordered,
+    validate_limit,
+    validate_move,
+)
 from personal_assistant.core.jobs.queue import Job, JobState, LeaseConflict
 
 from ._support import aware_utc, require_aware
@@ -17,6 +24,15 @@ _JOB_COLUMNS = (
     "id, kind, payload, idempotency_key, created_at, available_at, state, attempts, "
     "max_attempts, lease_owner, lease_until, result, error_code, version, metadata"
 )
+
+# A short shared lock serializes claim/reorder/cancel without holding locks during
+# execution. No migration: metadata is already durable and included in backups.
+_MANAGEMENT_LOCK = 72489021
+_PRIORITY_SQL = """CASE WHEN jsonb_typeof(metadata->'queue_priority') = 'number'
+    AND metadata->>'queue_priority' ~ '^[0-9]{1,4}$'
+    THEN CASE WHEN (metadata->>'queue_priority')::integer <= 5000
+         THEN (metadata->>'queue_priority')::integer ELSE 0 END ELSE 0 END"""
+_QUEUE_ORDER = f"{_PRIORITY_SQL} DESC, available_at, created_at, id"
 
 
 def _row_to_job(row: asyncpg.Record) -> Job:
@@ -102,10 +118,10 @@ class PostgresJobQueue:
                 "WHERE state = 'LEASED' AND lease_until <= now()"
             )
             row = await connection.fetchrow(
-                """
+                f"""
                 SELECT * FROM jobs
                  WHERE state = 'READY' AND available_at <= now()
-                 ORDER BY available_at, created_at, id
+                 ORDER BY {_QUEUE_ORDER}
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
                 """
@@ -253,3 +269,51 @@ class PostgresJobQueue:
                 f"SELECT {_JOB_COLUMNS} FROM jobs WHERE id = $1", job_id
             )
         return _row_to_job(row) if row is not None else None
+
+
+    async def list_ready_tasks(self, *, limit: int = 100) -> tuple[Job, ...]:
+        validate_limit(limit)
+        async with self._db.connection() as connection:
+            rows = await connection.fetch(
+                f"""SELECT * FROM jobs WHERE state = 'READY' AND available_at <= now()
+                    AND kind = ANY($1::text[]) AND jsonb_typeof(payload->'task_id') = 'string'
+                    AND length(trim(payload->>'task_id')) > 0
+                    ORDER BY {_QUEUE_ORDER} LIMIT $2""", list(TASK_JOB_KINDS), limit,
+            )
+        return tuple(_row_to_job(row) for row in rows)
+
+    async def move_ready(
+        self, *, job_id: str, expected_version: int,
+        direction: Literal["up", "down", "top", "bottom"],
+    ) -> Job:
+        validate_move(direction, expected_version)
+        async with self._db.transaction(), self._db.connection() as connection:
+            await connection.execute("SELECT pg_advisory_xact_lock($1)", _MANAGEMENT_LOCK)
+            rows = await connection.fetch(
+                f"""SELECT * FROM jobs WHERE state = 'READY' AND available_at <= now()
+                    ORDER BY {_QUEUE_ORDER} LIMIT $1 FOR UPDATE""", MAX_REORDER_JOBS + 1,
+            )
+            jobs = [_row_to_job(row) for row in rows]
+            ordered = reordered(jobs, job_id, expected_version, direction)
+            selected = next(job for job in ordered if job.id == job_id)
+            if [job.id for job in ordered] != [job.id for job in jobs]:
+                for index, job in enumerate(ordered):
+                    job.metadata["queue_priority"] = len(ordered) - index
+                await connection.executemany(
+                    """UPDATE jobs SET metadata = $2, version = version + 1,
+                        updated_at = now() WHERE id = $1""",
+                    [(job.id, job.metadata) for job in ordered],
+                )
+                selected.version += 1
+            return selected
+
+    async def cancel_ready_for_task(self, task_id: str) -> tuple[Job, ...]:
+        async with self._db.transaction(), self._db.connection() as connection:
+            await connection.execute("SELECT pg_advisory_xact_lock($1)", _MANAGEMENT_LOCK)
+            rows = await connection.fetch(
+                """UPDATE jobs SET state = 'FAILED', error_code = 'TASK_CANCELLED',
+                    lease_owner = NULL, lease_until = NULL, version = version + 1,
+                    updated_at = now() WHERE state = 'READY' AND kind = ANY($1::text[])
+                    AND payload->>'task_id' = $2 RETURNING *""", list(TASK_JOB_KINDS), task_id,
+            )
+        return tuple(_row_to_job(row) for row in rows)

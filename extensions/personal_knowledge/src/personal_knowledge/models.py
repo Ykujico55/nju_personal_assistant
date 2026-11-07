@@ -187,6 +187,10 @@ class ReconcileReport:
     unchanged: int = 0
     versions_built: int = 0
     events: int = 0
+    skipped_empty: int = 0
+    skipped: tuple[ExtractionDiagnostic, ...] = ()
+    index_state: str = "PENDING"
+    index_reason: str = "INDEX_SCAN_INCOMPLETE"
     errors: tuple[ExtractionDiagnostic, ...] = ()
 
     def as_json(self) -> dict[str, object]:
@@ -201,5 +205,9 @@ class ReconcileReport:
             "unchanged": self.unchanged,
             "versions_built": self.versions_built,
             "events": self.events,
+            "skipped_empty": self.skipped_empty,
+            "skipped": [item.as_json() for item in self.skipped],
+            "index_state": self.index_state,
+            "index_reason": self.index_reason,
             "errors": [item.as_json() for item in self.errors],
         }

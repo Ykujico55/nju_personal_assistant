@@ -1,0 +1,109 @@
+{
+  "type": "object",
+  "properties": {
+    "job": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        },
+        "title": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        },
+        "company": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        },
+        "recruiter": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        },
+        "location": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        },
+        "salary_text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        },
+        "description": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 10000
+        }
+      },
+      "required": [
+        "url",
+        "title",
+        "company"
+      ],
+      "additionalProperties": false
+    },
+    "action_kind": {
+      "type": "string",
+      "enum": [
+        "greet",
+        "message",
+        "send_resume"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 4000
+    },
+    "resume": {
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "filename",
+        "sha256",
+        "size_bytes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "job",
+    "action_kind"
+  ],
+  "additionalProperties": false
+}

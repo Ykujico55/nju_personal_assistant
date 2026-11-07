@@ -52,6 +52,7 @@ async def system(container: Container = Depends(get_container)) -> dict[str, Any
     settings = container.settings
     return {
         "model_configured": container.model_router is not None,
+        "model_disclosure_mode": settings.model_disclosure_mode,
         "worker_online": online,
         "storage": settings.storage_backend,
         "notification_channel": "ntfy" if settings.ntfy_publish_url else "web_push",

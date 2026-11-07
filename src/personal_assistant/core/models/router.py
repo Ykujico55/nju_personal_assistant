@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -32,12 +33,14 @@ from .disclosure import (
     canonical_field_digest,
     recipient_fingerprint,
 )
+from .errors import ModelProviderProtocolError
 from .provider import (
     AUDITABLE_USAGE_KEYS,
     DataClassification,
     ModelOutput,
     ModelProvider,
     ModelRequest,
+    ModelStreamEvent,
     RecipientIdentity,
     bounded_usage,
     classification_of,
@@ -59,8 +62,7 @@ def _field_digest(request: ModelRequest) -> str:
     return canonical_field_digest(
         field
         for field in request.fields
-        if field.classification
-        in {DataClassification.PERSONAL, DataClassification.SENSITIVE}
+        if field.classification in {DataClassification.PERSONAL, DataClassification.SENSITIVE}
     )
 
 
@@ -88,12 +90,9 @@ class DisclosureConsent:
         ):
             raise ValidationError("disclosure consent field_digest must be a sha256")
         if len(self.recipient_fingerprint) != 64 or any(
-            character not in "0123456789abcdef"
-            for character in self.recipient_fingerprint
+            character not in "0123456789abcdef" for character in self.recipient_fingerprint
         ):
-            raise ValidationError(
-                "disclosure consent recipient_fingerprint must be a sha256"
-            )
+            raise ValidationError("disclosure consent recipient_fingerprint must be a sha256")
         if self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None:
             raise ValidationError("disclosure consent expires_at must be timezone-aware")
 
@@ -151,9 +150,7 @@ class ModelRouter:
         audit: AuditWriterPort | None = None,
     ) -> None:
         if disclosure is not None and allow_ephemeral_disclosure:
-            raise ValueError(
-                "persistent disclosure and ephemeral consents are mutually exclusive"
-            )
+            raise ValueError("persistent disclosure and ephemeral consents are mutually exclusive")
         provider_ids = [provider.provider_id for provider in providers]
         if len(set(provider_ids)) != len(provider_ids):
             raise ValueError("model provider ids must be unique")
@@ -213,6 +210,95 @@ class ModelRouter:
         local_fallback_id: str | None = None,
         now: datetime | None = None,
     ) -> ModelOutput:
+        provider, used_consent_id, current = await self._select_provider(
+            request,
+            provider_id=provider_id,
+            consent=consent,
+            consent_id=consent_id,
+            user_id=user_id,
+            local_fallback_id=local_fallback_id,
+            now=now,
+        )
+        output = await provider.complete(request)
+        await self._record_success(
+            request,
+            output,
+            provider_id=provider.provider_id,
+            # Identity comes from the immutable registration snapshot, never
+            # from the provider's live state or the response metadata.
+            model_id=self._recipient_identities[provider.provider_id].model_id,
+            user_id=user_id,
+            consent_id=used_consent_id,
+            now=current,
+        )
+        return output
+
+    async def stream(
+        self,
+        request: ModelRequest,
+        *,
+        provider_id: str,
+        consent: DisclosureConsent | None = None,
+        consent_id: str | None = None,
+        user_id: str | None = None,
+        local_fallback_id: str | None = None,
+        now: datetime | None = None,
+    ) -> AsyncGenerator[ModelStreamEvent, None]:
+        provider, used_consent_id, current = await self._select_provider(
+            request,
+            provider_id=provider_id,
+            consent=consent,
+            consent_id=consent_id,
+            user_id=user_id,
+            local_fallback_id=local_fallback_id,
+            now=now,
+        )
+        stream_factory = getattr(provider, "stream", None)
+        if stream_factory is None:
+            # Legacy providers produce one final result, never simulated token chunks.
+            output = await provider.complete(request)
+        else:
+            events = stream_factory(request)
+            output = None
+            try:
+                async for event in events:
+                    if not isinstance(event, ModelStreamEvent) or output is not None:
+                        raise ModelProviderProtocolError(
+                            "invalid model stream event", provider_id=provider.provider_id
+                        )
+                    if event.output is not None:
+                        output = event.output
+                    else:
+                        yield event
+            finally:
+                await run_cleanup(events.aclose())
+            if output is None:
+                raise ModelProviderProtocolError(
+                    "model stream ended without a final output", provider_id=provider.provider_id
+                )
+        assert output is not None
+        await self._record_success(
+            request,
+            output,
+            provider_id=provider.provider_id,
+            model_id=self._recipient_identities[provider.provider_id].model_id,
+            user_id=user_id,
+            consent_id=used_consent_id,
+            now=current,
+        )
+        yield ModelStreamEvent(output=output)
+
+    async def _select_provider(
+        self,
+        request: ModelRequest,
+        *,
+        provider_id: str,
+        consent: DisclosureConsent | None = None,
+        consent_id: str | None = None,
+        user_id: str | None = None,
+        local_fallback_id: str | None = None,
+        now: datetime | None = None,
+    ) -> tuple[ModelProvider, str | None, datetime]:
         try:
             provider = self._providers[provider_id]
         except KeyError as exc:
@@ -283,19 +369,7 @@ class ModelRouter:
             raise DisclosureDenied(
                 "the registered model recipient has changed; rebuild the provider"
             )
-        output = await provider.complete(request)
-        await self._record_success(
-            request,
-            output,
-            provider_id=provider.provider_id,
-            # Identity comes from the immutable registration snapshot, never
-            # from the provider's live state or the response metadata.
-            model_id=self._recipient_identities[provider.provider_id].model_id,
-            user_id=user_id,
-            consent_id=used_consent_id,
-            now=current,
-        )
-        return output
+        return provider, used_consent_id, current
 
     async def _decide(
         self,
@@ -357,9 +431,7 @@ class ModelRouter:
 
     @staticmethod
     def _reject_secret(request: ModelRequest) -> None:
-        if any(
-            is_secret_classification(field.classification) for field in request.fields
-        ):
+        if any(is_secret_classification(field.classification) for field in request.fields):
             raise DisclosureDenied("secret material may never be sent to a model")
 
 
@@ -383,8 +455,7 @@ def _audit_data(
             {
                 canonical.value
                 for canonical in (
-                    classification_of(field.classification)
-                    for field in request.fields
+                    classification_of(field.classification) for field in request.fields
                 )
                 if canonical is not None
             }

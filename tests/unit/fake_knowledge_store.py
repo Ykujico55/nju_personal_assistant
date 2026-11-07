@@ -306,6 +306,14 @@ class FakeKnowledgeStore:
     async def set_meta(self, key: str, value: Mapping[str, Any]) -> None:
         self.meta[key] = dict(value)
 
+    async def compare_set_meta(
+        self, key: str, expected: Mapping[str, Any], value: Mapping[str, Any]
+    ) -> bool:
+        if self.meta.get(key) != dict(expected):
+            return False
+        self.meta[key] = dict(value)
+        return True
+
     async def get_meta(self, key: str) -> dict[str, Any] | None:
         value = self.meta.get(key)
         return dict(value) if isinstance(value, Mapping) else None

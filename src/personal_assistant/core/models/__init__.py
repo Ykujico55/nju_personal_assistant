@@ -26,6 +26,8 @@ from .disclosure import (
 )
 from .errors import (
     ModelCredentialUnavailableError,
+    ModelOutputFilteredError,
+    ModelOutputTruncatedError,
     ModelProviderError,
     ModelProviderProtocolError,
     ModelProviderRejectedError,
@@ -39,6 +41,7 @@ from .provider import (
     ModelOutput,
     ModelProvider,
     ModelRequest,
+    ModelStreamEvent,
     RecipientIdentity,
 )
 from .router import DisclosureConsent, DisclosureDenied, ModelRouter
@@ -68,6 +71,8 @@ __all__ = [
     "MIN_DISCLOSURE_TTL",
     "ModelCredentialUnavailableError",
     "ModelOutput",
+    "ModelOutputFilteredError",
+    "ModelOutputTruncatedError",
     "ModelProvider",
     "ModelProviderError",
     "ModelProviderProtocolError",
@@ -77,6 +82,7 @@ __all__ = [
     "ModelProviderUnavailableError",
     "ModelRequest",
     "ModelRouter",
+    "ModelStreamEvent",
     "RecipientIdentity",
     "canonical_field_digest",
     "effective_consent_state",

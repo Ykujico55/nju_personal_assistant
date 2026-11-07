@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from .async_utils import shield_cleanup
 from .errors import (
     ConfirmationRequiredError,
     ExtensionOperationError,
@@ -133,10 +134,12 @@ class ExtensionSupervisorService:
     async def inspect(self, source: str) -> InstallationPreview:
         """Stage and statically inspect an artifact.  Never runs its code."""
 
-        return await self._coordinator.prepare_auto(source)
+        async with self._store.operation_lock():
+            return await self._coordinator.prepare_auto(source)
 
     async def reject_plan(self, plan_id: str) -> ExtensionRecord:
-        return await self._coordinator.reject(plan_id)
+        async with self._store.operation_lock():
+            return await self._coordinator.reject(plan_id)
 
     # -------------------------------------------------------------- operations
 
@@ -229,13 +232,35 @@ class ExtensionSupervisorService:
     async def begin_enable(
         self, extension_id: str, *, idempotency_key: str | None = None
     ) -> ExtensionOperation:
+        scope = _extension_request_scope(extension_id, "enable")
+        fingerprint = _command_fingerprint(scope, "")
+        # Replays describe the original command, even if the extension was
+        # subsequently disabled or uninstalled. Validate only fresh commands.
+        replay = await self._replay_or_none(scope, idempotency_key, fingerprint)
+        if replay is not None:
+            return replay
+        record = await self._store.get(extension_id)
+        if record is None or record.state in {
+            ExtensionState.DISCOVERED,
+            ExtensionState.STAGED,
+            ExtensionState.REJECTED,
+            ExtensionState.UNINSTALLED,
+        }:
+            raise ExtensionOperationError(
+                "EXTENSION_NOT_INSTALLED",
+                "扩展尚未安装。请先选择源码目录，预览并确认安装材料，安装成功后再启用。",
+            )
+        if not record.install_path:
+            raise ExtensionOperationError(
+                "INSTALL_PATH_MISSING", "扩展安装记录缺少运行目录，请先核对安装状态。"
+            )
         return await self._begin(
             extension_id,
             "enable",
             lambda: self._manager.enable(extension_id),
-            request_scope=_extension_request_scope(extension_id, "enable"),
+            request_scope=scope,
             idempotency_key=idempotency_key,
-            fingerprint=_command_fingerprint(_extension_request_scope(extension_id, "enable"), ""),
+            fingerprint=fingerprint,
         )
 
     async def begin_disable(
@@ -358,6 +383,60 @@ class ExtensionSupervisorService:
                     }
                 )
         return tuple(forms)
+
+    async def list_context_providers(self) -> tuple[dict[str, Any], ...]:
+        """Instance catalog without starting code or revealing source configuration."""
+        return tuple(
+            {"extension_id": record.manifest.id,
+             "extension_version": record.manifest.version,
+             "name": record.manifest.name,
+             "provider_ids": list(record.manifest.context_providers),
+             "provider_descriptions": dict(record.manifest.context_provider_descriptions)}
+            for record in await self._store.all()
+            if record.state is ExtensionState.ENABLED and record.manifest.context_providers
+        )
+
+    async def retrieve_context(
+        self, extension_id: str, extension_version: str, *, query: str, limit: int,
+        provider_ids: tuple[str, ...] = (),
+    ) -> tuple[dict[str, Any], ...]:
+        """Read a declared ContextProvider, never invoke a tool or create a task."""
+        if (not isinstance(query, str) or not query.strip() or len(query) > 2000
+                or type(limit) is not int or not 1 <= limit <= 10
+                or not isinstance(provider_ids, (list, tuple)) or not 1 <= len(provider_ids) <= 8
+                or any(not isinstance(p, str) for p in provider_ids)):
+            raise ExtensionOperationError("CONTEXT_REQUEST_INVALID", "invalid context request")
+        record = await self._store.get(extension_id)
+        if (record is None or record.state is not ExtensionState.ENABLED
+                or record.manifest.version != extension_version
+                or not record.manifest.context_providers):
+            raise ExtensionOperationError("EXTENSION_NOT_ENABLED", "context provider unavailable")
+        if not set(provider_ids) <= set(record.manifest.context_providers):
+            raise ExtensionOperationError("CONTEXT_REQUEST_INVALID", "invalid context selection")
+        selected = list(dict.fromkeys(provider_ids))
+        # Legacy single-provider implementations may reject unknown filters.
+        # Their selection is unambiguous, so preserve the old query shape.
+        filters = {"provider_ids": selected} if len(record.manifest.context_providers) > 1 else {}
+        try:
+            await self._runtime.start(record)
+            result = await self._runtime.call_slot(
+                extension_id, "context.retrieve",
+                {"query": {"text": query, "limit": limit,
+                           "filters": filters}},
+            )
+            current = await self._store.get(extension_id)
+            if current != record:
+                raise ValueError("context provider changed during retrieval")
+            if (not isinstance(result, list) or len(result) > 100
+                    or not all(isinstance(item, dict) for item in result)):
+                raise ValueError("invalid context response")
+            return tuple(result)
+        except Exception:
+            # Provider diagnostics may contain paths/body; only a fixed code is
+            # exposed to the conversation layer. Cancellation still propagates.
+            raise ExtensionOperationError(
+                "CONTEXT_PROVIDER_UNAVAILABLE", "context provider unavailable"
+            ) from None
 
     async def list_declarations(self, method: str) -> tuple[dict[str, Any], ...]:
         slots = {
@@ -492,22 +571,23 @@ class ExtensionSupervisorService:
         exactly once with the extension records that came back healthy.
         """
 
-        await self._operations.interrupt_running(diagnostic_code="SUPERVISOR_RESTART")
-        enabled: list[ExtensionRecord] = []
-        for record in await self._store.all():
-            try:
-                recovered = await self._recover_record(record)
-            except Exception:  # noqa: BLE001 - one broken extension must not block others
-                with contextlib.suppress(Exception):
-                    await asyncio.shield(self._runtime.stop(record))
-                recovered = replace(record, state=ExtensionState.QUARANTINED)
-                await self._store.save(recovered)
-                await self._record_operation(
-                    record.manifest.id, "recover", OperationState.FAILED, "RECOVERY_FAILED"
-                )
-            if recovered.state is ExtensionState.ENABLED:
-                enabled.append(recovered)
-        self._registry.replace_all(enabled)
+        async with self._store.operation_lock():
+            await self._operations.interrupt_running(diagnostic_code="SUPERVISOR_RESTART")
+            enabled: list[ExtensionRecord] = []
+            for record in await self._store.all():
+                try:
+                    recovered = await self._recover_record(record)
+                except Exception:  # noqa: BLE001 - one broken extension must not block others
+                    with contextlib.suppress(Exception):
+                        await asyncio.shield(self._runtime.stop(record))
+                    recovered = replace(record, state=ExtensionState.QUARANTINED)
+                    await self._store.save(recovered)
+                    await self._record_operation(
+                        record.manifest.id, "recover", OperationState.FAILED, "RECOVERY_FAILED"
+                    )
+                if recovered.state is ExtensionState.ENABLED:
+                    enabled.append(recovered)
+            self._registry.replace_all(enabled)
 
     async def _recover_record(self, record: ExtensionRecord) -> ExtensionRecord:
         state = record.state
@@ -530,6 +610,12 @@ class ExtensionSupervisorService:
                     raise ExtensionOperationError(
                         "HEALTHCHECK_FAILED", "extension healthcheck failed after restart"
                     )
+            except asyncio.CancelledError:
+                # Keep STARTING as an interrupted recovery for the next owner,
+                # but never leave this process's newly started worker untracked.
+                with contextlib.suppress(Exception):
+                    await shield_cleanup(self._runtime.stop(starting))
+                raise
             except Exception as exc:  # noqa: BLE001 - quarantine and continue
                 return await self._quarantine_recovered(record, starting, exc)
             enabled = replace(starting, state=ExtensionState.ENABLED)
@@ -581,6 +667,11 @@ class ExtensionSupervisorService:
             self._diagnostic("recover", exc),
         )
         return quarantined
+
+    async def synchronize_configurations(self) -> None:
+        synchronize = getattr(self._runtime, "synchronize_configurations", None)
+        if synchronize is not None:
+            await synchronize()
 
     async def stop_all(self) -> None:
         for task in list(self._tasks):
@@ -641,24 +732,69 @@ class ExtensionSupervisorService:
             created_at=now,
             updated_at=now,
         )
-        try:
-            await self._operations.create(operation)
-        except ExtensionOperationError as exc:
-            self._active.discard(extension_id)
-            if exc.code != "IDEMPOTENCY_CONFLICT" or not idempotency_key:
-                raise
-            # Lost a cross-process race on the unique key: replay or conflict.
-            existing = await self._operations.find_by_request_scope(request_scope, idempotency_key)
-            if existing is not None and existing.command_fingerprint == fingerprint:
-                return existing
-            raise
-        except BaseException:
-            self._active.discard(extension_id)
-            raise
-        task = asyncio.create_task(self._execute(operation.id, extension_id, kind, work))
+        ready: asyncio.Future[ExtensionOperation] = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(self._claim_and_execute(operation, work, ready))
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
-        return operation
+        task.add_done_callback(self._operation_done)
+        try:
+            return await asyncio.shield(ready)
+        except asyncio.CancelledError:
+            # Before the durable receipt exists, cancellation must remove the
+            # waiter rather than let it acquire the gate and execute later.
+            # Once published, the accepted background command owns its lifetime.
+            if not ready.done():
+                task.cancel()
+                await shield_cleanup(asyncio.gather(task, return_exceptions=True))
+            if ready.done() and not ready.cancelled():
+                ready.exception()
+            raise
+
+    def _operation_done(self, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
+        # Failures are persisted by the runner before they can leave this task.
+        # Retrieve the exception also when the HTTP requester has disconnected.
+        if not task.cancelled():
+            task.exception()
+
+    async def _claim_and_execute(
+        self, operation: ExtensionOperation, work: Callable[[], Awaitable[object]],
+        ready: asyncio.Future[ExtensionOperation],
+    ) -> None:
+        persisted = False
+        try:
+            async with self._store.operation_lock():
+                # Re-check replay after crossing the cross-process gate. The
+                # PENDING receipt and its execution share this same ownership.
+                replay = await self._replay_or_none(
+                    operation.request_scope or "", operation.idempotency_key,
+                    operation.command_fingerprint or "",
+                )
+                if replay is not None:
+                    ready.set_result(replay)
+                    return
+                await self._operations.create(operation)
+                persisted = True
+                ready.set_result(operation)
+                await self._execute(operation.id, operation.extension_id, operation.operation, work)
+        except BaseException as exc:
+            # A failed durable create may have committed before cancellation.
+            # Do not execute it later or leave an unhandled task exception.
+            if persisted or isinstance(exc, asyncio.CancelledError):
+                with contextlib.suppress(Exception):
+                    await shield_cleanup(self._operations.update(
+                        operation.id, status=OperationState.FAILED,
+                        diagnostic_code=("OPERATION_CANCELLED" if isinstance(
+                            exc, asyncio.CancelledError
+                        ) else "OPERATION_FAILED"),
+                    ))
+            if not ready.done():
+                if isinstance(exc, asyncio.CancelledError):
+                    ready.cancel()
+                else:
+                    ready.set_exception(exc)
+            raise
+        finally:
+            self._active.discard(operation.extension_id)
 
     async def _execute(
         self,
@@ -668,35 +804,32 @@ class ExtensionSupervisorService:
         work: Callable[[], Awaitable[object]],
     ) -> None:
         try:
-            try:
-                await self._operations.update(operation_id, status=OperationState.RUNNING)
-            except Exception:  # noqa: BLE001 - never leave a task-less PENDING row
-                with contextlib.suppress(Exception):
-                    await self._operations.update(
-                        operation_id,
-                        status=OperationState.FAILED,
-                        diagnostic_code="OPERATION_FAILED",
-                    )
-                return
-            try:
-                await work()
-            except asyncio.CancelledError:
+            await self._operations.update(operation_id, status=OperationState.RUNNING)
+        except Exception:  # noqa: BLE001 - never leave a task-less PENDING row
+            with contextlib.suppress(Exception):
                 await self._operations.update(
                     operation_id,
                     status=OperationState.FAILED,
-                    diagnostic_code="OPERATION_CANCELLED",
+                    diagnostic_code="OPERATION_FAILED",
                 )
-                raise
-            except Exception as exc:  # noqa: BLE001 - boundary maps to a safe diagnostic code
-                await self._operations.update(
-                    operation_id,
-                    status=OperationState.FAILED,
-                    diagnostic_code=self._diagnostic(kind, exc),
-                )
-            else:
-                await self._operations.update(operation_id, status=OperationState.SUCCEEDED)
-        finally:
-            self._active.discard(extension_id)
+            return
+        try:
+            await work()
+        except asyncio.CancelledError:
+            await self._operations.update(
+                operation_id,
+                status=OperationState.FAILED,
+                diagnostic_code="OPERATION_CANCELLED",
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001 - boundary maps to a safe diagnostic code
+            await self._operations.update(
+                operation_id,
+                status=OperationState.FAILED,
+                diagnostic_code=self._diagnostic(kind, exc),
+            )
+        else:
+            await self._operations.update(operation_id, status=OperationState.SUCCEEDED)
 
     async def _quarantine(self, record: ExtensionRecord, exc: Exception) -> None:
         extension_id = record.manifest.id

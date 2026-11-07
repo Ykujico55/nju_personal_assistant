@@ -12,6 +12,7 @@ keywords fail closed rather than being silently ignored.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -62,6 +63,28 @@ class ExtensionConfigStore(Protocol):
     async def get(self, extension_id: str) -> Mapping[str, Any]: ...
 
     async def save(self, extension_id: str, config: Mapping[str, Any]) -> None: ...
+
+
+@runtime_checkable
+class ExtensionConfigApplyStore(ExtensionConfigStore, Protocol):
+    async def get_applied(self, extension_id: str) -> Mapping[str, Any]: ...
+
+    async def apply(self, extension_id: str, expected_digest: str) -> Mapping[str, Any]: ...
+
+    async def status(self, extension_id: str) -> Mapping[str, Any]: ...
+
+    async def report_runtime(
+        self, extension_id: str, instance_id: str, *, loaded_digest: str | None,
+        generation: str | None, state: str, error_code: str | None = None,
+    ) -> None: ...
+
+    async def release_runtime(self, instance_id: str) -> None: ...
+
+
+def config_digest(config: Mapping[str, Any]) -> str:
+    encoded = json.dumps(dict(config), ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,6 +402,8 @@ __all__ = [
     "MAX_CONFIG_SCHEMA_BYTES",
     "ExtensionConfigError",
     "ExtensionConfigStore",
+    "ExtensionConfigApplyStore",
+    "config_digest",
     "validate_extension_config",
     "validate_extension_config_schema",
 ]

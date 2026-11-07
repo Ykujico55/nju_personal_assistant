@@ -164,7 +164,7 @@ complete(...); fail(...); mark_unknown(...); get(...)
 ```
 
 - 幂等唯一键为 `(kind, idempotency_key)`；重放 payload 不同必须失败。
-- `claim` 必须在短事务中用等价于 `FOR UPDATE SKIP LOCKED` 的方式选择一个到期 READY Job；排序为 `available_at, created_at, id`。
+- `claim` 必须在短事务中用等价于 `FOR UPDATE SKIP LOCKED` 的方式选择一个到期 READY Job；默认排序为 `available_at, created_at, id`；本机手动调序使用持久 `metadata.queue_priority` 降序优先，未调序默认为 0。只选择已到期 READY，不改变 available_at。
 - claim 需要原子设置 LEASED、owner、lease_until，递增 attempts/version；两个 Worker 不得同时拥有有效 lease。
 - 过期 lease 可回收，但调用 `complete/fail/release/mark_unknown/heartbeat` 时必须同时校验 state、owner 和未过期时间，否则抛 `LeaseConflict`。
 - heartbeat 只续自己的有效 lease。网络调用不得持有数据库事务或行锁。
@@ -979,6 +979,8 @@ API 语义依据 [CREDENTIALW](https://learn.microsoft.com/en-us/windows/win32/a
 - `TaskRuntime` 消费现有 at-least-once 队列、持久租约/Run/Checkpoint；最新QUEUED请求复用原start命令，恢复固定版本工作流和宿主工具调用；过期配置/工具版本暂停。保留3/5/8/24h熔断器。R2在派发前保存精确准备结果，批准后恢复同一调用；结果不明只对账，取消监测会等待回收。
 - DELIVERY.2 修复约束（2026-10-19）：检查点以风险枚举值 `EXTERNAL_WRITE` 为准，同时识别历史 `R2`；派发前保留原审批 ID。派发中断且结果无确定证明，或持久审批为 `EXECUTING/UNKNOWN` 时，任务进入 `WAITING_RECONCILIATION`，普通继续命令不得入队、重规划或投影成功。显式未决标记不会因改成等待状态丢失；持久 `FAILED` 仅表示确定失败，可人工继续，不能借此重放原调用。
 - 工作流首轮执行后绑定完整定义摘要（包括定义/扩展版本和内容）；公共接受命令及 Worker 执行入口均复核。换定义、版本或执行模式返回 409，要求新建任务，原请求、检查点和输入保留；旧已入队的不兼容请求以 `WORKFLOW_BINDING_CONFLICT` 失败并等待用户，不能当作 CAS superseded 成功。
+- CORE.FIX.2（2026-10-30）：检查点conversation_message_ids仅标记已配置模型的agent NEEDS_USER真实追问，消息与标记在同一宿主事务保存。下次规划按原消息顺序带入用户消息和已标记助手问题，角色作为untrusted messages ContextField内容，不构成授权或工具执行证据。宿主状态/披露通知不进入；旧无标记快照沿用原用户字符串数组，保持待授权披露字节兼容。不存在可靠标记的旧助手消息不猜测来源、不自动补入。
+- CORE.FIX.1（2026-10-30）：合法cron长积压从当前时间求下一次、反向最多取max_catch_up个到期点；coalesce保留最近一次，catch_up保留最近N次，skip在原due过期超过60秒时跳过。不逐条枚举停机期间全部触发，不重复补跑；保持UTC分钟扫描和原DOM/DOW、DST语义。单次搜索一年上限与非法计划的显式失败仍保留，不宣称已隔离所有损坏计划。
 - 扩展 `workflow.list/schedule.list/event_source.list` 只读取已启用的 Manifest ID/版本；声明式 ask/tool/archive不含JavaScript。材料引用限定 `$value` 的 inputs/outputs；源游标/去重与队列提交原子化。调度只轮询读取源，不补跑外部副作用；misfire 为 skip/coalesce/有限catch_up。
 - 公共增量端点：GET `/api/v1/system`、`/workflows`、`/schedules`；GET/POST `/tasks/{id}/execution`；POST `/tasks/{id}/model-disclosure/preview|confirm`；候选规则 `/rules`、`/{id}/activate|disable|history|rollback`。命令必须原幂等键和版本，工作流选择绑定ID/定义版本/扩展ID/包版本。模型预览由宿主构造，GET execution不返回完整待披露正文。
 - 规则仅允许有限 scope 与 language/answer_style/ask_for_missing_material，候选正反例测试+用户启用后生效，不能修改工具风险、授权或熔断器。专用本机Git历史只存这些数据；回滚重新进入CANDIDATE，不自动扩大适用范围。API依赖核心端口，由组合根注入文件控制/历史适配器。
@@ -988,3 +990,140 @@ API 语义依据 [CREDENTIALW](https://learn.microsoft.com/en-us/windows/win32/a
 - 恢复包AES-GCM认证加密，最大256MB，明确排除凭据/会话/Push/披露许可；空隔离目标、完整迁移哈希匹配、按FK拓扑导入、序列推进，恢复冻结外部动作/禁用扩展和调度。升级材料固定复制后安装，必须停止冻结+备份，失败不自动resume。
 - 已执行审批与未开始授权分别恢复：`EXECUTING → UNKNOWN`，保留批准人/批准时间/消费时间、绑定材料和已知回执，轮换 nonce 并推进版本；对应 Outbox/邮件动作保持 `UNKNOWN`。未开始的审批过期，旧授权不能重新消费；恢复不推断外部结果，不自动重发。
 - 此为本地开发契约，不能据此宣布F07/F08或F08.6真实验收DONE；正式浏览器权威准备缺失时必须拒绝，不把F07试验预览变为可批准材料。
+
+
+## 通用扩展外部动作预览（2026-10-30，EXT.CAREER.1）
+
+除现有mail.send宿主传输外，受信扩展可注册同版本READ的`<tool_id>.preview`和EXTERNAL_WRITE动作。动作参数完整包含local_action_id、target、operation、consequences、attachments，预览返回kind=EXTENSION_ACTION及逐字匹配的target/payload/consequences/attachments；宿主重新核对后才准备一次性审批。附件需归属该扩展版本，实际字节哈希/大小与审批一致；执行前再次复核，漂移拒绝。API提供通用纯文本材料核对，不新增业务路由；F07尚无权威材料的ehall.submit仍不可批准。
+
+这是一条可信扩展的精确命令确认路径，浏览器业务仍由扩展适配器实现；不能把扩展对页面的观察当作第三方网站事务原子性证明。RPC丢回执、坏成功回执均为UNKNOWN；成功必须提供verified/reference_id回执。复用原5分钟、单次nonce、扩展版本和完整哈希绑定与Outbox，UNKNOWN不可自动重试。消息与简历发送分开记录，不能以沟通成功代替简历投递成功。
+
+
+## 26. 独立插件开发扩展（EXT.DEV.1，2026-10-30）
+
+assistant.plugin_developer@0.1.0 只注册标准 ToolProvider，不改变宿主 API、SDK、模型适配器、审批 canonicalization 或迁移。工具表及配置见[扩展说明](../extensions/plugin_developer/README.md)。
+
+- 目录由本人配置 workspace_root；候选、基线、控制记录、发布快照分离。候选 ID/版本绑定，已有文件写入以 SHA-256 做 CAS；同内容的完整文件清单决定 candidate_hash。该摘要和宿主安装 artifact_hash 是不同算法/用途，不能互换。
+- developer.review 静态解析、不执行候选；模型读取有界 diff，完整材料由本机 CLI 展示。安装确认 nonce、验证 run_token 与绝对控制路径不进入工具结果。
+- developer.validate 仅接受候选 ID/摘要，不能接受模型自批。本人 CLI 默认授权 15 分钟内一次精确快照测试；显式 --iterative 为 30 分钟最多 5 次，并锁定 Manifest、锁文件和 pyproject。源码迭代仍逐次保存摘要和结果。
+- 固定 unittest 运行器不执行任意 shell、不自动安装依赖。临时快照、环境清理和 Windows Job 回收用于减少意外影响；验证以当前用户权限运行信任代码，并非恶意代码沙箱。代码/测试仍不得绕过 Gateway 发起真实外部动作。
+- 验证回执、授权及请求键存入扩展专用本地 SQLite；这是本机开发工具的持久状态，不替代宿主 PostgreSQL。零测试/全跳过不算 PASS；同键同摘要仅重放回执，异摘要冲突；RUNNING/UNKNOWN 阻止自动重试及发布，不清键绕过。
+- developer.release.request 只为当前摘要的最新有效 PASSED 回执导出快照，返回需要本人操作。安装 CLI 调用原 assistantctl 精确材料确认，成功后显式 --enable 才启用；无 Agent install/approve 工具，无 --yes。升级必须是更高版本，回滚使用原宿主机制。
+- 本轮仅本地验证；原实例安装、真实模型编写插件和完整宿主安装验收另行安排，F08.6 状态不变。
+
+
+## 2026-10-30 TUI.1：本机工作台适配
+
+- 可选CLI入口 assistantctl tui；Textual仅在该命令惰性导入，不进入API/Worker运行依赖。
+- /admin/v1/workbench/* 只挂载Local Admin；必须peer与Host均为loopback、有X-Assistant-Workbench: 1且无Origin。公开应用无这些路由。响应沿用Admin的no-store；客户端仅连接无凭据HTTP回环URL，不走环境代理、不跟随重定向。
+- tasks、messages、execution与model-disclosure复用现有endpoint和服务；Agent工具选择由原StructuredPlanner读取已启用目录，执行仍经Runtime/Gateway。无新业务专用路由或核心迁移。
+- chat/preview与chat/confirm为零工具日常问答；披露绑定当前provider/用途/对话字段摘要。原命令先持久认领，再事务外调用模型；新nonce仅首个命令拥有派发权。成功/坏输出终态以CAS保存；取消、崩溃、未知结果不得同键再派发。回执与认领放入已有runtime_records/runtime_commands；仅生产PostgreSQL适配器提供跨进程持久化。问答历史不是任务执行授权。
+- usage只返回model.completed最近最多5000条审计的计数与完整性标记，SQL只选usage元数据；没有供应商计数即未知，不估计为0。任务trace投影phase/tool_id/extension_id/risk；校验失败可附validation_failure，只按固定白名单code重建说明，不透传模型输出、异常消息或工具参数。旧记录缺诊断时不倒推失败类型。
+- 本机模型设置仅修改明确文件的模型名、JSON/thinking参数，保留凭据引用及其他profile字段，摘要CAS/锁/原子替换，保存需重启生效。扩展配置沿用现有接口；因无幂等回执，未知结果禁止自动或同键重发，必须只读核对。
+- TUI不会自动安装扩展、启动/解冻服务或改变R2/R3/Outbox/UNKNOWN契约。详细用户语义见[TUI指南](TUI_WORKBENCH.md)。
+
+
+## UX.TRIAL.1：直接模型处理与问答流（2026-11-06）
+
+- PA_MODEL_DISCLOSURE_MODE默认manual，automatic只能由操作者主机配置明确启用。automatic在每次发送前对真实ModelRequest生成精确持久许可，并额外审计model.disclosure.automatic；不得伪称此次另有人点击了预览。SECRET拒绝、接收端指纹、字段摘要和许可到期校验不变。Agent的原模型披露等待在该模式下由主机策略处理，最终R2/Gateway/Outbox审批不受影响。
+- 本机POST /admin/v1/workbench/chat/stream接受message/history/可选preview_hash，manual要求有效hash；automatic可直接发。沿用回环、专用header、无Origin、Idempotency-Key和no-store。SSE事件delta{text}、completed{answer,model,provider,usage,tools_executed:false}、error{code,message,uncertain}。
+- 模型调用前持久认领命令；成功audit与回执均完成后才发送completed。同键不重复调用，断流/取消/未知回执保留原命令。TUI仅最终成功计入history/usage，partial不当作已保存答案。真实适配器使用有界SSE、累计大小限制与总deadline，无重定向/自动重试，取消回收连接。
+- 此流仅覆盖TUI纯问答；结构化Agent规划仍完整解析，不把工具参数或模型思考作为用户回复推送。旧provider不支持stream时一次返回最终输出，不模拟逐字流。Ollama真实增量尚未接线。
+- 新enable命令先查 durable replay，再验证安装状态。未安装返回409 EXTENSION_NOT_INSTALLED，缺运行目录返回409 INSTALL_PATH_MISSING；不执行安装、不启动worker、不生成无效异步作业。已完成旧命令在后来卸载后仍重放原结果。DISCOVERED只是源码发现，不能等同已安装。
+
+
+### UX.QUEUE.1 本机队列管理（2026-11-06）
+
+- 本机专用 GET `/admin/v1/workbench/task-queue` 返回最多100项可见任务，附 queue_job_id/queue_version/queue_position、removed、requires_reconciliation；include_removed=true可只读查看隐藏项。原公共任务历史接口不删除记录。沿用loopback、专用header、无Origin、no-store边界。
+- POST `/task-queue/{task_id}/move`：job_id、version、direction(up/down/top/bottom)，Idempotency-Key绑定原请求。只调整到期READY任务作业，数据库版本/CAS检查，无法抢占LEASED或UNKNOWN，也不改变未来计划时间；排序元数据和命令回执/审计同事务提交。上限5000个到期作业，超限明确拒绝。
+- POST `/task-queue/{task_id}/remove`：task version与幂等键。活动任务取消并将未领取agent作业标为FAILED/TASK_CANCELLED，列表隐藏存于现有task-visibility记录；终态只隐藏。未决外部动作拒绝隐藏，迟到UNKNOWN重新可见。数据库外层command事务涵盖取消、队列清理、隐藏、审计和回执，失败整体回滚；不删除审批/Outbox/历史和幂等记录。
+- 模型规划/材料预览等待期间观察取消、冻结与活动时长熔断，取消回收原协程并丢弃迟到成功；工具执行期间原R2/UNKNOWN处理保持。缺失Task/Run的作业可明确失败收尾，不因错误处理再次查不到Run而击倒Worker。
+
+
+### CORE.KNOWLEDGE.1 失败观察与可选定位字段（2026-11-06）
+
+Agent的FAILED工具观察使用固定宿主诊断，包含kind、tool_id、tool_version、error_code=TOOL_EXECUTION_FAILED、retryable、same_call_as_previous和固定message；不转发裸异常或参数。成功结果shape不变；进展/熔断仍按原ToolOutcome计算，UNKNOWN仍先停止规划。retryable不是自动重试许可。
+
+personal.knowledge 0.1.1的搜索结果遵守原输出Schema：page只在有页号时提供整数，line_start/line_end只在line_range定位时提供整数；不适用字段省略，禁止null。空结果保持unknown=true、results=[]；过期或删除证据不提供缓存正文。旧迁移和state_schema_version=1不变。
+
+
+## CORE.CONVERSATION.1：实例上下文与对话分流（2026-11-06）
+
+- 本机 `POST /admin/v1/workbench/conversation/stream` 接收 message/history（用户消息8000字符、历史20条、整轮输入总64000字符；assistant历史不另设8000上限），要求 automatic、loopback peer/Host、专用header、无Origin和幂等键。旧chat接口保留原手动披露语义；公共API未新增自动聊天路由。
+- 意图模型只返回严格三字段 kind(ANSWER/RETRIEVE/TASK)、query、providers。检索仅可选择当前启用的标准 ContextProvider；TASK保存原用户目标与标为不可信的对话上下文，不采用模型重写的动作参数/审批。任务目标超过10000字符时拒绝，不截断可能包含限制条件的历史。路由不是权限授予。
+- 目录授权来自扩展现有实例配置；会话关联ID仅用于追踪，不是目录绑定。监督器验证ENABLED/当前版本/已发布provider，再调用既有context.retrieve RPC。SDK同扩展多个provider共用一个retrieve，实现按扩展去重；并行独立查询各8秒，上限8个provider、10条证据；默认完整保留返回证据文本，显式max_chars可在256–24000间指定文本预算，RPC帧边界继续有效。仅CURRENT、非SECRET、有效期内且来源/producer版本一致的证据进入不可信资料字段；引用元数据随回执返回。旧SDK省略source_version/observed_at时以内容hash作为版本、宿主收到时间作为观察时间，不能冒称源时间。
+- 命令在模型调用前持久认领；路由决定TASK先保存READY_TASK再经TaskService.create创建任务/agent.start。原始目标绑定确定幂等键，外层RecordStore.command覆盖任务/队列/回执同一生产事务。同键仅首个命令调用模型；READY_TASK可以恢复创建，其他未确认模型阶段只查状态，不自动再调用。队列执行经原Runtime/Gateway，R2审批、UNKNOWN和所有熔断不变。
+- SSE继续delta/completed/error；completed增加可选task{id,state}、sources和warnings，tools_executed=false表示请求本身未直接执行动作工具，不能据此否认后台Worker后续执行。资料不冒充系统指令；无有效证据明确提示，不能宣称目录空。回执只代表创建/回答完成，不代表任务成功。
+- 真实回答流不拆字模拟；路由与回答实际token审计分别记录，UI合计仅两次都报告的字段。单请求80秒总预算、10秒SSE注释心跳；取消/超时清理读取协程与模型流，保留原命令。冻结状态、目录配置和安装管理不由聊天自动修改。
+
+
+## CORE.CONVERSATION.2：工作区概览与明确失败（2026-11-06）
+
+- 通用上下文监督器校验所选 provider_ids 属于当前已启用 Manifest。同扩展多个槽一次 RPC，通过 ContextQuery.filters.provider_ids 原样传递去重选择；单槽保留旧 filters={} 以兼容严格旧 provider。核心无具体知识扩展 ID 分支，不接受模型新增本地路径。
+- personal.knowledge 0.1.2 增加 knowledge.workspace：基于原实例 roots 读取有界目录元数据，返回一份 SENSITIVE/USER_SOURCE 快照，含配置存在、可访问状态、root key/label、相对文件名/大小/类型与截断标志；不读正文、不自动索引。快照哈希不能冒充文件内容哈希，index_state=UNKNOWN。空安装探针仍不触目录或数据库；旧未选槽调用仍执行原关键词检索。正文搜索和中文分词边界不变。
+- 模型明确 length/content_filter/HTTP拒绝/调用前凭据不可用：固定类型映射为持久FAILED及固定错误码；回放不再次调用模型，uncertain=false。真正断流、超时、缺最终帧和回执存储失败仍UNKNOWN。只完成的回复计入对话上下文；旧记录缺少失败原因时不倒推。
+- POST /admin/v1/workbench/conversation/discard 沿用本机header、无Origin、actor和原Idempotency-Key/body绑定。仅原STREAMING v2可CAS为FAILED/CHAT_RESPONSE_DISCARDED；保留原键/审计/记录。已SUCCEEDED返回原回执；DISPATCHING/READY_TASK等状态不允许放弃，不能用来解除任务或外部动作UNKNOWN。迟到回复不能覆盖CAS后的状态；丢回执仍通过原键查询，不自动重发。
+- 原实例部署需单独确认插件材料并重启；静态候选和合成验证不代表原实例已经升级。
+
+
+## CORE.OUTPUT.1：默认完整输出（2026-11-07）
+
+- personal.knowledge 0.1.3 的目录概览默认 max_files=None，取消50文件与10000 JSON字符裁剪；扫描预算1000条目/8层/检查点2秒和原目录安全规则保留。扫描未完成时 complete=false，并以 truncation_reasons 区分运行预算/路径限制，不假称完整目录。显式max_files仍有效。
+- ExtensionContextService默认max_chars=None，不裁短完整证据或因100000字符任意拒绝正文；只选定已启用、有效、非SECRET来源，RPC传输字节界限及8秒查询超时保留。正文检索的top-k条数不改变，也不宣称所有资料自动全部发送。
+- 模型适配器默认max_output_tokens=None：OpenAI兼容请求省略max_tokens，Ollama省略num_predict，显式合法整数仍生效。配置自检的显式512 token预算不改。模型服务自身上下文/输出限制仍有效，length终止不作为完整成功，不自动补写或再次调用。
+- 聊天提示词、流式/非流式回答回执及TUI不再限制回答为8000字符；只有完整终态进已确认历史，输出和尾帧必须一致。后续请求保留完整历史；超过用户输入8000/历史20条/整轮64000时明确拒绝并保留输入，不静默切片。显式Agent任务仍受10000字符目标校验且不丢弃旧对话限制。
+- 保留80秒回答总时限、10秒心跳、模型HTTP响应字节和TUI累计SSE字节保护；这些是运行失败边界，不把片段伪装为正常完整结果。原UNKNOWN、同键重放、审批和熔断契约不变；旧manual chat明确失败分类接线本轮未扩大。
+- 默认省略模型输出参数依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)与[Ollama Modelfile](https://github.com/ollama/ollama/blob/main/docs/modelfile.mdx)。这不承诺供应商无限输出。
+
+
+## CORE.CONFIG.1 配置应用补充契约
+
+本机 GET/PUT `/admin/v1/extensions/{id}/config` 返回 `extension_version` 与 `application`，后者含 `saved_digest`、`desired_digest`、`generation`、`state` 与脱敏运行副本确认。PUT仅保存非秘密草稿。POST同路径`/apply`必须绑定`expected_digest`和`extension_version`，仅对已安装启用扩展有效；保存内容或已安装版本变化返回冲突，同一目标重复应用不新增代际、不重启已确认副本。
+
+运行配置与保存稿分离；无旁文件的旧配置按原运行快照兼容，首次修改先保留旧运行值。所有实际进程实例持有OS锁标识活性，死亡进程不冒充运行副本；在途调用结束后切换，只有活跃副本都确认目标摘要才显示APPLIED。配置更换跨越只读请求时拒绝发布旧授权资料；外部动作回执保留原语义，绝不因配置应用自动重试。凭据继续只允许句柄，不输出原始配置到运行状态。
+
+知识插件0.1.4候选的workspace元数据区分索引PENDING/READY/UNAVAILABLE及固定原因；授权根规范路径/根键/扫描参数绑定摘要写在现有knowledge_meta中。缺摘要或不匹配的旧索引保持不可用，完整成功扫描才能确认READY。无新增核心业务分支或核心数据库迁移；候选安装另需精确材料授权。
+
+
+## CORE.STARTUP.1 / CORE.TOOLSET.1 / CORE.DIAGNOSTIC.1 补充契约（2026-11-07）
+
+- 扩展生命周期命令认领、执行与恢复使用共享的持久操作锁；PostgreSQL 实现使用独立连接持有 advisory lock，不占满业务连接池。另一宿主正在恢复的 STARTING 不再被误判为崩溃残留；真正无所有者的中间状态和健康失败仍隔离。取消 HTTP 等待不会取消已持久接受的生命周期操作。
+- 本机任务 trace 的 toolset 是只读比较投影：缺 tools 字段是 UNBOUND，显式空快照仍是已绑定；新增工具、版本/授权变化分别解释，不重写原快照。can_recreate 只允许安全的等待/暂停/终态且无未决审批或外部动作；TUI“携原目标新建”再次核对原任务版本与可创建状态，只复制原目标，不复制检查点、旧审批或未决动作。
+- 任务失败诊断与宿主启动诊断使用固定错误码、固定说明和关联编号。trace 依据白名单重建文字，不输出存储的裸异常、模型内容或工具参数。失败分类不改变原状态机、UNKNOWN 处理、熔断或重试规则。
+- API 请求编号只接受 req_ 加32位小写十六进制；其他输入生成新编号。TUI只显示固定错误说明与合法 req_/diag_ 编号，不显示供应商原始错误正文。模型提示明确“工具缺失”不能推断为“用户未配置目录”。
+
+
+## CORE.HOST.1 正常重启契约（2026-11-07）
+
+restart 通过独立协调锁串行化，冻结票据的读取/比较/更新使用跨进程 OS 锁。旧守护器持有的锁释放前不启动替代实例；停止请求绑定启动身份，新实例不会消费旧实例的停止请求。正常 HTTP 子进程主动退出，Agent 停止领取；有界等待后仅回收守护器自己的进程树。
+
+组件就绪来自本次 boot、实际 PID/直接父 PID 归属和启动就绪记录；Agent 另要求新鲜心跳。Windows 虚拟环境启动器与实际 Python PID 不同，以本次 boot 与受监督直接父子关系核对，不放弃进程归属校验。该元数据仅存本机控制目录，公共 health 内容不增加 PID/路径。
+
+重启后只在本次冻结票据仍有效且原本未冻结时恢复领取；后到人工或故障冻结不可被覆盖。旧协议守护器拒绝自动 restart，需一次正常 stop/serve 加载新版；不使用旧 PID 强杀或伪称就绪。原 UNKNOWN、审批和队列恢复语义不改变。
+
+
+## CORE.COMPAT.1 工作台协议与展示（2026-11-07）
+
+本机只读 GET `/admin/v1/workbench/capabilities` 返回 `protocol_version: 1`、信息性 `server_version` 及固定功能集合。沿用回环、专用头、无 Origin 和 no-store。TUI 校验严格整数协议（不接受 bool）、必需功能及声明形状，允许功能超集；404、协议不符或畸形声明提示 WORKBENCH_INCOMPATIBLE，网络故障仍单独分类。该只读协商总时限5秒，不消费幂等键或重试原命令。
+
+TUI 初始刷新、远程操作前及远程确认返回后协商。确认窗口期间后台变更也必须重新核对；此检查不是跨进程原子锁，后端仍独立执行权限、版本和幂等校验。未通过时停用远程按钮并提示重启更新后的后台，不降级自动任务为普通问答；本机模型设置独立读取，原输入、已确认历史和 pending 命令保留。F5或后续定时刷新可重新检查。旧后台须更新，本项不维护多代旧API的写入兼容。
+
+任务展示仅识别当前两种精确宿主参考对话包装及合法的 role/content 数组；任意用户 JSON、错误结构、重复键、额外键或尾部内容保持原样。列表显示目标，详情和确认页按角色显示完整参考对话。格式匹配不证明内容来源；数据库目标、新建任务原文、权限与审批判断仍使用原始值，不使用展示投影。
+
+
+## CORE.KNOWLEDGE.CONTENT.1 授权文件直读（0.1.5）
+
+- Manifest 可选 `context_provider_descriptions` 为已声明 ContextProvider ID 到非空描述的映射，缺省空；目录只读发布 `provider_descriptions`，持久化 JSON 兼容旧记录，无迁移。描述是不可信能力数据，不是授权。宿主不包含知识插件 ID、目录路径或业务分支；SDK/RPC 不变。
+- personal.knowledge 增加 READ `knowledge.read({resource})` 和 `knowledge.document` 上下文提供者，query 为一个精确 `knowledge://root_key/相对路径` 或带扩展名的唯一文件名。显式 URI 仅在已配置根内解析；文件名完整扫描不确定或同名时不给正文，返回状态与候选引用。禁止任意绝对路径、穿越、隐藏项规则绕过和链接逃逸。
+- 直读不依赖索引、不执行 reindex。读取前后核对源文件身份，复用 TXT/Markdown/PDF 抽取器；成功提供完整抽取正文、源 URI、原字节哈希与整文件 locator；明确按 SENSITIVE/USER_SOURCE 处理。来源被改动、缺失、超限或不支持时不给部分正文，不输出底层异常／绝对路径。
+- 关键词检索在索引待就绪时提供独立状态证据，不能以空结果暗示资料不存在；工作区概览始终只是元数据。通用路由区分概览、关键词和单文件内容，单文件读取／对正文回答为 RETRIEVE，实际写入、索引或发送仍按 TASK/原审批流程处理。
+- 本轮不改变根配置、旧索引、审批、风险值、外部动作幂等或原任务工具快照。原实例已获本人授权升级0.1.5并重启，配置/索引/原任务保留；测试只使用合成资料，不宣称真实模型意图或新增真机业务验收。
+
+
+## CORE.KNOWLEDGE.INDEX.1 索引状态与文件资源（0.1.6）
+
+- `knowledge_meta.value` 写入 JSON 对象，由宿主 codec 负责序列化。插件读兼容一次历史 JSON 字符串对象；畸形、多层字符串或非对象结果不作为有效绑定。绑定摘要、schema 和扫描状态校验不放宽，条件更新兼容旧字符串和新对象，旧扫描不能认证新扫描完成。
+- `knowledge.reindex` 保留现有字段，新增 `skipped_empty`（整数）、`skipped`（明确的空文本诊断列表）、`index_state/index_reason`（完成条件更新后实际读取的绑定状态）。`versions_built=0` 可表示完整复核后复用既有版本；此时归入 `unchanged`，不得仅凭该计数断言失败或成功。
+- 仅完整读取且成功 UTF-8 解码的全空白 TXT/Markdown 可跳过；如果已有旧正文，先 CAS 删除其索引。空 PDF、抽取无片段、解码或读取失败仍阻断完整扫描；未完成删除或版本竞争也不能误报 READY。文件来源哈希校验及根目录隔离不变，不修改原文件。
+- `knowledge.workspace` 文件项新增已编码的 `source_uri`；清单本身的 `knowledge-workspace://` 和状态证据 URI 不可用于文件直读。`knowledge.read` 输入 Schema 说明精确资源格式，经通用工具注册进入 Planner，无业务专用宿主路由。
+- 无迁移、SDK/RPC、风险等级或审批/熔断变更。候选本地验证不等于原实例部署或真实模型回答验收；后续本人授权后已安装0.1.6、受控重启并完成一次原目录全文索引/检索核验，状态READY，未调用模型。具体证据见NEXT_STEPS的本项记录。

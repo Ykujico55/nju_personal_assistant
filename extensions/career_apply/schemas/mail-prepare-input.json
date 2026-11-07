@@ -1,0 +1,68 @@
+{
+  "type": "object",
+  "properties": {
+    "to": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 254
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "resume": {
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "filename",
+        "sha256",
+        "size_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "prepared_at": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "required": [
+    "to",
+    "subject",
+    "body",
+    "resume",
+    "prepared_at"
+  ],
+  "additionalProperties": false
+}

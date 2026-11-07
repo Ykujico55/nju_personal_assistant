@@ -14,6 +14,7 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,51 @@ def _print(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
 
 
+def _operation_path(operation_id: str) -> str:
+    return "/admin/v1/extension-operations/" + urllib.parse.quote(operation_id, safe="")
+
+
+def _operation_recovery(admin_url: str, operation_id: str) -> dict[str, object]:
+    return {
+        "operation_id": operation_id,
+        "recovery_command": [
+            "assistantctl", "--admin-url", admin_url, "extension", "operation", operation_id
+        ],
+    }
+
+
+def _unreachable(
+    admin_url: str,
+    error: OSError,
+    *,
+    operation_id: str | None = None,
+    unconfirmed_extension: str | None = None,
+) -> int:
+    diagnostic: dict[str, object] = {
+        "ok": False, "error": "ADMIN_API_UNREACHABLE", "message": str(error)
+    }
+    if operation_id is not None:
+        diagnostic.update(_operation_recovery(admin_url, operation_id))
+        diagnostic["message"] = (
+            "Operation status is unavailable. Query this operation; do not resubmit it. "
+            + str(error)
+        )
+    elif unconfirmed_extension is not None:
+        diagnostic.update({
+            "error": "COMMAND_RESULT_UNCONFIRMED",
+            "message": (
+                "The command may have been accepted, but no operation ID was received. "
+                "Check the extension status first; do not resubmit the command. " + str(error)
+            ),
+            "recovery_command": [
+                "assistantctl", "--admin-url", admin_url,
+                "extension", "status", unconfirmed_extension,
+            ],
+        })
+    _print(diagnostic)
+    return 2
+
+
 def _poll_operation(
     admin_url: str,
     operation_id: str,
@@ -77,11 +123,12 @@ def _poll_operation(
     deadline = time.monotonic() + timeout_seconds
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
-        status, body = _request(
-            admin_url, "GET", f"/admin/v1/extension-operations/{operation_id}"
-        )
+        try:
+            status, body = _request(admin_url, "GET", _operation_path(operation_id))
+        except OSError as exc:
+            return _unreachable(admin_url, exc, operation_id=operation_id)
         if status != 200:
-            _print(body)
+            _print({**body, **_operation_recovery(admin_url, operation_id)})
             return 1
         last = body
         if body.get("status") in _TERMINAL_STATUSES:
@@ -94,6 +141,7 @@ def _poll_operation(
             "error": "OPERATION_TIMEOUT",
             "message": f"operation did not finish within {timeout_seconds:g} seconds",
             "last": last,
+            **_operation_recovery(admin_url, operation_id),
         }
     )
     return 1
@@ -152,9 +200,12 @@ def _reject_plan(admin_url: str, plan_id: str) -> None:
 def _install_or_upgrade(
     admin_url: str, source: str, *, assume_yes: bool, upgrade_id: str | None
 ) -> int:
-    status, preview = _request(
-        admin_url, "POST", "/admin/v1/extensions/inspect", {"source": source}
-    )
+    try:
+        status, preview = _request(
+            admin_url, "POST", "/admin/v1/extensions/inspect", {"source": source}
+        )
+    except OSError as exc:
+        return _unreachable(admin_url, exc)
     if status != 200:
         _print(preview)
         return 1
@@ -193,7 +244,12 @@ def _install_or_upgrade(
         "preview_hash": preview.get("preview_hash"),
         "accepted_warning": True,
     }
-    status, body = _request(admin_url, "POST", endpoint, payload)
+    try:
+        status, body = _request(admin_url, "POST", endpoint, payload)
+    except OSError as exc:
+        return _unreachable(
+            admin_url, exc, unconfirmed_extension=str(preview.get("extension_id"))
+        )
     if status not in (200, 202):
         _print(body)
         return 1
@@ -205,6 +261,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admin-url", default="http://127.0.0.1:8001")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor")
+    tui = commands.add_parser("tui", help="local conversational Agent workbench")
+    tui.add_argument("--profile", type=Path, help="explicit host profile to edit")
+    tui.add_argument("--model-config", type=Path, default=Path("var/config/model.json"))
+    tui.add_argument("--refresh", type=int, choices=range(2, 31), default=5)
+    tui.add_argument("--admin-url", default=argparse.SUPPRESS)
     add_secret_commands(commands)
     ehall = commands.add_parser("ehall", help="manually validate ehall navigation and filling")
     ehall.add_argument(
@@ -227,6 +288,8 @@ def build_parser() -> argparse.ArgumentParser:
     actions.add_parser("list")
     status = actions.add_parser("status")
     status.add_argument("extension_id")
+    operation = actions.add_parser("operation", help="query one accepted operation; never resubmit")
+    operation.add_argument("operation_id")
     inspect = actions.add_parser("inspect")
     inspect.add_argument("source")
     scaffold = actions.add_parser("scaffold")
@@ -247,6 +310,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "tui":
+        from personal_assistant.cli.tui.launch import run
+
+        return run(
+            admin_url=args.admin_url,
+            profile=args.profile,
+            model_config=args.model_config,
+            refresh=args.refresh,
+        )
     if args.command == "secret":
         return run_secret_command(args)
     if args.command == "doctor":
@@ -278,7 +350,9 @@ def main(argv: list[str] | None = None) -> int:
         return _install_or_upgrade(
             args.admin_url, args.source, assume_yes=args.yes, upgrade_id=args.extension_id
         )
-    if command == "list":
+    if command == "operation":
+        method, path, payload = "GET", _operation_path(args.operation_id), None
+    elif command == "list":
         method, path, payload = "GET", "/admin/v1/extensions", None
     elif command == "status":
         method, path, payload = "GET", f"/admin/v1/extensions/{args.extension_id}", None
@@ -292,8 +366,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         status_code, result = _request(args.admin_url, method, path, payload)
     except OSError as exc:
-        _print({"ok": False, "error": "ADMIN_API_UNREACHABLE", "message": str(exc)})
-        return 2
+        return _unreachable(
+            args.admin_url, exc,
+            operation_id=args.operation_id if command == "operation" else None,
+            unconfirmed_extension=(
+                args.extension_id if method == "POST" and command != "inspect" else None
+            ),
+        )
+    if command == "operation":
+        _print({**result, **_operation_recovery(args.admin_url, args.operation_id)})
+        return 0 if status_code == 200 and result.get("status") != "FAILED" else 1
     if command in {"enable", "disable", "rollback", "uninstall"} and status_code in (200, 202):
         return _poll_operation(args.admin_url, str(result.get("id")))
     _print(result)

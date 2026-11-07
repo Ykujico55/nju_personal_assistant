@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 
 class JobState(StrEnum):
@@ -78,3 +78,12 @@ class JobQueuePort(Protocol):
     ) -> Job: ...
 
     async def get(self, job_id: str) -> Job | None: ...
+
+    async def list_ready_tasks(self, *, limit: int = 100) -> tuple[Job, ...]: ...
+
+    async def move_ready(
+        self, *, job_id: str, expected_version: int,
+        direction: Literal["up", "down", "top", "bottom"],
+    ) -> Job: ...
+
+    async def cancel_ready_for_task(self, task_id: str) -> tuple[Job, ...]: ...

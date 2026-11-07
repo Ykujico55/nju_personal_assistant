@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
+from .binding import INDEX_BINDING_KEY, binding_fingerprint, read_index_status
 from .chunking import chunk_document
 from .embedding import (
     MAX_EMBEDDING_TEXTS,
@@ -115,6 +116,9 @@ class KnowledgeIndex:
         self.extension_id = extension_id
         self.extension_version = extension_version
         self._ready = False
+        self._binding_hash = binding_fingerprint(
+            self.roots, max_file_bytes=max_file_bytes, include_hidden=include_hidden
+        )
 
     @property
     def embedding_identity(self) -> EmbeddingIdentity:
@@ -129,6 +133,9 @@ class KnowledgeIndex:
             return
         await self.store.migrate(self.migrations)
         self._ready = True
+
+    async def index_status(self) -> dict[str, str]:
+        return await read_index_status(self.store, self._binding_hash)
 
     # -- reconciliation -----------------------------------------------------
 
@@ -266,6 +273,11 @@ class KnowledgeIndex:
             raise ValueError("mode must be 'incremental' or 'full'")
         await self.ensure_ready()
         run_id = uuid.uuid4().hex
+        binding = {
+            "schema": 1, "binding_hash": self._binding_hash,
+            "scan_id": run_id, "state": "PENDING",
+        }
+        await self.store.set_meta(INDEX_BINDING_KEY, binding)
         # A crashed or cancelled run may have left BUILDING candidates behind;
         # clean only stale ones so concurrent live builds are never disturbed.
         await self.store.discard_orphan_building_versions(
@@ -329,8 +341,11 @@ class KnowledgeIndex:
                 source_id=source.source_id,
                 generation=generation,
             )
+        empty_entries: set[tuple[str, str]] = set()
         for entry in diff.added:
-            await self._build(entry, None, report, errors, run_id=run_id)
+            await self._build(
+                entry, None, report, errors, run_id=run_id, empty_entries=empty_entries
+            )
         for entry, source in diff.modified:
             await self._build(
                 entry,
@@ -338,6 +353,7 @@ class KnowledgeIndex:
                 report,
                 errors,
                 run_id=run_id,
+                empty_entries=empty_entries,
             )
         for source in diff.deleted:
             generation = await self.store.delete_source(
@@ -360,6 +376,28 @@ class KnowledgeIndex:
                 generation=generation,
             )
         report.errors = tuple(errors)
+        if not errors:
+            # A lost version claim or deletion CAS is not a completed scan.
+            # Compare metadata as well so a late scan cannot certify a newer run.
+            active = await self.store.fetch_all_sources()
+            expected = {
+                (entry.root_key, entry.relative_path): entry for entry in scanned
+                if (entry.root_key, entry.relative_path) not in empty_entries
+            }
+            observed = {(source.root_key, source.relative_path): source
+                        for source in active.values()}
+            complete = expected.keys() == observed.keys() and all(
+                observed[key].active_version
+                and observed[key].content_hash == entry.content_hash
+                for key, entry in expected.items()
+            )
+            if complete:
+                await self.store.compare_set_meta(
+                    INDEX_BINDING_KEY, binding, dict(binding, state="READY")
+                )
+        status = await self.index_status()
+        report.index_state = status["index_state"]
+        report.index_reason = status["index_reason"]
         return report
 
     async def _needs_rebuild(
@@ -465,6 +503,7 @@ class KnowledgeIndex:
         errors: list[ExtractionDiagnostic],
         *,
         run_id: str,
+        empty_entries: set[tuple[str, str]],
     ) -> None:
         root = self._roots_by_key.get(entry.root_key)
         if root is None:
@@ -498,6 +537,10 @@ class KnowledgeIndex:
                     path=entry.relative_path,
                 )
             )
+            return
+        if _is_empty_text(data, entry.media_type):
+            empty_entries.add((entry.root_key, entry.relative_path))
+            await self._skip_empty(entry, source, report, errors)
             return
         try:
             document = extract_document(
@@ -545,6 +588,8 @@ class KnowledgeIndex:
                 and source.active_version == version_id
                 and source.content_hash == content_hash
             ):
+                report.modified -= 1
+                report.unchanged += 1
                 return
             if source is None:
                 claimed = None
@@ -574,6 +619,8 @@ class KnowledgeIndex:
                     source.active_version == version_id
                     and source.content_hash == content_hash
                 ):
+                    report.added -= 1
+                    report.unchanged += 1
                     return
                 event_type = EVENT_ADDED if created else EVENT_MODIFIED
                 previous_hash = None if created else source.content_hash
@@ -650,6 +697,52 @@ class KnowledgeIndex:
             previous_hash=previous_hash,
             source_id=source_id,
             generation=generation,
+        )
+
+    async def _skip_empty(
+        self,
+        entry: ScannedFile,
+        source: Any,
+        report: ReconcileReport,
+        errors: list[ExtractionDiagnostic],
+    ) -> None:
+        """Exclude only proven empty text; old indexed content must be removed."""
+        report.skipped_empty += 1
+        report.skipped += (ExtractionDiagnostic(
+            code=ExtractionDiagnosticCode.EMPTY_FILE,
+            message="UTF-8 text is empty; no index content is needed",
+            path=entry.relative_path,
+        ),)
+        if source is None:
+            report.added -= 1
+            return
+        report.modified -= 1
+        try:
+            generation = await self.store.delete_source(
+                source_id=source.source_id,
+                reason_hash=source.content_hash,
+                expected_root_key=source.root_key,
+                expected_relative_path=source.relative_path,
+                expected_generation=source.generation,
+            )
+        except Exception:
+            errors.append(ExtractionDiagnostic(
+                code=ExtractionDiagnosticCode.BUILD_FAILED,
+                message="empty source index cleanup failed",
+                path=entry.relative_path,
+            ))
+            return
+        if generation is None:
+            errors.append(ExtractionDiagnostic(
+                code=ExtractionDiagnosticCode.BUILD_FAILED,
+                message="empty source index changed during cleanup; retry reconciliation",
+                path=entry.relative_path,
+            ))
+            return
+        report.deleted += 1
+        report.events += await self._event(
+            EVENT_MODIFIED, entry, previous_hash=source.content_hash,
+            source_id=source.source_id, generation=generation,
         )
 
     async def _ensure_embedding_dimension(self) -> None:
@@ -776,7 +869,8 @@ class KnowledgeIndex:
             filters, authorized_roots={root.key for root in self.roots}
         )
         await self.ensure_ready()
-        if not normalized_filters.get("root_keys"):
+        if (not normalized_filters.get("root_keys")
+                or (await self.index_status())["index_state"] != "READY"):
             # No authorized roots (or every requested root was unauthorized):
             # the authorization boundary wins immediately, before any query.
             return SearchOutcome(
@@ -835,6 +929,12 @@ class KnowledgeIndex:
         only use the body of a verified CURRENT source.
         """
 
+        if (await self.index_status())["index_state"] != "READY":
+            # Old citations cannot prove the current root binding, even when a
+            # replacement root happens to contain identical names and bytes.
+            return [SearchResult(record=record, status=EvidenceStatus.STALE,
+                                 score=scores[i] if i < len(scores) else 0.0)
+                    for i, record in enumerate(records)]
         evaluated: list[SearchResult] = []
         for index, record in enumerate(records):
             status, observed_hash = await self._verify_with_hash(record)
@@ -845,6 +945,8 @@ class KnowledgeIndex:
         return evaluated
 
     async def verify(self, record: Any) -> EvidenceStatus:
+        if (await self.index_status())["index_state"] != "READY":
+            return EvidenceStatus.STALE
         status, _observed_hash = await self._verify_with_hash(record)
         return status
 
@@ -901,6 +1003,17 @@ class KnowledgeIndex:
             source_id=record.source_id,
             generation=generation,
         )
+
+
+def _is_empty_text(data: bytes, media_type: str) -> bool:
+    # An extractor's EMPTY_FILE (for example an image-only PDF) is not proof
+    # that the original document is empty. Only decoded text can be skipped.
+    if media_type not in {"text/plain", "text/markdown"}:
+        return False
+    try:
+        return not data.decode("utf-8-sig").strip()
+    except UnicodeDecodeError:
+        return False
 
 
 @dataclass(slots=True)

@@ -5,8 +5,17 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from uuid import uuid4
 
+from personal_assistant.core.jobs.management import (
+    TASK_JOB_KINDS,
+    order_key,
+    reordered,
+    task_job,
+    validate_limit,
+    validate_move,
+)
 from personal_assistant.core.jobs.queue import Job, JobState, LeaseConflict
 
 
@@ -76,7 +85,7 @@ class InMemoryJobQueue:
                     candidates.append(job)
             if not candidates:
                 return None
-            job = min(candidates, key=lambda item: (item.available_at, item.created_at, item.id))
+            job = min(candidates, key=order_key)
             job.state = JobState.LEASED
             job.lease_owner = worker_id
             job.lease_until = now + timedelta(seconds=lease_seconds)
@@ -145,6 +154,43 @@ class InMemoryJobQueue:
         async with self._lock:
             job = self._jobs.get(job_id)
             return deepcopy(job) if job is not None else None
+
+    async def list_ready_tasks(self, *, limit: int = 100) -> tuple[Job, ...]:
+        validate_limit(limit)
+        async with self._lock:
+            now = _utcnow()
+            return tuple(deepcopy(job) for job in sorted(self._jobs.values(), key=order_key)
+                         if job.state is JobState.READY and job.available_at <= now
+                         and task_job(job))[:limit]
+
+    async def move_ready(
+        self, *, job_id: str, expected_version: int,
+        direction: Literal["up", "down", "top", "bottom"],
+    ) -> Job:
+        validate_move(direction, expected_version)
+        async with self._lock:
+            now = _utcnow()
+            jobs = sorted((job for job in self._jobs.values()
+                           if job.state is JobState.READY and job.available_at <= now),
+                          key=order_key)
+            ordered = reordered(jobs, job_id, expected_version, direction)
+            if [job.id for job in ordered] != [job.id for job in jobs]:
+                for index, job in enumerate(ordered):
+                    job.metadata["queue_priority"] = len(ordered) - index
+                    job.version += 1
+            return deepcopy(self._jobs[job_id])
+
+    async def cancel_ready_for_task(self, task_id: str) -> tuple[Job, ...]:
+        async with self._lock:
+            changed = []
+            for job in self._jobs.values():
+                if (job.state is JobState.READY and job.kind in TASK_JOB_KINDS
+                        and job.payload.get("task_id") == task_id):
+                    job.state = JobState.FAILED
+                    job.error_code = "TASK_CANCELLED"
+                    self._release(job)
+                    changed.append(deepcopy(job))
+            return tuple(changed)
 
     def _require_lease(self, job_id: str, worker_id: str) -> Job:
         job = self._jobs.get(job_id)

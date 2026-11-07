@@ -54,6 +54,18 @@ Admin 页面为 `http://127.0.0.1:18101/admin/ui/`，只允许本机。内存模
 
 用户选择启用登录启动时调用 `-Action install-startup`；撤销为 `uninstall-startup`。只注册当前用户的 InteractiveToken 登录任务，不覆盖同名任务，不在 Session 0 启动可见浏览器。本轮未注册任务。排查后显式 `-Action resume`；UNKNOWN 不因 resume 自动重发。
 
+### 正常重启（CORE.HOST.1，已部署）
+
+~~~powershell
+.\scripts\assistant-host.ps1 -Action restart -Profile var/config/host.json
+~~~
+
+`restart` 保留原来的 Admin 模式，先冻结领取、正常停止旧守护器及其子进程，等锁释放后隐藏启动新守护器，并核对本次启动身份和全部组件就绪。原本冻结的实例继续冻结；原本未冻结的实例仅在就绪且期间没有新的人工/故障冻结时恢复领取。失败返回明确错误码和关联编号，保持冻结；不会按陈旧 PID 结束不明进程。
+
+重复 `host_entry serve` 返回 `HOST_ALREADY_RUNNING`，不冻结现有服务。重启进行中再次请求返回 `HOST_RESTART_IN_PROGRESS`。直接 `stop` 再 `serve` 沿用原来“停止后保持冻结”的行为，不等同于保留领取策略的 `restart`。
+
+仍运行旧版守护器、缺少启动身份记录时，返回 `HOST_RESTART_UNSUPPORTED`，不猜测或直接强杀。首次加载本次代码需要正常 `stop`，确认旧进程退出，再使用原 profile 和原 Admin 模式 `serve` 一次；以后即可使用 `restart`。2026-11-07已按本人要求完成原实例首轮stop/serve和后续restart核验；现在可使用上述restart命令。
+
 ## 4. 加密备份与空目标恢复
 
 本人运行 `scripts/configure-backup.py` 生成/录入独立恢复密钥，并将句柄加入 host profile；需要恢复时应保留本人离线副本。不要将密钥交给聊天或日志。定期备份默认每六小时一次，数据库全快照、制品按内容哈希增量存储，AES-GCM 认证加密；本机保留7日/4周/6月代表点。离线期间只补最近一次。可选异地目录复制的文件仍加密，异地保留需用户单独管理。
@@ -63,6 +75,10 @@ Admin 页面为 `http://127.0.0.1:18101/admin/ui/`，只允许本机。内存模
 .\.venv-win\Scripts\python.exe -Xutf8 scripts/assistant-backup.py list --profile var/config/host.json
 .\.venv-win\Scripts\python.exe -Xutf8 scripts/assistant-backup.py verify --profile var/config/host.json --backup-id <备份文件名>
 ```
+
+备份覆盖的是实现允许恢复的PostgreSQL表及artifacts中登记的制品，不能当作整台电脑或整个var目录镜像。以下内容需另行保管：知识库/简历授权目录的原文件；开发插件workspace_root（候选/发布源码、基线、SQLite及控制记录）；招聘独立CLI的.local/career.sqlite3；扩展包/环境与主机配置。Windows凭据、浏览器会话和授权材料不应混入普通源码副本。
+
+独立工作区副本应在对应插件停用、验证/安装等写入者退出后完整保存到本人控制的加密位置，并核对文件清单/摘要。旧控制记录不是新机器的执行许可；目前没有开发工作区自动安全恢复，不能复制旧control后直接启用。正式恢复应另行核对材料并重新批准验证/安装。
 
 恢复只接受新的 `*_restore` 或 `*_test` 数据库名和新的制品目录，先只读检查空目标，再迁移和事务导入；不同凭据句柄指向原库也会拒绝。备份迁移版本/哈希必须与恢复代码一致。扩展 Schema 必须先经批准安装后才能恢复其业务数据，备份不执行包中的 SQL/代码。
 
@@ -87,4 +103,10 @@ apply 先生成加密恢复点、固定复核材料副本、建立新独立环�
 
 ## 6. 本轮未完成的真实验收
 
-F07正式真实事务 Adapter/完整权威材料与 Gateway/Outbox实站链路；手机最新版脚本、丢回执重试、正式审批及缓存；独立Cloudflare中断；无Google设备的ntfy真实订阅/投递/撤销/锁屏/点击；真实邮件账号和受控发件、冷启动/长时间运行、生产备份恢复和升级演练。详见集中报告。核心能启动不等于这些场景已通过。
+截至2026-10-30：手机v16脚本/缓存、丢回执同键重试、正式审批、独立Cloudflare中断及ntfy订阅/锁屏/撤销恢复/点击已有真机补证；Cloudflare恢复后本人手动刷新恢复，不冒称自动恢复。F08.6仍因独立完整门禁的F07创建超时记录保持BLOCKED，见最新NEXT_STEPS。F07正式真实事务完整材料与Gateway/Outbox实站链路、当前版本受控真实发件、BOSS实站、长期运行和完整迁机/升级仍待验证。此前加密备份隔离恢复通过仅对应当时固定材料，不涵盖新增开发工作区。
+
+## 管理请求断连后的核对
+
+CLI已收到operation_id时，用assistantctl extension operation <operation_id>单次读取原操作，PENDING/RUNNING不是完成；不要重新执行install/upgrade。若POST丢回执且没有ID，只能先读取扩展状态核对，不能凭空恢复ID或用新键盲目重发。
+
+本机Admin安装/升级依据静态预览的mode，确认后绑定原材料；页内刷新保留未知命令。配置PUT未提供CAS/命令回执，页面先读取当前配置；保存丢回执后只能GET原扩展核对，当前值不同由本人明确选择，选择本身不写入。整页退出会提醒但不持久化原请求，重新打开后须先只读核对；不能把它当作跨重启去重能力。

@@ -31,7 +31,7 @@ class OllamaConfig:
     base_url: str = "http://127.0.0.1:11434"
     timeout_seconds: float = DEFAULT_LOCAL_TIMEOUT_SECONDS
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    max_output_tokens: int | None = DEFAULT_MAX_OUTPUT_TOKENS
 
 
 class OllamaChatProvider(HttpJsonModelProvider):
@@ -67,12 +67,14 @@ class OllamaChatProvider(HttpJsonModelProvider):
         )
 
     def _build_payload(self, request: ModelRequest, model_id: str) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "model": model_id,
             "messages": [{"role": "user", "content": render_request_text(request)}],
             "stream": False,
-            "options": {"num_predict": self._max_output_tokens},
         }
+        if self._max_output_tokens is not None:
+            payload["options"] = {"num_predict": self._max_output_tokens}
+        return payload
 
     def _parse_output(
         self, raw: bytes, recipient: RecipientIdentity

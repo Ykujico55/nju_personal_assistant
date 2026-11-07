@@ -1,0 +1,18 @@
+{
+  "type": "object",
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^cand_[a-f0-9]{32}$"
+    },
+    "candidate_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "required": [
+    "candidate_id",
+    "candidate_hash"
+  ],
+  "additionalProperties": false
+}

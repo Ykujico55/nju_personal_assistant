@@ -128,9 +128,7 @@ def coerce_context_field(field: object) -> ContextField:
         candidate = None
         name = value = source = None
         raise ValidationError("model request fields must be valid context fields")
-    return ContextField(
-        name=name, value=value, classification=classification, source=source
-    )
+    return ContextField(name=name, value=value, classification=classification, source=source)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +187,20 @@ class ModelOutput:
     usage: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class ModelStreamEvent:
+    """Incremental text, or one final output after transport completion."""
+
+    delta: str = ""
+    output: ModelOutput | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.delta, str) or bool(self.delta) == (self.output is not None):
+            raise ValidationError("stream event must contain text or final output")
+        if self.output is not None and not isinstance(self.output, ModelOutput):
+            raise ValidationError("invalid final model output")
+
+
 # Usage counters are the only response metadata persisted beyond the completion
 # text.  Only these well-known, adapter-owned keys may ever reach an audit
 # record; anything else a provider returns is dropped rather than trusted.
@@ -211,11 +223,7 @@ def bounded_usage(payload: Any, allowed: frozenset[str]) -> dict[str, int]:
     usage: dict[str, int] = {}
     for key in allowed:
         value = payload.get(key)
-        if (
-            isinstance(value, int)
-            and not isinstance(value, bool)
-            and value >= 0
-        ):
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             usage[key] = value
     return usage
 

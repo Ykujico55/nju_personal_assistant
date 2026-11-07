@@ -55,6 +55,18 @@ class ModelProviderProtocolError(ModelProviderError):
     code = "MODEL_PROVIDER_PROTOCOL_ERROR"
 
 
+class ModelOutputTruncatedError(ModelProviderProtocolError):
+    """The provider explicitly ended an incomplete response at its token limit."""
+
+    code = "MODEL_OUTPUT_TRUNCATED"
+
+
+class ModelOutputFilteredError(ModelProviderProtocolError):
+    """The provider explicitly ended the response because of content filtering."""
+
+    code = "MODEL_OUTPUT_FILTERED"
+
+
 class ModelProviderResponseTooLargeError(ModelProviderProtocolError):
     code = "MODEL_PROVIDER_RESPONSE_TOO_LARGE"
 

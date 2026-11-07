@@ -91,6 +91,7 @@ class ExtensionManifest:
     migrations: tuple[str, ...] = ()
     forms: tuple[str, ...] = ()
     capabilities: DeclaredCapabilities = field(default_factory=DeclaredCapabilities)
+    context_provider_descriptions: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def slots(self) -> Mapping[str, tuple[str, ...]]:
@@ -155,6 +156,7 @@ class ManifestParser:
             "healthcheck",
             "tools",
             "capabilities",
+            "context_provider_descriptions",
             *_SLOT_KEYS,
         }
         unknown = set(raw) - allowed
@@ -197,6 +199,9 @@ class ManifestParser:
         slot_values = {
             key: _identifier_list(raw.get(key, []), key) for key in _SLOT_KEYS
         }
+        context_descriptions = _context_provider_descriptions(
+            raw.get("context_provider_descriptions", {}), slot_values["context_providers"],
+        )
         capability_ids = [tool.id for tool in tools]
         capability_ids.extend(item for values in slot_values.values() for item in values)
         duplicates = _duplicates(capability_ids)
@@ -239,12 +244,28 @@ class ManifestParser:
             state_schema_version=state_schema_version,
             healthcheck=_required_string(raw, "healthcheck"),
             tools=tools,
+            context_provider_descriptions=context_descriptions,
             capabilities=DeclaredCapabilities(
                 required=required_capabilities,
                 optional=optional_capabilities,
             ),
             **slot_values,
         )
+
+
+
+def _context_provider_descriptions(raw: Any, declared: tuple[str, ...]) -> dict[str, str]:
+    """Optional static routing hints, never permissions or executable instructions."""
+    if not isinstance(raw, dict):
+        raise ManifestValidationError("context_provider_descriptions must be a table")
+    if not set(raw) <= set(declared):
+        raise ManifestValidationError("context descriptions must name declared providers")
+    if any(
+        not isinstance(value, str) or not value.strip() or len(value) > 2000
+        for value in raw.values()
+    ):
+        raise ManifestValidationError("context descriptions must contain 1..2000 characters")
+    return dict(raw)
 
 
 def compute_artifact_hash(extension_root: str | Path) -> str:

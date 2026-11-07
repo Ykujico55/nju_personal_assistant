@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("start", "stop", "status", "freeze", "resume", "install-startup", "uninstall-startup")]
+    [ValidateSet("start", "stop", "restart", "status", "freeze", "resume", "install-startup", "uninstall-startup")]
     [string]$Action = "status",
     [string]$Profile = "var/config/host.json"
 )

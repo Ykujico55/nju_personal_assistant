@@ -9,8 +9,11 @@ and process isolate dependencies and crashes, not malicious code.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from collections.abc import Mapping
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -24,6 +27,7 @@ from personal_assistant.core.extensions.artifact_access import (
 )
 from personal_assistant.core.extensions.async_utils import shield_cleanup
 from personal_assistant.core.extensions.config import (
+    ExtensionConfigApplyStore,
     ExtensionConfigStore,
     validate_extension_config,
 )
@@ -40,7 +44,11 @@ from personal_assistant.core.extensions.errors import (
 )
 from personal_assistant.core.extensions.lifecycle import InstalledArtifact
 from personal_assistant.core.extensions.manifest import ExtensionManifest
-from personal_assistant.core.extensions.models import ExtensionRecord, data_namespace
+from personal_assistant.core.extensions.models import (
+    ExtensionRecord,
+    ExtensionState,
+    data_namespace,
+)
 from personal_assistant.core.extensions.rpc import (
     WORKER_INPUT_FRAME_BYTES,
     ExtensionWorker,
@@ -118,6 +126,7 @@ class ProcessRuntimeSupervisor:
         max_frame_bytes: int = 4 * 1024 * 1024,
         data_access: ExtensionDataAccess | None = None,
         config_store: ExtensionConfigStore | None = None,
+        record_reader: Callable[[str], Awaitable[ExtensionRecord | None]] | None = None,
         mail_capability: MailHostCapability | None = None,
         mail_send_available: bool = False,
         artifact_access: ExtensionArtifactAccess | None = None,
@@ -129,57 +138,247 @@ class ProcessRuntimeSupervisor:
         self._max_frame_bytes = max_frame_bytes
         self._data_access = data_access
         self._config_store = config_store
+        self._record_reader = record_reader
         self._mail_capability = mail_capability
         self._mail_send_available = mail_send_available
         self._artifact_access = artifact_access
         self._browser_capability = browser_capability
         self._workers: dict[str, ExtensionWorker] = {}
         self._start_locks: dict[str, asyncio.Lock] = {}
+        self._records: dict[str, ExtensionRecord] = {}
+        self._loaded: dict[str, Mapping[str, Any]] = {}
+        self._config_failures: dict[str, str] = {}
+        self._instance_id = uuid.uuid4().hex
+        self._config_sync_task: asyncio.Task[None] | None = None
 
     async def start(self, record: ExtensionRecord) -> None:
         extension_id = record.manifest.id
-        # Serialize starts per extension so a racing enable can never spawn two
-        # workers and leak the one the supervisor does not track.
         lock = self._start_locks.setdefault(extension_id, asyncio.Lock())
         async with lock:
-            self._require_capabilities(record.manifest)
-            existing = self._workers.get(extension_id)
-            if (
-                existing is not None
-                and existing.client.running
-                and existing.manifest.version == record.manifest.version
-            ):
-                return
+            await self._start_locked(
+                record,
+                allow_starting=record.state is ExtensionState.STARTING,
+            )
+        if (
+            isinstance(self._config_store, ExtensionConfigApplyStore)
+            and self._config_sync_task is None
+        ):
+            self._config_sync_task = asyncio.create_task(self._configuration_loop())
+
+    async def _current_record(
+        self,
+        record: ExtensionRecord,
+        *,
+        allow_starting: bool = False,
+    ) -> ExtensionRecord:
+        if self._record_reader is None:
+            return record
+        current = await self._record_reader(record.manifest.id)
+        allowed = {ExtensionState.ENABLED}
+        if allow_starting:
+            allowed.add(ExtensionState.STARTING)
+        if (
+            current is None
+            or current.state not in allowed
+            or current.manifest.version != record.manifest.version
+            or current.artifact_hash != record.artifact_hash
+            or current.install_path != record.install_path
+        ):
+            raise ExtensionOperationError(
+                "EXTENSION_NOT_ENABLED",
+                "extension lifecycle changed; worker unavailable",
+            )
+        return current
+
+    async def _start_locked(
+        self,
+        record: ExtensionRecord,
+        *,
+        allow_starting: bool = False,
+    ) -> None:
+        record = await self._current_record(record, allow_starting=allow_starting)
+        extension_id = record.manifest.id
+        self._require_capabilities(record.manifest)
+        self._records[extension_id] = record
+        store = self._config_store
+        target = (
+            await store.get_applied(extension_id)
+            if isinstance(store, ExtensionConfigApplyStore)
+            else None
+        )
+        existing = self._workers.get(extension_id)
+        loaded = self._loaded.get(extension_id)
+        if (
+            existing is not None
+            and existing.client.running
+            and existing.manifest.version == record.manifest.version
+            and (
+                target is None
+                or (loaded is not None and loaded["generation"] == target["generation"])
+            )
+        ):
+            return
+        if target is not None and self._config_failures.get(extension_id) == target["generation"]:
+            raise ExtensionOperationError("CONFIG_APPLY_FAILED", "configuration is not active")
+        config: Mapping[str, Any] = (
+            target["config"]
+            if target
+            else (await store.get(extension_id) if store is not None else {})
+        )
+        if target is not None:
+            await self._report_configuration(extension_id, target, "APPLYING")
+        worker: ExtensionWorker | None = None
+        try:
+            schema = load_extension_config_schema(record.manifest)
+            if config:
+                config = validate_extension_config(schema, config)
             if existing is not None:
                 await existing.close()
                 self._workers.pop(extension_id, None)
-            config: Mapping[str, Any] = {}
-            if self._config_store is not None:
-                config = await self._config_store.get(extension_id)
-            schema = load_extension_config_schema(record.manifest)
-            # A missing config is an intentional pre-configuration state: the
-            # worker may start and report ``awaiting_configuration``.  Any
-            # persisted non-empty document is revalidated against the installed
-            # version's current schema before code starts, so an extension
-            # upgrade or a damaged file cannot inject stale configuration.
-            if config:
-                config = validate_extension_config(schema, config)
-            version_dir = Path(record.install_path or "")
             worker = _build_worker(
                 record.manifest,
-                version_dir,
+                Path(record.install_path or ""),
                 max_frame_bytes=self._max_frame_bytes,
                 host_handler=self._host_handler(record),
             )
-            try:
-                await worker.start(
-                    non_secret_config=config,
-                    timeout_seconds=self._handshake_timeout,
-                )
-            except BaseException:
-                await worker.close()
-                raise
+            await worker.start(non_secret_config=config, timeout_seconds=self._handshake_timeout)
+            if target is not None:
+                health = await worker.health(timeout_seconds=self._health_timeout)
+                if not health.get("healthy"):
+                    raise ExtensionOperationError(
+                        "HEALTHCHECK_FAILED", "configuration health failed"
+                    )
+            await self._current_record(record, allow_starting=allow_starting)
+            if self._records.get(extension_id) is not record:
+                raise ExtensionOperationError("EXTENSION_NOT_ENABLED", "worker start was stopped")
             self._workers[extension_id] = worker
+            if target is not None:
+                self._loaded[extension_id] = target
+                self._config_failures.pop(extension_id, None)
+                await self._report_configuration(extension_id, target, "RUNNING")
+        except BaseException:
+            if worker is not None:
+                await shield_cleanup(worker.close())
+            # An invalid newly applied configuration must not leave old roots callable.
+            if existing is not None:
+                await shield_cleanup(existing.close())
+            self._workers.pop(extension_id, None)
+            if target is not None:
+                self._config_failures[extension_id] = str(target["generation"])
+                await shield_cleanup(
+                    self._report_configuration(
+                        extension_id,
+                        target,
+                        "FAILED",
+                        "CONFIG_APPLY_FAILED",
+                    )
+                )
+            raise
+
+    async def _report_configuration(
+        self,
+        extension_id: str,
+        target: Mapping[str, Any],
+        state: str,
+        error_code: str | None = None,
+    ) -> None:
+        store = self._config_store
+        if isinstance(store, ExtensionConfigApplyStore):
+            loaded = self._loaded.get(extension_id)
+            await store.report_runtime(
+                extension_id,
+                self._instance_id,
+                loaded_digest=str(loaded["digest"]) if loaded else None,
+                generation=str(target["generation"]),
+                state=state,
+                error_code=error_code,
+            )
+
+    async def synchronize_configurations(self) -> None:
+        if not isinstance(self._config_store, ExtensionConfigApplyStore):
+            return
+        for extension_id, record in list(self._records.items()):
+            lock = self._start_locks.setdefault(extension_id, asyncio.Lock())
+            async with lock:
+                if self._records.get(extension_id) != record:
+                    continue
+                try:
+                    if self._record_reader is not None:
+                        durable = await self._record_reader(extension_id)
+                        if durable is not None and durable.state in {
+                            ExtensionState.STARTING,
+                            ExtensionState.DRAINING,
+                            ExtensionState.UPGRADING,
+                            ExtensionState.UNINSTALLING,
+                        }:
+                            # The lifecycle owner controls bounded start/drain.
+                            # Configuration sync neither publishes nor stops it.
+                            continue
+                    try:
+                        current = await self._current_record(record)
+                    except ExtensionOperationError:
+                        # Another host may disable, quarantine or replace this
+                        # version. Close our idle replica; never resurrect it.
+                        await self.stop(record)
+                        continue
+                    worker = self._workers.get(extension_id)
+                    loaded = self._loaded.get(extension_id)
+                    if worker is not None and not worker.client.running:
+                        if loaded is not None:
+                            self._config_failures[extension_id] = str(loaded["generation"])
+                            await self._report_configuration(
+                                extension_id,
+                                loaded,
+                                "FAILED",
+                                "CONFIG_UNAVAILABLE",
+                            )
+                        continue
+                    await self._start_locked(current)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    # Per-replica failure is persisted with a fixed diagnostic;
+                    # unchanged failed generations are never retried in this loop.
+                    continue
+
+    async def _configuration_loop(self) -> None:
+        while True:
+            await asyncio.sleep(1)
+            await self.synchronize_configurations()
+
+    @asynccontextmanager
+    async def _configured_worker(
+        self,
+        extension_id: str,
+        *,
+        retain_inflight_result: bool = False,
+    ) -> AsyncIterator[ExtensionWorker]:
+        # The same lock covers a whole original RPC. Configuration application
+        # waits for it; it does not cancel or replay an in-flight external write.
+        lock = self._start_locks.setdefault(extension_id, asyncio.Lock())
+        async with lock:
+            record = self._records.get(extension_id)
+            existing = self._workers.get(extension_id)
+            if existing is not None and not existing.client.running:
+                raise RpcCallError(-32090, "extension worker is not running")
+            if record is not None:
+                await self._start_locked(record)
+            worker = self._workers.get(extension_id)
+            if worker is None or not worker.client.running:
+                raise RpcCallError(-32090, "extension worker is not running")
+            yield worker
+            if not retain_inflight_result and record is not None:
+                await self._current_record(record)
+            if not retain_inflight_result and isinstance(
+                self._config_store, ExtensionConfigApplyStore
+            ):
+                current = await self._config_store.get_applied(extension_id)
+                loaded = self._loaded.get(extension_id)
+                if loaded is None or loaded["generation"] != current["generation"]:
+                    raise ExtensionOperationError(
+                        "CONFIG_CHANGED",
+                        "configuration changed during the read; result discarded",
+                    )
 
     def _capability_available(self, capability: str) -> bool:
         if capability == CAPABILITY_EXTENSION_DATA:
@@ -200,8 +399,7 @@ class ProcessRuntimeSupervisor:
         if missing:
             raise ExtensionOperationError(
                 "REQUIRED_CAPABILITY_UNAVAILABLE",
-                "required extension capabilities are not available: "
-                + ", ".join(sorted(missing)),
+                "required extension capabilities are not available: " + ", ".join(sorted(missing)),
             )
 
     def _host_handler(self, record: ExtensionRecord) -> HostRequestHandler | None:
@@ -221,9 +419,7 @@ class ProcessRuntimeSupervisor:
                 payload_root=Path(manifest.root),
             )
 
-            async def data_handler(
-                method: str, params: Mapping[str, Any]
-            ) -> Any:
+            async def data_handler(method: str, params: Mapping[str, Any]) -> Any:
                 return await data_access.handle(method, params, context=data_context)
 
             routes.append((HOST_DATA_METHODS, data_handler))
@@ -237,9 +433,7 @@ class ProcessRuntimeSupervisor:
                 extension_id=manifest.id, extension_version=manifest.version
             )
 
-            async def mail_handler(
-                method: str, params: Mapping[str, Any]
-            ) -> Any:
+            async def mail_handler(method: str, params: Mapping[str, Any]) -> Any:
                 return await mail_capability.handle(method, params, context=mail_context)
 
             routes.append((HOST_MAIL_METHODS, mail_handler))
@@ -253,12 +447,8 @@ class ProcessRuntimeSupervisor:
                 extension_id=manifest.id, extension_version=manifest.version
             )
 
-            async def artifact_handler(
-                method: str, params: Mapping[str, Any]
-            ) -> Any:
-                return await artifact_access.handle(
-                    method, params, context=artifact_context
-                )
+            async def artifact_handler(method: str, params: Mapping[str, Any]) -> Any:
+                return await artifact_access.handle(method, params, context=artifact_context)
 
             routes.append((HOST_ARTIFACT_METHODS, artifact_handler))
         browser_capability = self._browser_capability
@@ -271,12 +461,8 @@ class ProcessRuntimeSupervisor:
                 extension_id=manifest.id, extension_version=manifest.version
             )
 
-            async def browser_handler(
-                method: str, params: Mapping[str, Any]
-            ) -> Any:
-                return await browser_capability.handle(
-                    method, params, context=browser_context
-                )
+            async def browser_handler(method: str, params: Mapping[str, Any]) -> Any:
+                return await browser_capability.handle(method, params, context=browser_context)
 
             routes.append((HOST_BROWSER_METHODS, browser_handler))
         if not routes:
@@ -312,21 +498,44 @@ class ProcessRuntimeSupervisor:
             return None
         # A typed drain failure/timeout propagates so the operation records an
         # explicit outcome; the caller still stops the worker afterwards.
-        report = await worker.client.drain(
-            deadline_epoch, timeout_seconds=self._drain_timeout
-        )
+        report = await worker.client.drain(deadline_epoch, timeout_seconds=self._drain_timeout)
         return dict(report)
 
     async def stop(self, record: ExtensionRecord) -> None:
-        worker = self._workers.pop(record.manifest.id, None)
+        extension_id = record.manifest.id
+        self._records.pop(extension_id, None)
+        worker = self._workers.pop(extension_id, None)
         if worker is not None:
             await worker.close()
+        self._loaded.pop(extension_id, None)
+        self._config_failures.pop(extension_id, None)
+        store = self._config_store
+        if isinstance(store, ExtensionConfigApplyStore):
+            await store.report_runtime(
+                extension_id,
+                self._instance_id,
+                loaded_digest=None,
+                generation=None,
+                state="STOPPED",
+            )
 
     async def stop_all(self) -> None:
-        workers = list(self._workers.items())
+        if self._config_sync_task is not None:
+            self._config_sync_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._config_sync_task
+            self._config_sync_task = None
+        self._records.clear()
+        workers = list(self._workers.values())
         self._workers.clear()
-        for _, worker in workers:
-            await worker.close()
+        try:
+            for worker in workers:
+                await worker.close()
+        finally:
+            self._loaded.clear()
+            self._config_failures.clear()
+            if isinstance(self._config_store, ExtensionConfigApplyStore):
+                await self._config_store.release_runtime(self._instance_id)
 
     async def invoke_tool(
         self,
@@ -339,44 +548,49 @@ class ProcessRuntimeSupervisor:
         idempotency_key: str,
         deadline_seconds: float,
     ) -> Mapping[str, Any]:
-        worker = self._workers.get(extension_id)
-        if worker is None or not worker.client.running:
-            raise RpcCallError(-32090, "extension worker is not running")
-        deadline = datetime.now(UTC) + timedelta(seconds=deadline_seconds)
-        context = {
-            "task_id": task_id,
-            "run_id": run_id,
-            "deadline": deadline.isoformat(),
-            "idempotency_key": idempotency_key,
-            "context_handles": [],
-            "artifact_handles": [],
-            "capability_handles": [],
-        }
-        return await worker.invoke_tool(
-            tool_id,
-            dict(arguments),
-            context,
-            timeout_seconds=deadline_seconds,
+        record = self._records.get(extension_id)
+        external_write = record is not None and any(
+            tool.id == tool_id and tool.risk == "EXTERNAL_WRITE" for tool in record.manifest.tools
         )
+        async with self._configured_worker(
+            extension_id,
+            retain_inflight_result=external_write,
+        ) as worker:
+            deadline = datetime.now(UTC) + timedelta(seconds=deadline_seconds)
+            context = {
+                "task_id": task_id,
+                "run_id": run_id,
+                "deadline": deadline.isoformat(),
+                "idempotency_key": idempotency_key,
+                "context_handles": [],
+                "artifact_handles": [],
+                "capability_handles": [],
+            }
+            return await worker.invoke_tool(
+                tool_id,
+                dict(arguments),
+                context,
+                timeout_seconds=deadline_seconds,
+            )
 
     async def list_forms(self, extension_id: str) -> list[Mapping[str, Any]]:
-        worker = self._workers.get(extension_id)
-        if worker is None or not worker.client.running:
-            raise RpcCallError(-32090, "extension worker is not running")
-        result = await worker.call_slot("form.list", {}, timeout_seconds=5.0)
-        if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
-            raise RpcCallError(-32094, "form.list result must be a list of objects")
-        return result
+        async with self._configured_worker(extension_id) as worker:
+            result = await worker.call_slot("form.list", {}, timeout_seconds=5.0)
+            if not isinstance(result, list) or not all(isinstance(item, dict) for item in result):
+                raise RpcCallError(-32094, "form.list result must be a list of objects")
+            return result
 
-    async def call_slot(self, extension_id: str, method: str,
-                        parameters: Mapping[str, Any]) -> Any:
-        if method not in {"workflow.list", "schedule.list", "event_source.list",
-                          "event_source.poll", "context.retrieve"}:
+    async def call_slot(self, extension_id: str, method: str, parameters: Mapping[str, Any]) -> Any:
+        if method not in {
+            "workflow.list",
+            "schedule.list",
+            "event_source.list",
+            "event_source.poll",
+            "context.retrieve",
+        }:
             raise RpcCallError(-32601, "slot is not exposed by this host")
-        worker = self._workers.get(extension_id)
-        if worker is None or not worker.client.running:
-            raise RpcCallError(-32090, "extension worker is not running")
-        return await worker.call_slot(method, dict(parameters), timeout_seconds=30.0)
+        async with self._configured_worker(extension_id) as worker:
+            return await worker.call_slot(method, dict(parameters), timeout_seconds=30.0)
 
     def diagnostics(self, extension_id: str) -> tuple[str, ...]:
         worker = self._workers.get(extension_id)
@@ -399,9 +613,7 @@ class ProcessContractVerifier:
         self._call_timeout = call_timeout_seconds
         self._max_frame_bytes = max_frame_bytes
 
-    async def verify(
-        self, installed: InstalledArtifact, manifest: ExtensionManifest
-    ) -> None:
+    async def verify(self, installed: InstalledArtifact, manifest: ExtensionManifest) -> None:
         # Contract tests run against the installed payload, never the source tree.
         worker = _build_worker(
             manifest, Path(installed.install_path), max_frame_bytes=self._max_frame_bytes
@@ -455,14 +667,10 @@ class ProcessContractVerifier:
         # NotificationProvider has no enumeration RPC and deliver() is a side
         # effect; the handshake slot comparison is the only pre-enable check.
 
-    async def _check_tools(
-        self, worker: ExtensionWorker, manifest: ExtensionManifest
-    ) -> None:
+    async def _check_tools(self, worker: ExtensionWorker, manifest: ExtensionManifest) -> None:
         result = await worker.call_slot("tool.list", {}, timeout_seconds=self._call_timeout)
         if not isinstance(result, list):
-            raise ExtensionOperationError(
-                "MANIFEST_INVALID", "tool.list did not return a list"
-            )
+            raise ExtensionOperationError("MANIFEST_INVALID", "tool.list did not return a list")
         actual: dict[str, Mapping[str, Any]] = {}
         for item in result:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):

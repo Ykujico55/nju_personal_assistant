@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from personal_assistant.core.extensions.async_utils import shield_cleanup
 from personal_assistant.core.extensions.errors import ExtensionError
 from personal_assistant.core.extensions.manifest import (
     DeclaredCapabilities,
@@ -46,6 +50,7 @@ def manifest_to_dict(manifest: ExtensionManifest) -> dict[str, Any]:
         "config_schema": manifest.config_schema,
         "state_schema_version": manifest.state_schema_version,
         "healthcheck": manifest.healthcheck,
+        "context_provider_descriptions": dict(manifest.context_provider_descriptions),
         "tools": [
             {
                 "id": tool.id,
@@ -92,6 +97,7 @@ def manifest_from_dict(data: dict[str, Any]) -> ExtensionManifest:
         config_schema=data.get("config_schema"),
         state_schema_version=data["state_schema_version"],
         healthcheck=data["healthcheck"],
+        context_provider_descriptions=dict(data.get("context_provider_descriptions") or {}),
         tools=tools,
         capabilities=DeclaredCapabilities(
             required=tuple(capabilities.get("required") or ()),
@@ -109,6 +115,29 @@ _SELECT_COLUMNS = (
 class PostgresLifecycleStore:
     def __init__(self, database: PostgresDatabase) -> None:
         self._db = database
+
+    @asynccontextmanager
+    async def operation_lock(self) -> AsyncIterator[None]:
+        # A session lock spans process startup/RPC without retaining a database
+        # transaction. It must not share the per-record save() lock key/session.
+        # Closing/crashing the owning database session also releases this lease.
+        key = "personal-assistant:extension-lifecycle-operations"
+        async with self._db.independent_connection() as connection:
+            acquired = False
+            try:
+                while not acquired:
+                    acquired = bool(await connection.fetchval(
+                        "SELECT pg_try_advisory_lock(hashtext($1))", key,
+                    ))
+                    if not acquired:
+                        await asyncio.sleep(0.05)
+                yield
+            finally:
+                # Unlock even if cancellation races the successful lock reply.
+                # Unlocking a non-held session lock cannot affect another owner.
+                await shield_cleanup(connection.execute(
+                    "SELECT pg_advisory_unlock(hashtext($1))", key,
+                ))
 
     async def get(self, extension_id: str) -> ExtensionRecord | None:
         async with self._db.connection() as connection:

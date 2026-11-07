@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge.read input",
+  "type": "object",
+  "properties": {
+    "resource": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "description": "One exact knowledge://root_key/URL-encoded-relative-path from workspace files[].source_uri, or one exact unique filename including its extension. Preserve filename spaces and case. Do not pass knowledge-workspace:// overview URIs, knowledge-status:// status URIs, absolute filesystem paths, directories or natural-language instructions. When the filename is ambiguous, select a returned candidate source_uri or ask the user; do not repeat an unchanged invalid resource."
+    }
+  },
+  "required": [
+    "resource"
+  ],
+  "additionalProperties": false,
+  "description": "Read one complete authorized TXT/Markdown/PDF file without indexing. A directory overview or operation status is not document content."
+}

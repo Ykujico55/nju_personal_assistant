@@ -200,6 +200,18 @@ class AdminExtensionApiTests(unittest.TestCase):
             time.sleep(0.05)
         raise AssertionError(f"operation {operation_id} did not finish")
 
+    def test_discovered_extension_cannot_be_enabled_before_installation(self) -> None:
+        with self._client() as client:
+            listing = client.get("/admin/v1/extensions").json()["items"]
+            item = next(item for item in listing if item["id"] == "example.echo")
+            self.assertEqual("DISCOVERED", item["state"])
+            response = client.post("/admin/v1/extensions/example.echo/enable", json={})
+            self.assertEqual(409, response.status_code, response.text)
+            self.assertEqual("EXTENSION_NOT_INSTALLED", response.json()["error"]["code"])
+            self.assertEqual([], self.runtime.started)
+            self.assertEqual([], self.installer.installs)
+            self.assertIsNone(asyncio.run(self.store.get("example.echo")))
+
     def test_inspect_is_data_only_and_install_requires_confirmation(self) -> None:
         with self._client() as client:
             preview = client.post(

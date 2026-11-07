@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from copy import deepcopy
 
 from personal_assistant.core.extensions.models import ExtensionRecord, ExtensionState
@@ -12,6 +14,12 @@ class InMemoryLifecycleStore:
     def __init__(self) -> None:
         self._records: dict[str, ExtensionRecord] = {}
         self._lock = asyncio.Lock()
+        self._operation_lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def operation_lock(self) -> AsyncIterator[None]:
+        async with self._operation_lock:
+            yield
 
     async def get(self, extension_id: str) -> ExtensionRecord | None:
         async with self._lock:

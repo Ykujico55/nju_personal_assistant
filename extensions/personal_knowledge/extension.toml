@@ -1,7 +1,7 @@
 manifest_version = "1"
 id = "personal.knowledge"
 name = "Personal Knowledge"
-version = "0.1.0"
+version = "0.1.6"
 core_api = ">=1,<2"
 python = ">=3.12,<3.14"
 entrypoint = "personal_knowledge.worker:create_extension"
@@ -11,16 +11,27 @@ state_schema_version = 1
 healthcheck = "system.health"
 
 event_sources = ["knowledge.file_changes"]
-context_providers = ["knowledge.retrieve"]
+context_providers = ["knowledge.retrieve", "knowledge.workspace", "knowledge.document"]
 schedules = ["knowledge.reconcile"]
 migrations = ["knowledge.index_schema"]
 forms = ["knowledge.roots"]
+
+[context_provider_descriptions]
+"knowledge.workspace" = "List configured instance folders and filenames as metadata only, never document bodies. Reports accessible and index state; it is not proof of file content."
+"knowledge.retrieve" = "Keyword search over a READY instance index; returns current matching body snippets, not whole files. Pending index returns explicit status, not empty-directory proof."
+"knowledge.document" = "Read a complete authorized TXT/Markdown/PDF file, independent of indexing. Query must be one exact knowledge://root_key/relative_path source URI, or exact unique filename with extension, not a natural-language sentence. Ambiguous, unavailable, unsupported or too-large resources return status instead of pretending a body was read."
 
 [[tools]]
 id = "knowledge.search"
 risk = "READ"
 input_schema = "schemas/search-input.json"
 output_schema = "schemas/search-output.json"
+
+[[tools]]
+id = "knowledge.read"
+risk = "READ"
+input_schema = "schemas/read-input.json"
+output_schema = "schemas/read-output.json"
 
 [[tools]]
 id = "knowledge.reindex"

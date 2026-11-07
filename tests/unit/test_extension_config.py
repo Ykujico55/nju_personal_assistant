@@ -195,7 +195,10 @@ class FileConfigStoreTests(unittest.IsolatedAsyncioTestCase):
                 self.store.save("org.example.knowledge", left),
                 self.store.save("org.example.knowledge", right),
             )
-        self.assertEqual(2, len(set(temporary_paths)))
+        # Two independent drafts plus one frozen pre-save active snapshot.
+        self.assertEqual(3, len(set(temporary_paths)))
+        self.assertEqual(1, sum(Path(path).parent.name == ".applied" for path in temporary_paths))
+        self.assertEqual({}, (await self.store.get_applied("org.example.knowledge"))["config"])
         self.assertEqual(1, maximum_active)
         self.assertIn(await self.store.get("org.example.knowledge"), (left, right))
         self.assertEqual([], list(self.tmp.glob("*.tmp")))

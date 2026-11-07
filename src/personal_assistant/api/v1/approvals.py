@@ -21,14 +21,14 @@ router = APIRouter(prefix="/approvals", tags=["approvals"])
 
 
 def _blocked(
-    kind: Literal["MAIL", "EHALL", "UNSUPPORTED"], reason: str
+    kind: Literal["MAIL", "EHALL", "UNSUPPORTED", "EXTENSION_ACTION"], reason: str
 ) -> ApprovalReviewView:
     return ApprovalReviewView(kind=kind, ready=False, reason=reason)
 
 
 async def _review(record: ApprovalRecord, container: Container) -> ApprovalReviewView:
     action = record.action
-    kind: Literal["MAIL", "EHALL", "UNSUPPORTED"] = (
+    kind: Literal["MAIL", "EHALL", "UNSUPPORTED", "EXTENSION_ACTION"] = (
         "EHALL" if action.get("tool_id") == "ehall.submit" else "UNSUPPORTED"
     )
     if record.state is not ApprovalState.WAITING_APPROVAL:
@@ -70,7 +70,17 @@ async def _review(record: ApprovalRecord, container: Container) -> ApprovalRevie
     ):
         return _blocked(kind, "审批扩展或风险等级已改变")
     if "mail.send" not in descriptor.required_capabilities:
-        return _blocked(kind, "此工具尚无可核对的手机审批预览")
+        try:
+            generic_details = await container.extension_actions.review(
+                descriptor, action["payload"], task_id=action["task_id"],
+            )
+            if (canonical_sha256(generic_details["target"]) != canonical_sha256(action["target"])
+                    or canonical_sha256(generic_details["attachments"])
+                    != canonical_sha256(action["attachments"])):
+                return _blocked("EXTENSION_ACTION", "动作目标或附件与审批快照不同")
+        except (DefinitiveToolFailure, ValidationError):
+            return _blocked("EXTENSION_ACTION", "扩展动作的完整材料当前无法核对")
+        return ApprovalReviewView(kind="EXTENSION_ACTION", ready=True, details=generic_details)
     kind = "MAIL"
     target = action["target"]
     payload = action["payload"]

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-assistant-plugin-developer"
+version = "0.1.0"
+description = "Supervised plugin development in an explicitly managed local workspace"
+requires-python = ">=3.12,<3.13"
+dependencies = ["personal-assistant-extension-sdk==1.0.0"]
+
+[project.scripts]
+plugin-developer = "plugin_developer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["plugin_developer*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "../../extension_sdk/src"]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = ["src", "../../extension_sdk/src"]

@@ -13,10 +13,11 @@ from personal_assistant.core.agent.checkpoint import CheckpointStorePort, RunRep
 from personal_assistant.core.approvals import ApprovalService
 from personal_assistant.core.jobs import JobQueuePort, LeaseKeepalive
 from personal_assistant.core.jobs.queue import JobState, LeaseConflict
+from personal_assistant.core.models.cleanup import run_cleanup
 from personal_assistant.core.models.router import DisclosureDenied
 from personal_assistant.core.records import RecordStore, fingerprint
 from personal_assistant.core.tasks import TaskService
-from personal_assistant.core.tools import ToolGateway, ToolRegistry
+from personal_assistant.core.tools import ExtensionUnavailableError, ToolGateway, ToolRegistry
 from personal_assistant.core.unit_of_work import UnitOfWorkPort
 from personal_assistant.core.workflows import WorkflowBindingConflict
 from personal_assistant.domain import (
@@ -32,14 +33,21 @@ from personal_assistant.domain import (
     ValidationError,
 )
 
-from .decisions import DecisionValidator
+from .decisions import DecisionValidator, ProposalValidationError, validation_diagnostic
 from .engine import DecisionKind
+from .failure_diagnostics import diagnostic_message, failure_diagnostic, new_failure_diagnostic
 from .planner import StructuredPlanner, plain
 from .progress_detector import ProgressDetector
 from .safety_fuse import EmergencyFuse
 from .state_machine import resume_as_new_segment, transition_run
 
 Preparer = Callable[[ToolCall], Awaitable[ToolCall]]
+
+
+class _RunStopped(Exception):
+    def __init__(self, state: TaskState, reason: str) -> None:
+        self.state, self.reason = state, reason
+        super().__init__(reason)
 
 
 class TaskRuntime:
@@ -208,12 +216,37 @@ class TaskRuntime:
                 await self.jobs.complete(
                     job_id=job.id, worker_id=self.worker_id, result={"superseded": True}
                 )
-            except Exception:
+            except Exception as error:
+                failure = new_failure_diagnostic(error)
+                message = diagnostic_message(failure)
                 task_id = job.payload.get("task_id")
                 if isinstance(task_id, str):
-                    run = await self.runs.get("run_" + task_id)
-                    if run.state is TaskState.RUNNING:
+                    try:
+                        run = await self.runs.get("run_" + task_id)
+                    except (KeyError, NotFoundError):
+                        # A failed startup or stale job may have no Run yet. Do not let
+                        # error reporting crash the worker and strand the next task.
+                        run = None
+                        try:
+                            task = await self.tasks.get(task_id)
+                        except (KeyError, NotFoundError):
+                            task = None
+                        if task is not None:
+                            snapshot = await self.checkpoints.load("run_" + task_id)
+                            state = (
+                                TaskState.WAITING_RECONCILIATION
+                                if await self.requires_reconciliation(snapshot)
+                                else TaskState.FAILED
+                            )
+                            await self.tasks.project(task_id, state)
+                            await self.tasks.assistant_message(
+                                task_id,
+                                "任务未能启动，已退出执行队列。" + message,
+                                key="startup-failed:" + job.id,
+                            )
+                    if run is not None and run.state is TaskState.RUNNING:
                         snapshot = await self.checkpoints.load(run.id)
+                        snapshot["failure_diagnostic"] = failure
                         state = (
                             TaskState.WAITING_RECONCILIATION
                             if await self.requires_reconciliation(snapshot)
@@ -223,12 +256,12 @@ class TaskRuntime:
                             run,
                             state,
                             snapshot,
-                            "执行暂时失败，原检查点已保留；请检查配置后人工继续，外部动作不会自动重试。",
+                            message,
                         )
                 await self.jobs.fail(
                     job_id=job.id,
                     worker_id=self.worker_id,
-                    error_code="TASK_DISPATCH_FAILED",
+                    error_code=failure["code"],
                     retryable=False,
                 )
                 # Existing checkpoints remain authoritative; no automatic retry is scheduled.
@@ -342,35 +375,38 @@ class TaskRuntime:
                 )
                 return
             if (await self.tasks.get(task_id)).state is TaskState.CANCELLED:
-                cancelled = transition_run(run, TaskState.CANCELLED)
-                await self.runs.save(cancelled, expected_version=run.version)
+                await self.finish(run, TaskState.CANCELLED, snapshot, "任务已取消。")
                 return
             reason = self.fuse.pause_reason(run)
             if reason:
                 await self.finish(run, TaskState.PAUSED_SAFETY, snapshot, reason)
                 return
+            validation_stage = "host"
             try:
+                snapshot.pop("validation_failure", None)
+                snapshot.pop("failure_diagnostic", None)
                 if snapshot.get("approved_id") and snapshot.get("pending_call"):
                     call = self.restore_call(snapshot["pending_call"])
                     decision_kind = DecisionKind.CALL_TOOL
                     call = replace(call, approval_id=snapshot.pop("approved_id"))
                 else:
                     if request.get("mode") == "workflow":
+                        validation_stage = "workflow"
                         proposal = await self.workflow_proposal(run, snapshot, request)
                     else:
-                        messages = [
-                            m.content
-                            for m in await self.tasks.messages(task_id)
-                            if m.actor != "assistant"
-                        ]
-                        proposal = await self.planner.propose(
-                            objective=run.objective,
-                            messages=messages,
-                            tools=current_descriptors,
-                            observations=snapshot.get("observations", []),
-                            consent_id=request.get("consent_id"),
-                            rules=snapshot["rules"],
-                            user_id=request.get("user_id"),
+                        validation_stage = "proposal"
+                        messages = await self.conversation_context(task_id, snapshot)
+                        proposal = await self.before_dispatch(
+                            self.planner.propose(
+                                objective=run.objective,
+                                messages=messages,
+                                tools=current_descriptors,
+                                observations=snapshot.get("observations", []),
+                                consent_id=request.get("consent_id"),
+                                rules=snapshot["rules"],
+                                user_id=request.get("user_id"),
+                            ),
+                            run, owned,
                         )
                     snapshot.pop("model_disclosure", None)
                     decision = await validator.validate(proposal, run)
@@ -382,18 +418,28 @@ class TaskRuntime:
                             else TaskState.WAITING_USER
                         )
                         snapshot["result"] = plain(decision.result)
-                        await self.finish(run, state, snapshot, decision.message or "等待输入")
+                        await self.finish(
+                            run, state, snapshot, decision.message or "等待输入",
+                            conversation=(
+                                decision_kind is DecisionKind.NEEDS_USER
+                                and request.get("mode") != "workflow"
+                                and self.planner.configured
+                            ),
+                        )
                         return
                     assert decision.tool_call is not None
                     call = replace(
                         decision.tool_call, idempotency_key=f"run:{run.id}:round:{run.version}"
                     )
+                    validation_stage = "tool_lookup"
                     descriptor = self.registry.snapshot().resolve(call.tool_id, call.tool_version)
                     if descriptor.risk is RiskLevel.EXTERNAL_WRITE:
+                        validation_stage = "preparation"
                         if self.prepare is None:
                             raise ValidationError("host authority preview is unavailable")
-                        call = await self.prepare(call)
+                        call = await self.before_dispatch(self.prepare(call), run, owned)
                 owned()
+                validation_stage = "tool_lookup"
                 descriptor = self.registry.snapshot().resolve(call.tool_id, call.tool_version)
                 snapshot["phase"] = "dispatching"
                 snapshot["risk"] = descriptor.risk.value
@@ -404,7 +450,12 @@ class TaskRuntime:
                     await self.checkpoints.save(dispatch, snapshot)
                 run = dispatch
                 if (await self.tasks.get(task_id)).state is TaskState.CANCELLED:
+                    # This branch is before Gateway invocation, so no external
+                    # attempt needs reconciliation. Keep the run projection in sync.
+                    snapshot.pop("pending_call", None)
+                    await self.finish(run, TaskState.CANCELLED, snapshot, "任务已取消。")
                     return
+                validation_stage = "tool"
                 outcome = await self.invoke_until_cancelled(call, descriptor.risk, owned)
                 owned()
                 snapshot["phase"] = "observed"
@@ -418,28 +469,53 @@ class TaskRuntime:
                     ToolOutcomeKind.SAFETY_PAUSE: TaskState.PAUSED_SAFETY,
                 }.get(outcome.kind)
                 if waiting:
+                    message = outcome.message or waiting.value
+                    if outcome.kind is ToolOutcomeKind.EXTENSION_UNAVAILABLE:
+                        failure = new_failure_diagnostic(ExtensionUnavailableError("unavailable"))
+                        snapshot["failure_diagnostic"] = failure
+                        message = diagnostic_message(failure)
                     await self.finish(
                         run,
                         waiting,
                         snapshot,
-                        outcome.message or waiting.value,
+                        message,
                         reference=outcome.approval_id or outcome.reference_id,
                     )
                     return
                 snapshot.pop("pending_call", None)
+                # Progress uses the original outcome, never the diagnostic wrapper below.
+                updated = self.progress.record(run, call, outcome)
                 results = snapshot.setdefault("observations", [])
-                results.append(plain(outcome.result))
+                if outcome.kind is ToolOutcomeKind.FAILED:
+                    results.append({
+                        "kind": "FAILED",
+                        "tool_id": call.tool_id,
+                        "tool_version": call.tool_version,
+                        "error_code": "TOOL_EXECUTION_FAILED",
+                        "retryable": bool(outcome.retryable),
+                        "same_call_as_previous": (
+                            updated.last_call_fingerprint == run.last_call_fingerprint
+                        ),
+                        "message": (
+                            "工具执行失败，未返回可用结果；"
+                            "请检查输入或配置，不要无变化重复调用。"
+                        ),
+                    })
+                else:
+                    results.append(plain(outcome.result))
                 snapshot["observations"] = results[-16:]
                 if request.get("mode") == "workflow" and outcome.kind is ToolOutcomeKind.SUCCESS:
                     snapshot["cursor"] = int(snapshot.get("cursor", 0)) + 1
                     snapshot.setdefault("outputs", {})[snapshot.pop("step_id", "result")] = plain(
                         outcome.result
                     )
-                updated = self.progress.record(run, call, outcome)
                 async with self.scope():
                     await self.runs.save(updated, expected_version=run.version)
                     await self.checkpoints.save(updated, snapshot)
                 run = updated
+            except _RunStopped as stopped:
+                await self.finish(run, stopped.state, snapshot, stopped.reason)
+                return
             except DisclosureDenied:
                 if self.planner.pending_disclosure is not None:
                     snapshot["model_disclosure"] = self.planner.pending_disclosure
@@ -450,14 +526,71 @@ class TaskRuntime:
                     "模型披露未获许可。材料已保留，请在披露预览中明确授权或选择本地模型。",
                 )
                 return
-            except (ValidationError, NotFoundError):
+            except (ValidationError, NotFoundError) as error:
+                if isinstance(error, NotFoundError):
+                    code = "HOST_RESOURCE_UNAVAILABLE"
+                elif validation_stage == "proposal" and isinstance(error, ProposalValidationError):
+                    code = error.code
+                else:
+                    code = {
+                        "workflow": "HOST_WORKFLOW_INVALID",
+                        "preparation": "HOST_PREPARATION_INVALID",
+                        "tool": "HOST_TOOL_VALIDATION_FAILED",
+                    }.get(validation_stage, "HOST_VALIDATION_FAILED")
+                diagnostic = validation_diagnostic(code)
+                assert diagnostic is not None
+                snapshot["validation_failure"] = diagnostic
+                message = diagnostic["message"]
+                if isinstance(error, NotFoundError):
+                    failure = new_failure_diagnostic(
+                        error, tool_lookup=validation_stage == "tool_lookup"
+                    )
+                    snapshot["failure_diagnostic"] = failure
+                    message = diagnostic_message(failure)
+                # A tool may have started before raising. Diagnostics never authorize replay.
+                unresolved = await self.requires_reconciliation(snapshot)
                 await self.finish(
                     run,
-                    TaskState.WAITING_USER,
+                    TaskState.WAITING_RECONCILIATION if unresolved else TaskState.WAITING_USER,
                     snapshot,
-                    "提案、材料或能力未通过校验；请补充输入或检查配置后继续。",
+                    message,
                 )
                 return
+
+    async def before_dispatch[T](
+        self, awaitable: Awaitable[T], run: TaskRun, owned: Callable[[], None]
+    ) -> T:
+        """Stop planning/preview work promptly without accepting a late result.
+
+        Actual tools keep their separate R2 cancellation/UNKNOWN handling below.
+        A user wait is not an execution timeout and never enters this loop.
+        """
+        operation = asyncio.ensure_future(awaitable)
+
+        async def drain() -> None:
+            if not operation.done():
+                operation.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await operation
+
+        try:
+            while True:
+                owned()
+                if (await self.tasks.get(run.task_id)).state is TaskState.CANCELLED:
+                    raise _RunStopped(TaskState.CANCELLED, "任务已取消。")
+                if self.paused_probe is not None and self.paused_probe():
+                    raise _RunStopped(
+                        TaskState.PAUSED_SAFETY, "本机安全开关已冻结执行；解除后仍需明确继续。"
+                    )
+                reason = self.fuse.pause_reason(run)
+                if reason:
+                    raise _RunStopped(TaskState.PAUSED_SAFETY, reason)
+                if operation.done():
+                    return operation.result()
+                await asyncio.wait({operation}, timeout=0.1)
+        finally:
+            # Also retrieve a provider's late exception or result after cancellation.
+            await run_cleanup(drain())
 
     @staticmethod
     def ensure_workflow_binding(snapshot: dict[str, Any], request: dict[str, Any]) -> None:
@@ -543,6 +676,28 @@ class TaskRuntime:
 
         return next_proposal(request["workflow"], snapshot, request.get("inputs", {}))
 
+    async def conversation_context(
+        self, task_id: str, snapshot: dict[str, Any]
+    ) -> list[str] | list[dict[str, str]]:
+        messages = await self.tasks.messages(task_id)
+        recorded = snapshot.get("conversation_message_ids", [])
+        selected = {value for value in recorded if isinstance(value, str)} if isinstance(
+            recorded, list
+        ) else set()
+        questions = {
+            message.id for message in messages
+            if message.actor == "assistant" and message.id in selected
+        }
+        if not questions:
+            # Legacy checkpoints retain the exact disclosed bytes; host notices stay excluded.
+            return [message.content for message in messages if message.actor != "assistant"]
+        return [
+            {"role": "assistant" if message.actor == "assistant" else "user",
+             "content": message.content}
+            for message in messages
+            if message.actor != "assistant" or message.id in questions
+        ]
+
     async def finish(
         self,
         run: TaskRun,
@@ -551,18 +706,45 @@ class TaskRuntime:
         message: str,
         *,
         reference: str | None = None,
+        conversation: bool = False,
     ) -> None:
+        failure = snapshot.get("validation_failure")
+        diagnostic = (
+            validation_diagnostic(failure.get("code")) if isinstance(failure, Mapping) else None
+        )
+        if diagnostic is None:
+            snapshot.pop("validation_failure", None)
+        else:
+            snapshot["validation_failure"] = diagnostic
+        runtime_failure = failure_diagnostic(snapshot.get("failure_diagnostic"))
+        if runtime_failure is None:
+            snapshot.pop("failure_diagnostic", None)
+        else:
+            snapshot["failure_diagnostic"] = runtime_failure
         updated = transition_run(run, state, reference=reference, reason=message)
         if state is TaskState.WAITING_RECONCILIATION:
             snapshot["unresolved_external"] = True
         snapshot["phase"] = "waiting" if state is not TaskState.SUCCEEDED else "complete"
         async with self.scope():
             await self.runs.save(updated, expected_version=run.version)
-            await self.checkpoints.save(updated, snapshot)
-            await self.tasks.project(run.task_id, state)
-            await self.tasks.assistant_message(
-                run.task_id, message, key=f"run-message:{run.id}:{updated.version}"
-            )
+            if not conversation:
+                await self.checkpoints.save(updated, snapshot)
+            task = await self.tasks.project(run.task_id, state)
+            key = f"run-message:{run.id}:{updated.version}"
+            if conversation:
+                _, saved_message = await self.tasks.add_message(
+                    task_id=run.task_id, content=message, expected_version=task.version,
+                    actor="assistant", idempotency_key=key,
+                )
+                recorded = snapshot.get("conversation_message_ids", [])
+                ids = [value for value in recorded if isinstance(value, str)] if isinstance(
+                    recorded, list
+                ) else []
+                snapshot["conversation_message_ids"] = list(dict.fromkeys([*ids, saved_message.id]))
+                # The question and identity marker commit together in the host unit of work.
+                await self.checkpoints.save(updated, snapshot)
+            else:
+                await self.tasks.assistant_message(run.task_id, message, key=key)
             old = await self.records.get("executions", run.task_id)
             await self.records.put(
                 "executions",
@@ -572,6 +754,10 @@ class TaskRuntime:
                     "state": state.value,
                     "reference": reference,
                     "reason": message,
+                    "validation_failure": diagnostic,
+                    "failure_diagnostic": runtime_failure,
+                    "error_code": (runtime_failure["code"] if runtime_failure else
+                                   diagnostic["code"] if diagnostic else None),
                     "workflow": snapshot.get("workflow"),
                     "cursor": snapshot.get("cursor"),
                     "outputs": snapshot.get("outputs", {}),

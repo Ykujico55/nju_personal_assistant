@@ -84,7 +84,7 @@ class RejectDecision(BaseModel):
 
 
 class ApprovalReviewView(BaseModel):
-    kind: Literal["MAIL", "EHALL", "UNSUPPORTED"]
+    kind: Literal["MAIL", "EHALL", "UNSUPPORTED", "EXTENSION_ACTION"]
     ready: bool
     reason: str | None = None
     details: dict[str, Any] | None = None

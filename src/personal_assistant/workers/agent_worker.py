@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import os
 from datetime import UTC, datetime
 
 from personal_assistant.bootstrap import Container, build_container
 from personal_assistant.core.scheduling import DurableScheduler
 from personal_assistant.domain import ApprovalState
 from personal_assistant.infrastructure.operations.control import HostControl
+from personal_assistant.infrastructure.operations.readiness import mark_ready
 from personal_assistant.runtime import build_runtime
 from personal_assistant.settings import Settings
 
@@ -21,8 +23,17 @@ async def heartbeat(container: Container, stop: asyncio.Event) -> None:
         await container.records.put(
             "hosts",
             "agent",
-            {"seen_at": datetime.now(UTC).isoformat()},
+            {
+                "seen_at": datetime.now(UTC).isoformat(),
+                "pid": os.getpid(),
+                "boot_id": os.getenv("PA_HOST_BOOT_ID"),
+            },
             expected_version=old["version"] if old else 0,
+        )
+        mark_ready(
+            HostControl(container.settings.extension_root.parent / "control"),
+            "agent",
+            os.getenv("PA_HOST_BOOT_ID", ""),
         )
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=10)
@@ -34,6 +45,8 @@ async def loop(container: Container, stop: asyncio.Event, *, once: bool = False)
     heartbeat_task = asyncio.create_task(heartbeat(container, stop))
     try:
         while not stop.is_set():
+            if control.stopping(os.getenv("PA_HOST_BOOT_ID")):
+                return
             if control.frozen():
                 if once:
                     return

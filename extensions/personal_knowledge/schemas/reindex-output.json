@@ -18,14 +18,48 @@
       "items": {
         "type": "object",
         "properties": {
-          "code": {"type": "string"},
-          "path": {"type": "string"},
-          "message": {"type": "string"}
+          "code": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
         },
-        "required": ["code", "message"],
+        "required": [
+          "code",
+          "message"
+        ],
         "additionalProperties": false
       }
-    }
+    },
+    "skipped_empty": {"type": "integer", "minimum": 0},
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "index_state": {"type": "string", "enum": ["PENDING", "READY", "UNAVAILABLE"]},
+    "index_reason": {"type": "string"}
   },
   "required": [
     "mode", "roots", "scanned", "added", "modified", "moved", "deleted",

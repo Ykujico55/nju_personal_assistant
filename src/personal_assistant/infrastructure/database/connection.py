@@ -16,6 +16,7 @@ from contextvars import ContextVar
 
 import asyncpg
 
+from personal_assistant.core.extensions.async_utils import shield_cleanup
 from personal_assistant.core.secrets import SecretHandle, SecretStorePort
 
 from .config import PostgresAdapterConfig, normalize_dsn
@@ -106,6 +107,25 @@ class PostgresDatabase:
             yield connection
 
     @asynccontextmanager
+    async def independent_connection(self) -> AsyncIterator[asyncpg.Connection]:
+        """Lease a dedicated session without occupying the application pool.
+
+        Long-lived advisory lock waiters must not exhaust the pool needed by
+        their lock owner's lifecycle writes and worker capability callbacks.
+        """
+        self._require_pool()
+        connection = await self.new_extra_connection()
+        try:
+            yield connection
+        finally:
+            try:
+                await shield_cleanup(connection.close(timeout=5))
+            finally:
+                if not connection.is_closed():
+                    connection.terminate()
+                self._extra.remove(connection)
+
+    @asynccontextmanager
     async def transaction(self) -> AsyncIterator[None]:
         if self._current.get() is not None:
             yield
@@ -122,7 +142,11 @@ class PostgresDatabase:
         """Create a dedicated connection (migrations, LISTEN) tracked for close."""
 
         connection = await asyncpg.connect(dsn=self._dsn)
-        await _init_connection(connection)
+        try:
+            await _init_connection(connection)
+        except BaseException:
+            connection.terminate()
+            raise
         self._extra.append(connection)
         return connection
 

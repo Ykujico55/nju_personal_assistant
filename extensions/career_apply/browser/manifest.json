@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Career Apply · BOSS只读采集",
+  "version": "0.1.0",
+  "description": "读取当前已加载的BOSS职位列表，导出本地规划用JSON。",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "读取BOSS职位列表"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

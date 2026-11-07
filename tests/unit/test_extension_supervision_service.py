@@ -354,6 +354,31 @@ class SupervisorServiceTests(unittest.IsolatedAsyncioTestCase):
         enabled = await self.service.wait_operation(enable.id)
         self.assertEqual(OperationState.SUCCEEDED, enabled.status, enabled)
 
+    async def test_uninstalled_enable_rejected_without_an_async_operation(self) -> None:
+        with self.assertRaises(ExtensionOperationError) as caught:
+            await self.service.begin_enable("example.echo", idempotency_key="not-installed")
+        self.assertEqual("EXTENSION_NOT_INSTALLED", caught.exception.code)
+        self.assertEqual([], self.installer.installed)
+        self.assertEqual({}, self.runtime.active)
+        self.assertEqual(set(), self.service._tasks)
+
+    async def test_enable_replay_survives_later_uninstall(self) -> None:
+        await self._install_and_enable(EXAMPLE)
+        disabled = await self.service.begin_disable("example.echo")
+        await self.service.wait_operation(disabled.id)
+        enabled = await self.service.begin_enable("example.echo", idempotency_key="exact-enable")
+        final = await self.service.wait_operation(enabled.id)
+        self.assertEqual(OperationState.SUCCEEDED, final.status)
+        uninstalled = await self.service.begin_uninstall("example.echo")
+        await self.service.wait_operation(uninstalled.id)
+        replay = await self.service.begin_enable("example.echo", idempotency_key="exact-enable")
+        self.assertEqual(enabled.id, replay.id)
+        self.assertEqual(OperationState.SUCCEEDED, replay.status)
+        record = await self.service.record("example.echo")
+        assert record is not None
+        self.assertEqual(ExtensionState.UNINSTALLED, record.state)
+        self.assertEqual({}, self.runtime.active)
+
     async def test_inspect_stages_without_execution(self) -> None:
         preview = await self.service.inspect(str(EXAMPLE))
         self.assertEqual("install", preview.mode)
@@ -1330,6 +1355,9 @@ class FlakyLifecycleStore:
         self._inner = inner
         self._predicate = predicate
         self.failures = 0
+
+    def operation_lock(self):
+        return self._inner.operation_lock()
 
     async def get(self, extension_id: str):
         return await self._inner.get(extension_id)

@@ -892,8 +892,30 @@ function mailApprovalReady(record) {
       === JSON.stringify(details.attachments.map((item) => item.sha256).sort());
 }
 
+
+function extensionApprovalReady(record) {
+  if (!approvalShape(record, record?.id) || record.state !== "WAITING_APPROVAL"
+    || record.review.kind !== "EXTENSION_ACTION" || record.review.ready !== true
+    || typeof record.nonce !== "string" || !record.nonce
+    || Date.parse(record.expires_at) <= Date.now()) return false;
+  const { action } = record;
+  const details = record.review.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)
+    || typeof details.consequences !== "string" || !details.consequences.trim()
+    || details.consequences !== action.payload.consequences
+    || stableJson(details.target) !== stableJson(action.target)
+    || stableJson(details.payload) !== stableJson(action.payload)
+    || !Array.isArray(details.attachments)) return false;
+  return stableJson(details.attachments) === stableJson(action.attachments);
+}
+
+function approvalReady(record) {
+  return mailApprovalReady(record) || extensionApprovalReady(record);
+}
+
 function renderApproval(record) {
-  const ready = mailApprovalReady(record);
+  const ready = approvalReady(record);
+  const isMail = mailApprovalReady(record);
   const details = record.review.details;
   document.querySelector("#approval-preview").hidden = false;
   document.querySelector("#approval-action").textContent = JSON.stringify({
@@ -905,7 +927,7 @@ function renderApproval(record) {
     nonce: record.nonce,
     action: record.action,
   }, null, 2);
-  document.querySelector("#approval-material").textContent = ready ? [
+  document.querySelector("#approval-material").textContent = isMail ? [
     `账户：${details.account_id}`,
     `发件人：${details.from_address}`,
     `收件人：${details.to.join(", ")}`,
@@ -917,9 +939,14 @@ function renderApproval(record) {
       (item) => `${item.name} · ${item.size_bytes} bytes · SHA-256 ${item.sha256}`,
     ).join("\n") : "无"}`,
     `MIME SHA-256：${details.mime_sha256}`,
-  ].join("\n") : "完整内容未获助手核验，不可批准。";
+  ].join("\n") : (ready ? [
+    `目标：${JSON.stringify(details.target, null, 2)}`,
+    `动作完整参数：${JSON.stringify(details.payload, null, 2)}`,
+    `后果：${details.consequences}`,
+    `附件：${JSON.stringify(details.attachments, null, 2)}`,
+  ].join("\n") : "完整内容未获助手核验，不可批准。");
   document.querySelector("#approval-status").textContent = ready
-    ? "助手已核对邮件正文和附件。请逐项确认。"
+    ? (isMail ? "助手已核对邮件正文和附件。请逐项确认。" : "扩展已复核当前动作材料。请核对目标、参数及后果。")
     : (record.state === "WAITING_APPROVAL"
       ? record.review.reason || "预览不完整或已过期，不可批准。"
       : `状态：${record.state}`);
@@ -956,8 +983,8 @@ document.querySelector("#approval-form").addEventListener("submit", async (event
 
 document.querySelector("#approve-button").addEventListener("click", async () => {
   const requested = currentApproval;
-  if (!mailApprovalReady(requested) || navigator.onLine === false) return;
-  if (!window.confirm("确认这份由助手核验的邮件内容？")) return;
+  if (!approvalReady(requested) || navigator.onLine === false) return;
+  if (!window.confirm("确认这项已核对的外部动作及其后果？")) return;
   document.querySelector("#approve-button").disabled = true;
   try {
     const receipt = await jsonRequest(`${api}/approvals/${encodeURIComponent(requested.id)}/approve`, {

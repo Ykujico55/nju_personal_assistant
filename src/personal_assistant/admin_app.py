@@ -26,6 +26,7 @@ from personal_assistant.api.middleware import (
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
+from personal_assistant.api.workbench import router as workbench_router
 from personal_assistant.bootstrap import Container, build_container
 from personal_assistant.core.extensions import (
     ExtensionManifest,
@@ -33,6 +34,7 @@ from personal_assistant.core.extensions import (
     ManifestValidationError,
 )
 from personal_assistant.core.extensions.config import (
+    ExtensionConfigApplyStore,
     ExtensionConfigError,
     validate_extension_config,
 )
@@ -66,6 +68,12 @@ class InstallConfirmationRequest(BaseModel):
 
 class ConfigUpdateRequest(BaseModel):
     config: dict[str, Any]
+
+
+class ConfigApplyRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    extension_version: str = Field(min_length=1, max_length=128)
 
 
 class MailAccountRequest(BaseModel):
@@ -205,6 +213,8 @@ def _application_error(exc: Exception) -> ApplicationError:
         "PLAN_BASELINE_CHANGED",
         "STATE_CONFLICT",
         "INSTALL_CONFLICT",
+        "EXTENSION_NOT_INSTALLED",
+        "INSTALL_PATH_MISSING",
         "OPERATION_IN_PROGRESS",
         "IDEMPOTENCY_CONFLICT",
     }:
@@ -228,6 +238,13 @@ def _confirmation(payload: InstallConfirmationRequest) -> InstallationConfirmati
         confirmed_at=datetime.now(UTC),
         accepted_warning=payload.accepted_warning,
     )
+
+
+async def _config_application(selected: Container, extension_id: str) -> dict[str, Any]:
+    store = selected.extension_config_store
+    if isinstance(store, ExtensionConfigApplyStore):
+        return dict(await store.status(extension_id))
+    return {"state": "UNAVAILABLE"}
 
 
 def create_app(*, settings: Settings | None = None, container: Container | None = None) -> FastAPI:
@@ -264,6 +281,7 @@ def create_app(*, settings: Settings | None = None, container: Container | None 
     application.add_middleware(SecurityHeadersMiddleware, settings=settings)
     install_error_handlers(application)
     application.include_router(operations_router)
+    application.include_router(workbench_router)
     assets = Path(__file__).resolve().parents[2] / "web/admin"
     if not assets.is_dir():
         assets = Path(sysconfig.get_path("data")) / "share/personal-assistant/admin"
@@ -315,6 +333,8 @@ def create_app(*, settings: Settings | None = None, container: Container | None 
             "extension_id": extension_id,
             "config": dict(await selected.extension_config_store.get(extension_id)),
             "config_schema": _config_schema(manifest),
+            "extension_version": manifest.version,
+            "application": await _config_application(selected, extension_id),
         }
 
     @application.put("/admin/v1/extensions/{extension_id}/config")
@@ -335,7 +355,45 @@ def create_app(*, settings: Settings | None = None, container: Container | None 
             "extension_id": extension_id,
             "config": validated,
             "restart_required": True,
+            "extension_version": manifest.version,
+            "application": await _config_application(selected, extension_id),
         }
+
+    @application.post("/admin/v1/extensions/{extension_id}/config/apply")
+    async def apply_extension_config(
+        extension_id: str, payload: ConfigApplyRequest,
+        selected: Container = Depends(get_container),
+    ) -> dict[str, object]:
+        store = selected.extension_config_store
+        if not isinstance(store, ExtensionConfigApplyStore):
+            raise ApplicationError(
+                "CONFIG_APPLY_UNAVAILABLE", "Configuration apply unavailable.", 503
+            )
+        async with selected.lifecycle_store.operation_lock():
+            record = await selected.extension_supervisor.record(extension_id)
+            if record is None or record.state.value != "ENABLED":
+                raise ApplicationError("EXTENSION_NOT_ENABLED", "Install and enable first.", 409)
+            if record.manifest.version != payload.extension_version:
+                raise ApplicationError(
+                    "EXTENSION_VERSION_CHANGED", "Reload extension details.", 409
+                )
+            try:
+                validate_extension_config(
+                    _config_schema(record.manifest), await store.get(extension_id)
+                )
+            except ExtensionConfigError:
+                raise ApplicationError(
+                    "INVALID_EXTENSION_CONFIG",
+                    "Saved configuration does not match this version.", 422,
+                ) from None
+            try:
+                status = await store.apply(extension_id, payload.expected_digest)
+            except ExtensionError as exc:
+                raise ApplicationError(
+                    getattr(exc, "code", "CONFIG_CHANGED"),
+                    "Configuration changed or cannot be applied; reload before applying.", 409,
+                ) from None
+        return {"extension_id": extension_id, "application": status}
 
     @application.get("/admin/v1/mail/accounts")
     async def mail_accounts(

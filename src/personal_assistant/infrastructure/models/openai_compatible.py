@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
+from personal_assistant.core.models.cleanup import run_cleanup
 from personal_assistant.core.models.errors import (
     ModelCredentialUnavailableError,
+    ModelOutputFilteredError,
+    ModelOutputTruncatedError,
     ModelProviderProtocolError,
+    ModelProviderTimeoutError,
 )
 from personal_assistant.core.models.provider import (
     ModelOutput,
     ModelRequest,
+    ModelStreamEvent,
     RecipientIdentity,
+    is_secret_classification,
 )
+from personal_assistant.core.models.router import DisclosureDenied
 from personal_assistant.core.secrets import SecretHandle, SecretStorePort
 from personal_assistant.settings import ConfigurationError
 
@@ -27,6 +37,7 @@ from .base import (
     HttpJsonModelProvider,
     render_request_text,
 )
+from .streaming import response_lines
 
 # Bearer credentials are bounded to visible ASCII with no whitespace or control
 # characters, so they survive header encoding unchanged and never trigger a
@@ -41,7 +52,7 @@ class OpenAICompatibleConfig:
     base_url: str
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
-    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    max_output_tokens: int | None = DEFAULT_MAX_OUTPUT_TOKENS
     secret_handle: SecretHandle | None = None
     json_mode: bool = False
     thinking: str | None = None
@@ -121,13 +132,119 @@ class OpenAICompatibleChatProvider(HttpJsonModelProvider):
             "model": model_id,
             "messages": [{"role": "user", "content": render_request_text(request)}],
             "stream": False,
-            "max_tokens": self._max_output_tokens,
         }
+        if self._max_output_tokens is not None:
+            payload["max_tokens"] = self._max_output_tokens
         if self._json_mode:
             payload["response_format"] = {"type": "json_object"}
         if self._thinking is not None:
             payload["thinking"] = {"type": self._thinking}
         return payload
+
+    async def stream(self, request: ModelRequest) -> AsyncGenerator[ModelStreamEvent, None]:
+        recipient = self._recipient
+        if any(is_secret_classification(field.classification) for field in request.fields):
+            raise DisclosureDenied("secret material may never be sent to a model")
+        deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        try:
+            headers = await asyncio.wait_for(self._headers(), self._timeout_seconds)
+        except TimeoutError:
+            raise ModelProviderTimeoutError(
+                "model credentials timed out", provider_id=self.provider_id
+            ) from None
+        payload = self._build_payload(request, recipient.model_id)
+        payload["stream"] = True
+        payload["stream_options"] = {"include_usage": True}
+        if request.metadata.get("response_format") == "text":
+            payload.pop("response_format", None)
+        headers["Accept"] = "text/event-stream"
+        lines = response_lines(self, payload, headers, recipient, deadline=deadline)
+        data: list[str] = []
+        text: list[str] = []
+        usage: Any = None
+        finished = False
+        done = False
+        try:
+            async for line in lines:
+                if line.startswith("data:"):
+                    data.append(line[5:].removeprefix(" "))
+                    continue
+                if line or not data:
+                    continue
+                event = "\n".join(data)
+                data.clear()
+                if event == "[DONE]":
+                    done = True
+                    break
+                try:
+                    value = json.loads(event)
+                except ValueError:
+                    value = None
+                if not isinstance(value, dict) or "error" in value:
+                    raise self._stream_protocol_error()
+                if value.get("usage") is not None:
+                    usage = value["usage"]
+                choices = value.get("choices")
+                # OpenAI may send a separate usage-only chunk after finish.
+                if choices == [] and finished and isinstance(value.get("usage"), dict):
+                    continue
+                if not isinstance(choices, list) or len(choices) != 1:
+                    raise self._stream_protocol_error()
+                choice = choices[0]
+                if not isinstance(choice, dict) or choice.get("index", 0) != 0:
+                    raise self._stream_protocol_error()
+                delta = choice.get("delta")
+                if (
+                    not isinstance(delta, dict)
+                    or delta.get("tool_calls")
+                    or delta.get("function_call")
+                ):
+                    raise self._stream_protocol_error()
+                content = delta.get("content")
+                if content is not None:
+                    if not isinstance(content, str) or finished:
+                        raise self._stream_protocol_error()
+                    valid_utf8 = True
+                    try:
+                        content.encode("utf-8")
+                    except UnicodeError:
+                        valid_utf8 = False
+                    if not valid_utf8:
+                        raise self._stream_protocol_error()
+                    if content:
+                        text.append(content)
+                        yield ModelStreamEvent(delta=content)
+                reason = choice.get("finish_reason")
+                if reason is not None:
+                    if finished:
+                        raise self._stream_protocol_error()
+                    self._check_termination(reason)
+                    if reason != "stop":
+                        raise self._stream_protocol_error()
+                    finished = True
+        finally:
+            await run_cleanup(lines.aclose())
+            headers.clear()
+            payload.clear()
+        answer = "".join(text)
+        if not done or not finished or not answer.strip():
+            raise self._stream_protocol_error()
+        yield ModelStreamEvent(output=self._output(answer, usage, recipient))
+
+    def _check_termination(self, reason: object) -> None:
+        if reason == "length":
+            raise ModelOutputTruncatedError(
+                "the model ended at its output limit", provider_id=self.provider_id
+            )
+        if reason == "content_filter":
+            raise ModelOutputFilteredError(
+                "the model ended with content filtering", provider_id=self.provider_id
+            )
+
+    def _stream_protocol_error(self) -> ModelProviderProtocolError:
+        return ModelProviderProtocolError(
+            "the model stream is malformed or incomplete", provider_id=self.provider_id
+        )
 
     def _parse_output(self, raw: bytes, recipient: RecipientIdentity) -> ModelOutput:
         payload = self._decode_json(raw)
@@ -141,6 +258,7 @@ class OpenAICompatibleChatProvider(HttpJsonModelProvider):
             raise ModelProviderProtocolError(
                 "the model response choice is malformed", provider_id=self.provider_id
             )
+        self._check_termination(first.get("finish_reason"))
         message = first.get("message")
         if not isinstance(message, dict):
             raise ModelProviderProtocolError(

@@ -1,0 +1,21 @@
+{
+  "jobs": [
+    {
+      "url": "https://www.zhipin.com/job_detail/fixture-python.html?source=local-example",
+      "title": "Python 后端开发（合成示例）",
+      "company": "示例科技（合成）",
+      "recruiter": "示例HR",
+      "location": "南京",
+      "salary_text": "仅为示例",
+      "description": "Python、FastAPI、PostgreSQL。本记录只用于本地软件验证。"
+    },
+    {
+      "url": "https://www.zhipin.com/job_detail/fixture-test.html",
+      "title": "测试开发（合成示例）",
+      "company": "示例研发（合成）",
+      "recruiter": "示例联系人",
+      "location": "上海",
+      "description": "自动化测试，仅为合成记录。"
+    }
+  ]
+}

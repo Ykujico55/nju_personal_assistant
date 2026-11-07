@@ -206,6 +206,7 @@ class TaskService:
                 expected_version=expected_version,
                 idempotency_key=idempotency_key,
             )
+            await self._queue.cancel_ready_for_task(saved.id)
             await self.events.publish(
                 "task.cancelled", saved.id, {"state": saved.state.value}
             )

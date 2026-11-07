@@ -26,7 +26,7 @@ FROZEN_MIGRATIONS = {
 
 REQUIRED_SLOTS = {
     "EventSource": ("knowledge.file_changes",),
-    "ContextProvider": ("knowledge.retrieve",),
+    "ContextProvider": ("knowledge.retrieve", "knowledge.workspace", "knowledge.document"),
     "ScheduleProvider": ("knowledge.reconcile",),
     "MigrationProvider": ("knowledge.index_schema",),
     "FormSchemaProvider": ("knowledge.roots",),
@@ -37,13 +37,14 @@ class ExtensionBoundaryContract(unittest.TestCase):
     def test_manifest_registers_the_standard_slots(self) -> None:
         manifest = ManifestParser().parse(EXTENSION)
         self.assertEqual("personal.knowledge", manifest.id)
-        self.assertEqual("0.1.0", manifest.version)
+        self.assertEqual("0.1.6", manifest.version)
         slots = manifest.slots
         for slot, capability in REQUIRED_SLOTS.items():
             self.assertEqual(capability, slots.get(slot), f"slot {slot} drifted")
         tools = {tool.id: tool.risk for tool in manifest.tools}
         self.assertEqual(
-            {"knowledge.search": "READ", "knowledge.reindex": "INTERNAL_WRITE"},
+            {"knowledge.search": "READ", "knowledge.read": "READ",
+             "knowledge.reindex": "INTERNAL_WRITE"},
             tools,
         )
         self.assertNotIn("EXTERNAL_WRITE", tools.values())

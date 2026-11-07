@@ -1,5 +1,478 @@
 # 实现接力清单
 
+## 当前交接状态（2026-11-07）
+
+六项日用修复及知识正文读取已部署。本次 **CORE.KNOWLEDGE.INDEX.1 DONE**：按本人精确授权升级到 **personal.knowledge 0.1.6 / ENABLED** 并受控重启；原实例索引已READY，40份活动版本/747分块保留，真实关键词检索返回带正文及定位的CURRENT结果。Worker在线、配置已应用、恢复原先未冻结策略，15个原任务状态/版本保持。当前唯一NEXT为 **CORE.RECONCILE.1**，本轮不开始该项。F08.6 BLOCKED、F07/F08 IN_PROGRESS不变；下方较早的部署状态、测试结果和“下一编号”属于历史记录，以本段及本次部署证据为准。
+
+## CORE.KNOWLEDGE.INDEX.1（DONE，已授权部署并核验原索引）— 索引状态编码与可用性修复
+
+现场只读证据：`var/verification/knowledge-index-2026-11-07/live-metadata.json`。原库仍有40个READY版本/747分块，`index.binding.v1` 的 `jsonb_typeof(value)` 为 string，任务 `task_34559d20831e40268f8999e812ae9d47` 已 WAITING_USER，无待领取/执行Agent作业。根因是插件预序列化JSON叠加宿主JSON codec，状态被读成缺失；full复用既有版本仍报告modified40/built0，空文档又阻止整库就绪。并非40份内容全部构建失败，不需要给空文件填假内容。
+
+候选 **personal.knowledge 0.1.6**：
+
+- `store.py` 用对象参数保存元数据，仅兼容解开一次旧JSON字符串；CAS支持旧/新格式且保留完整scan_id比较，绑定摘要/schema/PENDING检查不变。
+- `index.py`/`models.py`/`reindex-output.json` 正确报告复用为unchanged，新增明确空文本跳过诊断和实际读回的index_state/index_reason。只跳过完整读取且UTF-8解码为空白的TXT/Markdown；原正文变空先CAS删除旧索引，删除竞争失败仍待索引。PDF无字/解析/读取错误仍阻断。
+- `workspace.py` 文件项提供编码后的source_uri，`read-input.json` 参数说明通过标准工具注册进入Planner。概览URI仍不能当作文件读取资源，不添加宿主业务分支。
+- 三个插件版本声明及F05契约断言同步0.1.6；无新迁移、能力或第三方运行依赖。不改变审批、原任务工具快照、文件权限或无进展熔断。
+
+可复现验证（Desktop项目根目录，均使用 `.\.venv-win\Scripts\python.exe -Xutf8 -B`）：
+
+1. `-m pytest tests/unit/test_knowledge_index_metadata.py tests/unit/test_knowledge_index.py tests/unit/test_knowledge_binding.py tests/unit/test_knowledge_output_contract.py -q -o addopts='' -p no:cacheprovider --tb=short` → **74 passed**；新增反例先13 failed/5 passed（仅工具输出，未另存红测日志），最终新增文件19 passed（与74重叠）。日志 `var/verification/knowledge-index-2026-11-07/index-target.log`、`index-final.log`。
+2. `-m pytest tests/unit/test_knowledge_discovery_planner.py tests/unit/test_knowledge_workspace.py tests/unit/test_knowledge_documents.py -q -o addopts='' -p no:cacheprovider --tb=short` → **54 passed**；四条新增先4 failed。日志同目录 `discovery.log` / `discovery-red.log`。正式Manifest→注册→冻结快照→Planner请求验证说明可见；合成模型不当作真实模型理解证据。
+3. `-m pytest tests/contract/test_f05_contract_consistency.py tests/unit/test_knowledge_output_contract.py -q -o addopts='' -p no:cacheprovider --tb=short` → **27 passed**，与第1项output有重叠；日志同目录 `contract.log`。
+4. `var/verification/knowledge-meta-codec-2026-11-07/run-postgres.py` → **5 passed**，真实临时PG通过宿主codec/SQL broker验证对象写入、旧值/PENDING/根隔离、新旧CAS、迟到扫描，以及健康MD+空MD→READY→中文全文检索→CURRENT来源/行号且合成源文件不变。对应测试 `tests/integration/test_knowledge_meta_postgres.py`；日志 `postgres.log`、资源清理 `postgres-resources.json`。首轮夹具先初始化broker后建vector类型导致4通过/1失败，调整夹具顺序后5通过；初始日志保留。该组启动时产品已修，不声称其原版红测。
+5. 改动路径Ruff、插件store/index/models三源码及workspace、PG测试Mypy通过，`git diff --check`通过；同行只读检查未发现本轮新增阻断。目标验证覆盖此局部插件修复，按本人要求未重复全量或完整PostgreSQL/Worker套件。
+
+精确材料：`sha256:bcf642e3efa642cfa8070ce7926ee7f002b9dbe776f16b8a20f8b5f52f5d9474`，静态清单 `var/verification/knowledge-index-2026-11-07/candidate.json`。必需能力仍仅 `extension.data.sql`，没有第三方运行依赖。临时数据库剩余0，自建容器已删除并确认；本轮未修改原文件/原库、重建原目录、恢复旧任务、调用真实模型、安装/重启原实例、提交或推送。
+
+### 2026-11-07 已授权部署及原目录索引核验
+
+本人明确回复“允许升级、重启并核验索引”。本轮单独基线及owner/revision冻结票据保存在 `var/verification/knowledge-index-deploy-2026-11-07/`，未复用旧部署票据。原始基线未冻结、15任务、Agent待领取/执行作业0；40来源/40活动版本/747分块。
+
+- 加密备份 `20261107T090940_b32cdceff09b4dd4a9d5fb1c62e210aa.pa-backup`，SHA-256 `4d26955fc2bc895a7a4816af19b70aaf05e6f315c41aec823d06e137f159582e`；verify实际通过43表/0 artifact，凭据仍须安全句柄。证据 `backup-create.json` / `backup-verified.json`。
+- 正式inspect确认与批准材料一致，升级作业 `extop_b21b37432f3f4482a4124791ebf4084d` 为SUCCEEDED。之后执行一次 `python -Xutf8 -B -m personal_assistant.host_entry restart --profile var/deployment/ext-dev2-2026-10-30/host.json`；新boot `5cff93bde2e8457f9198fc698d48fad9` / guardian26364，ready=true、resumed=false，继续保留部署冻结。
+- `verify.py before-resume` 确认升级未改变原目录配置、profile、索引及15个任务，也未改变其他扩展状态；Admin/Agent两runtime加载相同配置摘要/代际，0.1.6 ENABLED及精确hash匹配。
+- 本轮独占防重跑helper `index-check.py --profile var/deployment/ext-dev2-2026-10-30/host.json`，仅连接原库及启动已授权0.1.6的helper自有Worker，经ToolGateway执行一次full reindex与一次“数据结构”search；无全局startup/recover，不创建任务或调用模型，不写原文件。Gateway保留风险、能力和schema校验，R1/R0在冻结下允许；不使用直接SQL补READY。该helper的Gateway审计为既有进程内实现，落盘证据是本次脱敏执行记录，不宣称新增持久Gateway审计。
+- `index-result.json`：扫描42、unchanged40、skipped_empty2、added/modified/deleted/versions_built/events均0、errors0；`index_state=READY / INDEX_READY`。关键词返回2条、unknown=false、均CURRENT且有非空正文/来源/locator；未记录或输出正文、文件路径。vector_mode=disabled，这是实际全文检索证据，不冒称语义向量或模型回答已验收。
+- 原库绑定实际为JSONB object、schema1、READY，完整性与目录绑定检查由真实索引链路通过。索引仍40活动版本/747分块；helper已关闭。`verify.py restore-running` 仅以本轮票据CAS恢复原先未冻结策略，随后 `verify.py verified` 全部核对通过，frozen=false、worker_online=true、mail_send_enabled=false、browser_submit_enabled=false，无旧任务恢复或新作业。
+- `old-processes-checked.json` 记录27个旧进程按PID/创建时间均已退出；`native-listeners.json` 核对8000/8001/8010全部只监听127.0.0.1，PID与本boot就绪记录一致。helper结束后配置应用记录只剩两个正常Admin/Agent runtime。
+
+可复查命令（只读，不重复reindex）：`.\.venv-win\Scripts\python.exe -Xutf8 -B var/verification/knowledge-index-deploy-2026-11-07/verify.py verified`。部署脚本的baseline、restore-running及index-check是本轮单次材料，不可当下一次部署模板原样执行。当前辅助脚本AST/Ruff通过；本轮复用上一轮目标与临时PG测试结果，按本人要求没有再次跑全套或完整PostgreSQL/Worker，不把旧测试数量算作本轮新执行。文档差异检查通过；未提交或推送。
+
+本项已DONE，推荐下一编号CORE.RECONCILE.1，尚未开工。用户可在TUI按F5刷新后新开对话，使用“在知识库中检索数据结构，给出来源和定位”；旧任务仍保留原工具快照，不静默升级权限或自动继续。
+
+## CORE.KNOWLEDGE.CONTENT.1（DONE，已授权部署）— 对话读取授权文件正文
+
+本人反馈只能看目录元数据后，只读现场确认原实例配置已应用，但索引绑定仍缺失；原0.1.4也没有单文件正文读取槽。补齐0.1.5的 `knowledge.read` READ工具与 `knowledge.document` ContextProvider，独立于索引，复用同一实例roots与TXT/Markdown/有限PDF抽取器。按精确知识URI或唯一文件名读取，不自动建任务或重建索引。读前后验证文件身份与路径链，歧义/未找到/不支持/待索引/超过完整传输预算均返回明确状态，失败不泄露部分正文。关键词搜索待索引不再表示普通无命中。
+
+宿主仅增加通用Manifest槽描述（可选、旧记录兼容、持久化JSON往返），根据描述路由概览/关键词/单文件。无SDK/RPC/迁移变化，无业务ID或路径分支。两层通用上下文转发不再strip精确资源字符串，原非空和长度校验保留；避免含前导空格的合法文件名被改成另一个文件。
+
+测试与范围（全部以项目根目录 `.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest <以下文件> -q -o addopts='' -p no:cacheprovider --tb=short` 运行）：
+
+- `tests/unit/test_knowledge_documents.py tests/unit/test_knowledge_workspace.py tests/unit/test_knowledge_paths.py tests/unit/test_knowledge_binding.py tests/unit/test_knowledge_output_contract.py tests/contract/test_f05_contract_consistency.py`：108 passed。包含真实临时Windows junction/父junction、忽略目录大小写、来源变化、同名、空探针及真实SDK codec超限；不依赖管理员符号链接权限的测试替换了原skip，最终无skip。三项同行检查缺口均补反例后通过。
+- `tests/unit/test_context_provider_descriptions.py tests/unit/test_conversation_routing.py tests/unit/test_extension_context_conversation.py tests/unit/test_extension_staging.py tests/unit/test_extension_registry.py`：56 passed；新增描述契约先6 failed/11 passed。日志 `var/verification/knowledge-content-2026-11-07/descriptions.log`。
+- 精确资源两层trim反例先1 failed，修复后 `tests/unit/test_extension_context_conversation.py tests/unit/test_context_provider_descriptions.py`：37 passed。日志同目录 `resource.log`；与上一组重叠，不能相加。
+- `tests/integration/test_conversation_workspace.py tests/api/test_workbench_conversation.py`：17 passed、2个既有依赖弃用警告，日志同目录 `conversation.log`。新增正文组合先3 failed；精确前导空格文件先1 failed（误读resume.txt而非空格文件），最终通过。联测走实际API→上下文服务→Supervisor→知识Worker→SDK序列化→合成流式模型输入，验证超过原默认长度的正文完整、单文件来源、不可信边界、未索引状态、同键不重读以及任务/作业为0。没有把合成模型路由结果当作真实模型理解能力证据。
+
+最终格式收尾仅复跑新增documents与F05契约58 passed，日志var/verification/knowledge-documents-2026-11-07/plugin-final.log。相关Ruff、宿主5源码及插件2源码Mypy、差异检查通过；与前述集合重叠，计数不相加。插件静态材料为 `sha256:f05c5a87c5b3bbb472faaab1bf21a48e452f4f00134341f737a9f0e0f207af5c`，无运行依赖或迁移增量；部署前固定的8项宿主文件摘要与实际重启使用材料一致。
+
+按本人要求未运行完整项目套件、完整PostgreSQL/Worker或真实模型。候选验证阶段未操作原实例；随后本人批准后已按下项完成原实例升级和重启，未读取个人正文或重建原索引。F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。
+
+## CORE.KNOWLEDGE.APPLY.1（DONE，已授权原实例升级）
+
+本人明确批准0.1.5与精确材料摘要后，正式inspect再次匹配，升级操作 `extop_ba3352918e5e4037b5bed9a3c8597e66` 返回SUCCEEDED。必需能力仍仅extension.data.sql，无运行依赖或迁移增量。后台先正常restart加载新Manifest字段解析，再upgrade，最后统一restart加载0.1.5；两次均保持本轮独立部署冻结。未使用旧冻结票据或无条件resume，核验后CAS恢复原先未冻结策略。
+
+升级前保存新基线，并生成加密备份 `20261107T060527_b7477022715b4b3799d0c02a4a8c70e0.pa-backup`，SHA-256 `4bc50bc60ab7bd221f344780a22017d54c38d480cd8844e02d12541aaa5c3717`；verify为43表/0登记制品。原profile未改，临时backup-profile只合并已配置的Windows凭据句柄。旧后台枚举新Manifest字段时列表500，基线改用只读持久元数据；重启后列表正常200，新增读取槽和描述已发布/持久化。
+
+最终 `personal.knowledge@0.1.5 / ENABLED`，Guardian41252、boot `3f92cf7dbb7d4c64852c068c22c39d19`，Admin/Agent等组件就绪，Worker在线、未冻结。两次旧进程树27/25个均按PID和创建时间确认退出；Windows原生TCP核对8000/8001/8010都只监听127.0.0.1且属于对应ready进程。原profile/配置、40来源/40版本/747分块、13个任务ID-status-version及其他扩展状态全部不变；两份活跃运行配置均APPLIED。没有强制启用既有隔离插件，没有恢复旧暂停任务。
+
+脱敏证据位于 `var/verification/knowledge-deploy-2026-11-07/`。最终verified.json的ok=true；candidate与8项宿主文件摘要均匹配。复验命令（未来用户更新任务或索引后基线可能合理变化，并非永久健康门禁）：
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B var/verification/knowledge-deploy-2026-11-07/verify.py verified
+.\.venv-win\Scripts\python.exe -Xutf8 -B var/verification/knowledge-deploy-2026-11-07/native-listeners.py
+~~~
+本轮部署没有读取个人文件正文、调用模型、重建原索引、提交或推送。现有索引绑定仍待就绪，embedding.provider=none；指定文件直读不依赖它，关键词RAG需后续明确重建索引，向量模型也尚未配置。本轮不因RAG建议擅自执行扫描/模型处理。下一唯一NEXT回到CORE.RECONCILE.1；F08.6及其他真实验收状态不变。
+
+## CORE.OUTPUT.1（DONE，已授权升级并重启）— 默认完整输出
+
+2026-11-06开始、11-07完成本地验证。本人要求“改成默认不做输出长度截断”，因此本项优先于CORE.STARTUP.1（WAITING）。
+
+实现：
+- personal.knowledge候选0.1.3默认不再按50文件/10000 JSON字符裁剪目录概览；显式max_files仍有效。扫描1000条目/8层/检查点2秒、授权路径/隐藏项/链接规则保留，部分结果以truncation_reasons说明原因；不读取正文、不重建索引、不把UNKNOWN索引状态改成已索引。
+- 通用ExtensionContextService默认max_chars=None，完整保留已接收证据；取消任意100000字符正文拒绝阈值，保留RPC字节、8秒超时、来源/敏感性校验、top-k条数和显式字符预算。
+- OpenAI/Ollama默认不发送max_tokens/num_predict；显式正整数预算仍有效，自检512预算未变。新旧聊天提示/API/TUI取消8000字符回答上限，正常结束才存完整回执，旧键重放不重新调用。供应商length终止仍不算完整成功。
+- assistant历史允许长回答，用户消息8000/历史20条/总输入64000保留；取消history[-12:]，超输入容量明确拒绝并保留内容，不偷偷丢旧消息。显式Agent目标10000限制不变。
+- 追加修复TUI分包问题：完整终帧可能超过旧65536字符buffer阈值，删除这个重复检查，保留累计2MiB/90秒、UTF-8和SSE一致性检查。80秒回答总时限与HTTP响应字节保护不变。
+
+先失败再修复及目标验证（Desktop项目根目录；所有pytest统一 -q -o addopts='' -p no:cacheprovider --tb=short）：
+1. 上下文默认完整性新反例先2 failed；最终 tests/unit/test_extension_context_conversation.py：19 passed。覆盖18000及150000字符、结尾与后续来源保留、原显式预算及SECRET/来源/取消边界。
+2. 知识workspace/paths/output_contract及F05契约：60 passed。新增概览与版本反例先3 failed/9 passed；中间1项测试样本不足10000字符，改为100个文件后全部通过。不是删除断言，45长名文件与100短名文件均确认超过10000字符且清单完整。
+3. tests/integration/test_conversation_workspace.py：3 passed、2既有弃用警告。合成临时目录82文件，实际API→ContextService→Supervisor→知识worker→SDK序列化路径，完整JSON进模型请求，无文件正文、无任务/作业；没有访问原资料或调用真实模型。
+4. 模型/回答目标新增先11 failed/3 passed，再14 passed；追加显式预算非法值5项。相关集合172 passed、1 failed、2 warnings，唯一失败为旧测试要求丢弃12条以外历史。将断言加强为完整history后仅复跑该项1 passed；没有宣称一轮173全绿。日志var/verification/output-check-2026-11-06/{model-output,history-contract}.log。
+5. 真分块SSE新增先2 failed/3 passed：25000汉字JSON转义后的约150KiB完整终帧远低于总字节上限，却因分包失败。最小修复后28 passed/17 deselected/2 warnings；保留超2MiB拒绝。日志同目录chunked-stream.log。与第4组重叠，不相加。
+
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_extension_context_conversation.py -q -o addopts='' -p no:cacheprovider --tb=short
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_knowledge_workspace.py tests/unit/test_knowledge_paths.py tests/unit/test_knowledge_output_contract.py tests/contract/test_f05_contract_consistency.py -q -o addopts='' -p no:cacheprovider --tb=short
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/integration/test_conversation_workspace.py -q -o addopts='' -p no:cacheprovider --tb=short
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_output_unbounded.py tests/unit/test_model_adapters.py tests/unit/test_model_streaming.py tests/api/test_workbench_api.py tests/api/test_workbench_stream.py tests/api/test_workbench_conversation.py tests/unit/test_tui_app.py tests/unit/test_tui_stream.py tests/unit/test_tui_conversation.py tests/unit/test_tui_conversation_failures.py tests/integration/test_conversation_model_failures.py -q -o addopts='' -p no:cacheprovider --tb=short
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_tui_app.py::test_agent_send_carries_full_context_with_role_boundaries -q -o addopts='' -p no:cacheprovider --tb=short
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_output_unbounded.py tests/unit/test_tui_stream.py tests/unit/test_tui_conversation.py -k 'chunked or stream or receipt or transport' -q -o addopts='' -p no:cacheprovider --tb=short
+~~~
+
+源码改动：extensions/personal_knowledge/{版本三处,README.md,src/personal_knowledge/workspace.py}；core/context/extension_provider.py、core/conversation.py、infrastructure/models/{base,openai_compatible,ollama}.py、api/{workbench,workbench_conversation}.py、cli/tui/{app,service}.py。相应6份测试与README/契约/设计/TUI指南同步。相关Ruff、Mypy（上下文1、插件1、模型/API/TUI8源码分组）和差异检查通过；目标测试运行器0。按本人避免完整套件过度验证要求，未跑全量或完整PostgreSQL/真实Worker，未调用真实模型。
+
+插件静态材料：personal.knowledge@0.1.3，sha256:f4f63f572a590b99b42c5345a16d91fac4c1aec678dd069d11db9bf7cf3932a1；必需能力仍仅extension.data.sql，无第三方运行依赖、无迁移。候选验证时尚未构建/安装/重启原实例；随后本人确认后已按下方部署记录应用。原目录与索引应保留，不恢复旧任务。不宣称供应商无限输出，长目录超运行预算仍可能不完整；旧manual回复失败分类保持原边界。
+
+本项授权应用已完成，下项为CORE.STARTUP.1；不推进其他业务。F08.6 BLOCKED、F07/F08 IN_PROGRESS不变；未改原库/profile、提交或推送。
+
+### 2026-11-07 已授权原实例应用
+
+本人明确批准0.1.3及精确sha256:f4f63f572a590b99b42c5345a16d91fac4c1aec678dd069d11db9bf7cf3932a1后，静态摘要及正式inspect再次匹配。部署前只读基线：1条roots配置、40来源/40活动版本/747分块、13个原任务，READY/LEASED Agent作业0，后台原为未冻结。暂时freeze后正式upgrade操作extop_ca1583dddcff4b3e81df40ba6ab9261c返回SUCCEEDED。
+
+原守护器27124及public27940/health7996/agent30616/admin35484通过host_entry stop正常退出；Windows原生PID与监听检查确认全部退出，8000/8001/8010已释放。随后以原profile、serve --admin隐藏启动新Guardian10060及public35320/health22832/agent35864/admin6544。重启后的知识插件再次为QUARANTINED，准确版本和材料一致、日志为空；没有宣称启动隔离根因已解决。保持冻结，通过正式enable同一已授权版本，操作extop_166e803ae2d94894a299e8d67eaf441a为SUCCEEDED，最终ENABLED。CORE.STARTUP.1继续作为下一项复现根因，不在此次部署临时更改恢复逻辑或其他扩展状态。
+
+最终只读核对：配置摘要/profile摘要/索引摘要/13个任务id-status-version均不变，其他扩展状态不变；新长回答历史schema已加载，health正常、Worker在线、模型已配置，待领取/执行Agent作业仍0。随后恢复原先未冻结状态，mail_send_enabled/browser_submit_enabled仍false。已有TUI进程不会自动重载源码，需要本人Ctrl+Q后重新打开；未强制关闭窗口或清除未完成输入。
+
+证据位于Git忽略目录var/verification/output-deploy-2026-11-07/：baseline.json、plan.json、operation.json、stopped.json、reenable.json、before-resume.json、verified.json及空host日志。最终verified.json的ok=true。部署核对脚本读取原库仅用read-only事务和Windows安全句柄，不打印或保存凭据。可复验命令：
+
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B var/verification/output-deploy-2026-11-07/verify.py verified
+~~~
+
+该脚本对照当次基线，未来用户改索引/任务/配置后可能合理失败，不是永久健康门禁。本轮仅应用已通过定向验证且获明确批准的材料，未重复完整/目标测试、未调用真实模型或发邮件、未恢复旧任务、提交或推送。CORE.OUTPUT.1已DONE，唯一NEXT恢复为CORE.STARTUP.1；F08.6 BLOCKED及其他阶段状态不变。
+
+## CORE.CONVERSATION.2（DONE，已授权升级并重启）— 已配置工作区概览与明确模型失败收尾
+
+2026-11-06 根据本人截图修复。只读现场确认 personal.knowledge 0.1.1 ENABLED，保存的一条授权根目录存在；最新对话记录为 STREAMING v2，模型审计只有该轮路由完成，没有回答完成。旧代码未保存具体失败类型，不能据此认定是限额、网络或内容过滤；不要求本人重新填写已保存路径。
+
+候选实现：
+- 知识插件0.1.2增加 knowledge.workspace，基于实例roots返回有界目录元数据清单和配置/可访问/截断状态；不读正文或自动索引，清单不冒充已索引资料。正文 knowledge.retrieve 保留。通用宿主按Manifest校验并传递同扩展多provider选择；单provider旧filters形状兼容，不添加核心业务ID分支。
+- 明确模型length/content_filter、HTTP拒绝及调用前凭据错误，保存固定FAILED错误码，同键回放不重新调用模型；真正断流/超时/缺尾帧/存储失败仍UNKNOWN。增加本机“放弃未完成回复”：仅STREAMING v2可CAS为FAILED，原键/审计保留，片段不入history；DISPATCHING/READY_TASK/外部动作不适用，迟到成功不能覆盖。
+- 更新工作台/契约/README/设计说明。模型适配器的固定终止类型通过共享解析清洗边界重新抛出，先清除原响应，不传供应商正文或秘密。
+
+已执行目标验证（Desktop项目根目录，用.\.venv-win\Scripts\python.exe -Xutf8 -B；pytest统一 -q -o addopts='' -p no:cacheprovider --tb=short）：
+1. tests/unit/test_extension_context_conversation.py + tests/unit/test_conversation_routing.py：23 passed；新增provider选择反例最初7 failed、10 passed。之后为兼容旧单provider调整filters形状，再跑 context_conversation + extension_supervision_service：62 passed。两组重叠，数字不相加。
+2. test_knowledge_workspace.py + test_knowledge_paths.py + test_knowledge_output_contract.py：37 passed；目录概览反例先8 failed、1 passed。tests/contract/test_f05_contract_consistency.py：20 passed。
+3. tests/integration/test_conversation_workspace.py：2 passed、2个既有依赖警告。实际API→上下文服务→Supervisor→知识worker→SDK JSON往返→合成流式模型，配置与两个文件名进上下文、sources非空、任务/作业均0，同键不重查目录；双provider一次RPC，空正文检索仍保留概览。不是跨进程Worker/数据库验收。
+4. 明确模型失败/回复放弃/原流式/模型适配器最终113 passed、2个既有弃用警告，日志var/verification/conversation-check-2026-11-06/model-failure-discard.log。命令如下：
+
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/integration/test_conversation_model_failures.py tests/unit/test_tui_conversation_failures.py tests/unit/test_model_streaming.py tests/api/test_workbench_conversation.py tests/unit/test_tui_stream.py tests/unit/test_tui_conversation.py tests/unit/test_model_adapters.py -q -o addopts='' -p no:cacheprovider --tb=short
+~~~
+
+先失败后修复：明确终止反例7 failed/4 passed；放弃回复入口7 failed/11 passed；补充路由length/filter后2 failed/65 passed，定位共享base解析清洗抹掉新类型。最小修复清洗边界后，上述最终113项全过。没有删断言、调高生产超时或重新发原请求。本轮相关Ruff、Mypy（宿主3+6源码、插件3源码分组）及差异检查通过；活动目标测试运行器0。
+
+真实DeepSeek只使用公开合成目录清单：文件清单问题与“路径已写入配置”的追问均选workspace；回答57个非空delta，包含两个正确文件名并正常结束。三次请求报告1767 tokens；未发真实目录/正文/任务/邮箱，未创建原实例任务。可复现脚本与脱敏结果：var/verification/conversation-check-2026-11-06/workspace-model-check.py及同名.json；原错误分类反例在stream-failure-probe.json。该脚本会产生三次模型调用费用，不自动重复。
+
+插件静态候选：personal.knowledge@0.1.2，材料SHA-256 a7a4f5e6510a50d0b622e7753a3cd84d5adb7cad3d1363f48f0115ce5aacc290；必需能力仍仅extension.data.sql，无第三方运行依赖，旧迁移/state_schema_version不变。候选阶段未操作原实例；随后本人确认后已按以下部署记录应用，目录和索引保留。
+
+按本人避免完整套件过度验证要求，没有重跑全量、完整PostgreSQL或真实Worker；本地结果不等于原实例已加载修复。未清空原库/幂等记录、未恢复旧任务、未提交推送。下一编号仍为CORE.RECONCILE.1（WAITING），F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。
+
+
+### 2026-11-06 已授权原实例升级与重启
+
+本人确认精确sha256:a7a4f5e6510a50d0b622e7753a3cd84d5adb7cad3d1363f48f0115ce5aacc290后，正式inspect再次匹配，同键upgrade操作extop_57e3149f5bdc4003b4316084ba522cf5返回SUCCEEDED。未重建材料/改版本/新增迁移。升级前只读保存配置摘要、索引摘要及9个任务状态；确认READY/LEASED Agent作业0后临时freeze。
+
+通过host_entry stop正常停止原Guardian与四组件，确认旧PID全部退出、8000/8001/8010释放，再以serve --profile var/deployment/ext-dev2-2026-10-30/host.json --admin隐藏启动。初次重启后知识插件变为QUARANTINED，未记recover失败操作；保持冻结并通过正式enable同一已授权0.1.2重新健康检查，操作extop_e72559381b8f4454b6999fbb5dc333dc为SUCCEEDED。现ENABLED，两个ContextProvider可见；新conversation/discard路由已加载。该启动隔离现象需要另项复现，不能把这次升级说成完全无异常；双进程同时recover的STARTING状态竞争只是与源码相符的推断，尚未证实根因。其他ehall/smail隔离时间早于本次重启，未改变其状态。
+
+最终核对：配置摘要相同；4来源/4活动版本/20分块及来源版本摘要相同；9个原任务ID/status/version全部相同，未恢复旧暂停任务；无待领取/执行中的Agent作业。随后恢复原先未冻结状态，Worker在线、model_configured=true、health正常，mail_send_enabled/browser_submit_enabled仍false。原TUI进程需本人Ctrl+Q后重新打开以加载新按钮；没有强制关闭其窗口或丢弃未完成回复。
+
+脱敏部署记录：var/verification/conversation-deploy-2026-11-06/{baseline,operation,reenable,stopped,verified}.json。可复验当前与当次基线元数据：
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B var/verification/conversation-deploy-2026-11-06/verify.py
+~~~
+该只读脚本在未来用户创建任务或更新索引后可能因基线变化而失败，不能当作永久健康门禁。停止后的首次进程核对因psutil未安装失败，未安装依赖；改用Windows原生Get-Process/Get-NetTCPConnection确认全部退出。最终verified.json的ok=true。本轮仅应用上轮已验证材料及现场部署核对，没有重复全量/目标测试、没有发起模型调用/正文检索、提交或推送。F08.6仍BLOCKED，不据此宣布其他阶段通过。
+
+### 2026-11-07 本人授权的日用可靠性修复顺序
+
+按本人新指令依次完成六项，每项完成目标回归后再切换唯一NEXT；前两项通过后继续后四项，不中途要求重复确认既有开发范围。不增加真机测试步骤，不擅自修改原实例扩展状态或安装新材料。
+
+1. CORE.STARTUP.1（DONE，已授权部署）：验证并修复多宿主恢复竞争；保留真正失败/崩溃隔离、正确操作回执与诊断。
+2. CORE.CONFIG.1（DONE，已授权部署）：保存配置与运行配置明确区分；统一应用，Admin/Agent/Worker同步代际，目录切换后旧索引失效/隔离；已保存/待生效/已生效/待索引状态。
+3. CORE.TOOLSET.1（DONE，已授权部署）：旧任务固定工具快照的明确提示，以及携带原目标创建新任务；不改旧权限、审批、未决动作。
+4. CORE.DIAGNOSTIC.1（DONE，已授权部署）：脱敏错误分类与关联编号，模型不得把工具不可用说成目录未配置。
+5. CORE.HOST.1（DONE，已授权部署）：重复serve明确已运行，受支持restart正常停止/等待/启动/就绪，保留或明确冻结策略。
+6. CORE.COMPAT.1（DONE，已授权部署）：TUI启动核对后端接口能力与版本，提前提示不兼容；整理对话/任务投影，避免将原始JSON当用户目标展示。
+
+本人已要求避免完整套件过度验证：每项运行改动链路及相关故障回归，涉及跨进程持久同步补隔离数据库目标验证；保留失败证据及真实依赖边界。全部六项通过后才做本批次完整交付汇总，不把本地通过写成原实例已加载。
+
+## CORE.COMPAT.1（DONE，已授权部署）— 接口能力协商与可读任务历史
+
+新增只读 capabilities 协议。TUI 启动、远程动作开始及远程确认返回后检查协议与必需能力；旧后台、畸形声明和网络不可达分别提示。没有清除 pending、原键、输入或已确认历史，不降级或自动重放请求。本机参数读取独立于后台；已有未确认命令时仍沿用原串行操作限制。
+
+任务列表投影原目标，详情按历史用户/历史助手显示完整参考对话；只识别两种严格宿主格式，任意 JSON 或异常包装原样显示。格式不是来源证明，持久原文、创建载荷、权限/审批判断不使用展示投影。80×24 终端保留列表可读高度，压缩任务按钮行并去掉重复内边距，所有按钮保持可见。
+
+可复现命令（项目根目录，pytest 均使用 `.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest <文件> -q -o addopts='' -p no:cacheprovider --tb=short`）：
+- `tests/api/test_workbench_capabilities.py tests/unit/test_tui_capabilities.py`：21 passed（先20 failed/1 passed），日志 `var/verification/config-check-2026-11-07/compat-api-service.log`。
+- `tests/unit/test_task_presentation.py`：32 passed（先32 failed），精确包装/长历史/重复键/尾部内容边界均保留。
+- `tests/unit/test_tui_compatibility.py tests/unit/test_tui_task_toolset.py tests/unit/test_tui_task_history.py tests/unit/test_tui_configuration_apply.py tests/unit/test_tui_app.py`：最终33 passed，日志 `compat-confirmation.log`。确认期间更换后台的3个反例先全部失败；补确认返回后的协商后通过。包含原请求保留、设置、工具快照和原文新建回归。
+- `tests/unit/test_tui_list_layout.py`：最终12 passed，日志 `compat-layout.log`。新增窗口缩放回归先1 failed/1 passed；保持原列表高度和业务断言，修正窄屏按钮横向/纵向越界。
+- TUI 子系统前一次合并运行116 passed/1 failed（窄屏移除按钮不可达），日志 `compat-tui-final.log`；其失败及之后涉及的路径由上述两组定向复跑覆盖，未再次跑整套，不写成一轮全绿。更早的两次合并运行因测试等待挂起被中断，`compat-tui-regression.log`、`compat-tui-core.log` 不是通过证据。
+- 测试等待辅助函数改为有界等待；额外吞取消反例先失败，修复后确认超时明确失败且不遗留 waiter。没有放大生产超时或弱化业务断言。
+- 本项12目标文件 Ruff、4源码 Mypy 和差异检查通过。各组有重叠，计数不相加。
+
+六项均已完成本地实现与目标验证。按本人避免完整套件过度验证要求，本批次没有重跑全项目或完整 PostgreSQL/Worker 门禁；恢复竞争已补真实临时 PostgreSQL、配置同步和主机重启已补隔离真实进程测试，证据见对应编号。没有新增手机步骤，未调用真实模型、访问原库或原服务、安装/升级扩展、提交或推送。本地通过不代表原实例已加载；personal.knowledge 0.1.4 仍为源码候选，既有 F08.6 BLOCKED、F07/F08 IN_PROGRESS 不变。
+
+## CORE.APPLY.1（DONE，已授权部署）— 本批次原实例应用
+
+2026-11-07 本人明确要求部署六项修复后执行。personal.knowledge 0.1.4 静态材料及正式 inspect 均为 `sha256:2c246d13b7b45c503db0aa6b1442b9e34da2bb7a2173caabc0557adb1172bc27`，能力仍仅 extension.data.sql，无新增第三方运行依赖或核心迁移。操作 `extop_81745f1c101d47caae01bec9aba38fbb` 唯一提交、轮询至 SUCCEEDED。
+
+部署前记录1根目录配置、40来源/40版本/747分块、13任务及其他扩展状态摘要，Agent READY/LEASED作业为0，原实例未冻结。临时冻结后创建加密恢复点 `20261107T043406_39e494fb073f4abca74c60072887b5a2.pa-backup`，验证43表/0登记制品可读取；没有恢复或覆盖原库。保存271个宿主/SDK/网页及启动文件摘要和本次候选源码归档；这不是旧运行进程内存代码的回退镜像。
+
+先正常停止旧Guardian10060，确认其25个进程已退出、守护锁释放及8000/8001/8010关闭，再使用原profile和.venv-win、Admin模式隐藏启动新版。首轮新后台已正常恢复原启用扩展，没有再次错误隔离。正式升级知识插件后，使用新版restart正常停止前一23进程并启动新Guardian2784（launcher35632），boot `a85d2c2aa41347008902c3bb7d93905d`，Admin模式保留。该restart在冻结状态执行，回执ready=true/resumed=false；完成只读核验且部署冻结票据未变、Agent作业仍0后，CAS恢复部署前未冻结策略，不恢复旧任务。
+
+最终核验：配置/profile/索引/13任务摘要不变，其他扩展状态不变；0.1.4 ENABLED，配置APPLIED且Admin/Agent两个活跃副本摘要一致，四组件就绪，Worker在线，DeepSeek配置与凭据存在性正确，TUI真实客户端协商协议1通过，271代码摘要不变。Windows原生TCP表核对8000/8001/8010只绑定127.0.0.1，并与本次ready记录的实际PID相符。PowerShell监听查询曾返回空，未把该结果记为通过；采用原生表补证。首个就绪探针误将ready布尔值当作映射导致AttributeError，修正核对方式后逐组件通过，不属于服务故障。
+
+旧知识索引缺少 `index.binding.v1` 已只读确认，因此0.1.4在首次完整reindex前显示PENDING；没有清空索引、自动重扫目录或手写READY。nju.ehall与nju.smail原有QUARANTINED保留，未强制启用。mail_send_enabled和browser_submit_enabled仍false，没有发送邮件、模型试调用、浏览器提交或原任务恢复；没有新增手机步骤、提交或推送。F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。
+
+证据目录：`var/verification/daily-deploy-2026-11-07/`（Git忽略），包括baseline、精确preview/原请求、operation-latest、restart.log、before-resume、verified、tui-readiness及native-listeners。`verified.json`最终ok=true/frozen=false；`restore-running.json`记录的是CAS恢复前快照，当前状态以verified为准。
+
+只读复验命令（未来本人变更任务、目录或索引后，基线比较可能合理失败）：
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B var/verification/daily-deploy-2026-11-07/verify.py verified
+.\.venv-win\Scripts\python.exe -Xutf8 -B var/verification/daily-deploy-2026-11-07/native-listeners.py
+~~~
+
+本轮复用上一轮已通过的目标验证，按本人避免完整套件过度验证要求未重复全套/完整PostgreSQL-Worker门禁；本次新增证据是原实例正式升级、正常重启及只读部署核验，不将其称为全系统业务验收。下一编号回到CORE.RECONCILE.1，本轮不继续编码。
+
+## CORE.HOST.1（DONE，已授权部署）— 可靠重启与运行归属
+
+新增 `host_entry restart --profile ...` 与 `assistant-host.ps1 -Action restart`：串行重启锁、跨进程冻结票据 CAS、原 Admin 模式保留，先正常停止并等待旧守护器释放锁，再隐藏启动和确认新 boot/受监督 PID 归属与全部组件就绪。原冻结保持；原未冻结仅在本次票据仍有效时恢复领取。旧版缺 boot 的守护器明确返回 HOST_RESTART_UNSUPPORTED，需一次 stop/serve 加载新版；不按旧 PID 强杀。
+
+真实 Windows 验证发现并修正两个问题：venv启动器PID与实际Python PID不同，使用本次boot及直接父子归属验证；普通状态读取会与原子替换发生WinError5共享冲突，守护器级已确定性复现退出，现仅对5/32/33短暂共享冲突作2秒有界重试，永久失败仍抛出且清理临时文件。
+
+验证命令统一使用 `.venv-win/Scripts/python.exe -Xutf8 -B -m pytest <文件> -q -o addopts='' -p no:cacheprovider --tb=short`：
+- `tests/unit/test_host_restart.py tests/unit/test_host_diagnostics.py`：最终23 passed；先7个重启反例失败，父子PID及真实文件竞争反例也先红后绿。
+- 相邻host_delivery/scheduler集合此前36 passed（与上项重叠，不相加）。
+- `tests/integration/test_host_restart_process.py`：2 passed（49.25秒）；增加1.3秒状态只读占用后，仅重跑未冻结分支1 passed（24.06秒，重叠不相加）。覆盖重复serve不改变冻结、两种冻结策略、新旧真实进程归属/就绪及全部自建PID和端口回收。
+- Ruff8目标文件、Mypy6源码、PowerShell语法和差异检查通过；新进程测试Ruff/Mypy另过。
+
+仅独立临时内存主机和合成组件/记录；未调用模型、访问原库、操作原实例或安装扩展，未跑完整套件。下一编号CORE.COMPAT.1。
+
+## CORE.DIAGNOSTIC.1（DONE，已授权部署）— 固定失败码与关联编号
+
+重复启动、端口占用、配置格式、数据库/模型凭据、扩展恢复、组件启动/退出均提供固定宿主码+diag编号；重复serve及无child预检失败不冻结原运行状态。child只保存code/id/component/pid，拒绝旧PID和污染字段，stderr仍不落盘。Agent将模型/工具/配置失败分类，保留原状态和UNKNOWN、不自动重试；checkpoint/execution/API/TUI只投影固定说明及合法关联编号。明确工具缺失不代表用户目录没填。HTTP关联编号限制为host格式；TUI不显示供应商原始错误message。
+
+目标证据：
+- `python -m pytest tests/unit/test_host_diagnostics.py tests/unit/test_host_delivery.py ...`19 passed；首6红，最后新诊断文件9 passed。Ruff4文件/Mypy3源码通过。
+- `python -m pytest tests/unit/test_runtime_failure_diagnostics.py tests/unit/test_runtime_delivery.py tests/unit/test_runtime_queue_lifecycle.py tests/unit/test_runtime_remediation_delivery.py tests/unit/test_runtime_tool_failure_observations.py tests/unit/test_planner_validation_diagnostics.py tests/unit/test_conversation_routing.py ...`54 passed，覆盖11类合成异常、原UNKNOWN/取消/熔断；Ruff/Mypy4源码通过。
+- `python -m pytest tests/api/test_workbench_failure_diagnostics.py tests/api/test_workbench_api.py -k trace ...`7 passed/11 deselected/2 warnings。安全哨兵不进响应，检查点不变；Ruff/Mypy1源码通过。
+- `python -m pytest tests/unit/test_tui_error_diagnostics.py tests/api/test_request_diagnostic_id.py tests/unit/test_tui_service.py tests/unit/test_tui_stream.py ...`25 passed；追加Agent投影后与test_tui_task_diagnostics合并7 passed，2既有警告；先4红+1投影红。Ruff/Mypy3源码通过。
+
+以上`...`均为`-q -o addopts='' -p no:cacheprovider --tb=short`。未跑全量、原服务/库、模型或真机；没有安装部署。下一编号CORE.HOST.1。
+
+## CORE.TOOLSET.1（DONE，已授权部署）— 固定工具快照与携目标新建
+
+trace与execution提供只读toolset投影，区分UNBOUND与空工具快照，明确新增工具/原工具版本或grants变化；历史未存extension_id的项目标null，不伪造证据。TUI显示原因，提供“携原目标新建”；确认前后检查未决/活动状态和目标版本，只创建独立任务，不复制旧checkpoint、审批、Outbox或权限。原任务保持不变。
+
+验证：API先17失败反例，最终`python -m pytest tests/api/test_workbench_toolset.py tests/api/test_workbench_api.py -q -o addopts='' -p no:cacheprovider --tb=short`得30 passed/2 warnings；日志`var/verification/config-check-2026-11-07/toolset-api.log`。TUI先2红，`tests/unit/test_tui_task_toolset.py tests/unit/test_tui_task_diagnostics.py`初4过；追加确认期间转未决后新文件最终3 passed（toolset-tui.log），原诊断2过。中间测试启动挂起的精确进程已回收，改为日志直写后正常完成，未用删断言或生产超时绕过。Ruff与API两源码Mypy通过。未跑全量、未创建原实例任务或提交部署。下一编号CORE.DIAGNOSTIC.1。
+
+## CORE.CONFIG.1（DONE，已授权部署）— 保存、应用与知识索引绑定
+
+非秘密保存稿与已应用快照分离，apply绑定摘要/扩展版本；活跃进程持有OS锁并报告加载摘要，全部确认才APPLIED。Worker轮询及派发前同步，在途R2不取消/重放，跨配置READ结果拒绝发布。异进程禁用/隔离/升级时不复活缓存旧版本；失败代际不自动重试，可修正配置或重启后台。TUI新增应用按钮及独立状态，配置校验422与已卸载详情404不阻断其他面板。知识插件0.1.4候选将索引绑定真实根/扫描选项，换根及遗留索引先PENDING，完整扫描才READY。
+
+可复现目标命令（均加`-q -o addopts='' -p no:cacheprovider --tb=short`）：
+- `python -m pytest tests/unit/test_extension_config_application.py tests/unit/test_extension_config.py`及既有能力目标：实施者36 passed（含11新应用/生命周期边界）；追加正式STARTING/DRAINING/UPGRADING不可被配置循环打断反例后，新文件14 passed；先写5红、READ跨代际红及3个禁用/升级反例。
+- `python -m pytest tests/unit/test_knowledge_binding.py tests/unit/test_knowledge_index.py tests/unit/test_knowledge_workspace.py tests/unit/test_knowledge_output_contract.py`：67 passed；最初绑定6反例全红。日志`var/verification/config-check-2026-11-07/knowledge.log`。
+- `python -m pytest tests/integration/test_configuration_process_sync.py`：1 passed，真实双宿主进程+合成Worker验证save不生效、apply两端确认、退出释放lease；无真实扩展安装或数据。
+- `python -m pytest tests/api/test_admin_extension_config.py tests/unit/test_tui_service.py tests/unit/test_tui_configuration_apply.py`初轮20 passed；后补schema变更422、详情404隔离，API+TUI13 passed。TUI既有相邻19 passed/1旧文案断言失败，保留不重启提示后该单例1 passed。
+- 目标Ruff与Mypy（Admin/TUI3源码、插件12源码）通过；JS语法通过。没有跑完整套件、真实模型、真机或原实例，避免用户禁止的过度验证；没有build/install扩展或提交推送。
+
+下一编号CORE.TOOLSET.1；原实例仍需最后准备精确候选并获授权后应用，不能把本地通过视为已部署。
+
+## CORE.STARTUP.1（DONE，已授权部署）— 重启后的扩展恢复隔离排查
+
+基于本轮升级重启时实际观察到的personal.knowledge隔离，先用独立定向反例复现Admin与Agent同时恢复的STARTING竞争；确认根因后做最小修复，保留真正崩溃隔离和幂等恢复。不能把猜测写成已验证原因，不自动重启/恢复其他业务扩展或旧任务。CORE.RECONCILE.1继续WAITING。本轮未开始该项编码。
+
+
+2026-11-07 本地修复证据：确定性并发反例先3 failed/1 passed，确认双进程恢复将活跃STARTING误隔离，以及interrupt_running误伤正在启停的操作。恢复、安装/启停/升级命令在持久生命周期协调锁下串行，PostgreSQL采用不占应用池的专用会话锁连接；进程崩溃自动释放，原真正STARTING残留和健康失败继续QUARANTINED。未认领请求取消不晚执行，已持久请求断连继续按原操作收尾，恢复取消关闭已启动Worker。
+
+复验：监督器及新增并发单元55 passed；`PA_TEST_DATABASE_URL=<独立临时库> .venv-win/Scripts/python.exe -m pytest tests/integration/test_extension_recovery_concurrency.py -q -o addopts='' -p no:cacheprovider` 得6 passed，覆盖两个数据库池、活跃disable、真正残留、取消等待、pool_max_size=1及真实子进程终止后的锁释放。测试先捕获单连接池死锁，修为专用连接后通过；连接清理比较启动基线（原迁移连接已存在），不削弱回收断言。Ruff/Mypy目标源码通过。未跑全量：按用户要求只测改动路径和并发/数据库故障边界；未操作原库原服务、安装扩展、部署、提交或推送。下一编号CORE.CONFIG.1。
+
+## CORE.CONVERSATION.1（DONE，本地及合成模型验证；原实例待重启）— 实例工作环境与对话自动任务
+
+2026-11-06 已按本人要求完成：复用实例级 roots/索引；automatic 对话按意图直接回答、调用选定的已启用 ContextProvider 只读取证，或将原用户目标保存为真实持久任务。聊天留在当前页显示来源/警告及任务创建回执，侧栏刷新最新状态。保留显式 Agent 任务按钮、manual 纯问答、最终审批、UNKNOWN 与原熔断。没有新增业务专用表/ID或数据库迁移。
+
+改动：新增 core/conversation.py、core/context/extension_provider.py、api/workbench_conversation.py；修改 extensions/supervision.py 的通用检索包装、api/workbench.py 路由、cli/tui/{app,service,panels}.py；新增五份目标测试、调整TUI测试夹具；README/TODO/NEXT/CONTRACTS/DESIGN/TUI指南同步。知识扩展代码和版本本轮未改，现有0.1.1可复用；不把工作环境解释成全磁盘授权。
+
+本轮可复现目标命令（Desktop 项目根目录，Python统一使用 .\.venv-win\Scripts\python.exe -Xutf8 -B）：
+
+~~~powershell
+python -m pytest tests/api/test_workbench_conversation.py -q -o addopts='' -p no:cacheprovider
+# 最终9 passed；最初新增7项全失败（接口尚不存在），另11项旧测试通过。
+python -m pytest tests/api/test_workbench_conversation.py tests/unit/test_conversation_routing.py tests/api/test_workbench_stream.py -q -o addopts='' -p no:cacheprovider
+# 中间快照22 passed，包含当时7项新API+4项路由/总时限+11项原流；随后API补2项单独全过。
+python -m pytest tests/unit/test_extension_context_conversation.py tests/unit/test_context_manager.py tests/unit/test_extension_supervision_service.py -q -o addopts='' -p no:cacheprovider
+# 实施时56 passed；随后新增并行有界检索一项，只复跑新文件11 passed。
+python -m pytest tests/unit/test_tui_conversation.py tests/unit/test_tui_stream.py -q -o addopts='' -p no:cacheprovider
+# 21 passed；新TUI8项最初全失败。
+python -m pytest tests/unit/test_tui_app.py tests/unit/test_tui_service.py tests/unit/test_tui_polish.py -q -o addopts='' -p no:cacheprovider
+# 34 passed。
+python -m pytest tests/integration/test_conversation_dispatch.py -q -o addopts='' -p no:cacheprovider
+# 2 passed。真实API→Runtime→Gateway，合成模型/执行器：READ调用一次后SUCCEEDED；R2停WAITING_APPROVAL且执行器零调用。
+~~~
+
+上述集合有重叠，数字不相加。最后UI/整合联合复跑时9 passed、1 failed：断言仍要求旧“尚未完成”文案，现改为严格断言创建时状态/实时状态区别，并补SUCCEEDED刷新验证；该用例单独复跑1 passed。最后8源码联合Mypy、所有本轮源码/测试Ruff及git diff --check通过。原创建回执重放不会新建任务/模型调用；READY_TASK写回执失败可恢复原任务；取消/80秒总deadline回收读取协程，原命令不会重调模型。并行检索过滤SECRET/失效/源版本变化、保留来源定位，资料仅作不可信字段。
+
+按本人避免过度完整套件的要求，没有重跑全量、完整PostgreSQL/真实Worker套件；本轮也未运行临时PostgreSQL验证、真实模型分类/手机验收。生产持久路径复用既有RecordStore/TaskService同事务，不能把内存回归写成新增数据库验收。旧中文短词召回/文件清单枚举边界保留，模型意图识别仍需真实体验；详见TUI指南。本轮没有安装/升级扩展、变更原库/profile、重启/解冻原实例、恢复旧任务、提交或推送。后台与TUI重启后本轮源码才生效。下一编号回到CORE.RECONCILE.1；F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。
+
+
+### 2026-11-06 本人要求的补充测试
+
+本轮只跑本功能定向验证，没有全量重跑或原实例重启。测试中实际发现并修正两点：
+
+1. 原心跳测试在80ms测试预算内还要求先收到10ms心跳，宿主繁忙时先超时而失败。拆为“已启动的源产生心跳”和“总时限到期回收”两个独立用例，保留关闭断言；生产80秒预算未改变。首轮后端为25 passed、1 failed；不计全绿。
+2. 真实DeepSeek验证的三个意图请求均返回ModelProviderRejectedError，资料回答流正常。分流提示词虽给了对象样例却没有JSON字样，与已启用JSON模式不兼容。新增真实适配器+MockTransport协议反例先失败，再只为routing_request补上明确JSON对象说明。依据[DeepSeek JSON模式说明](https://api-docs.deepseek.com/guides/json_mode/)。不关闭JSON校验、不放宽输出字段、不改审批。
+
+最终分组结果（无重复相加，共49个不同相关用例）：
+- API/分流/预算/真实Runtime-Gateway整合：17 passed、2个既有依赖警告。
+- 通用上下文11项在首轮组合中全部通过，源代码未变，没有重复运行。
+- TUI新对话与原流式：21 passed。
+- 修改路径Ruff、Mypy与git diff --check通过，已结束的测试进程已核对回收。
+
+本轮命令：
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/api/test_workbench_conversation.py tests/unit/test_conversation_routing.py tests/integration/test_conversation_dispatch.py -q -o addopts='' -p no:cacheprovider --tb=short
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_tui_conversation.py tests/unit/test_tui_stream.py -q -o addopts='' -p no:cacheprovider --tb=short
+~~~
+
+另用原有DeepSeek安全凭据做公开合成内容验证：修复后三项分别正确识别ANSWER、RETRIEVE、TASK；测试资料BLUE-42的真实回答收到58个非空增量且与终态一致。成功请求报告用量共1567 tokens（3个路由请求1302 + 已通过的流265）；失败请求无用量回执，不推算其费用。没有向模型发送真实知识库/邮箱/任务历史，没有为这次模型验证创建原实例任务。已通过的流式请求未重复。
+
+日志及可复现临时脚本保存在Git忽略的var/verification/conversation-check-2026-11-06/：backend.log保留初次失败，backend-fixed.log、tui.log为最终定向结果；json-before.log保留JSON反例；live-model.json保留初次真实请求失败与流通过，live-model-fixed.json为修复后三项通过，live-model.py --routes-only可重新进行三次有费用的合成检查，不自动再次调用。脚本只使用SecretHandle/WCM，不保存密钥。
+
+本轮改动仅core/conversation.py、tests/unit/test_conversation_routing.py和此状态记录。未运行PostgreSQL/完整Worker套件，未安装扩展、访问个人文件、变更原库/profile、重启/解冻、提交或推送；不宣称原实例已经加载新功能。下一项仍为CORE.RECONCILE.1，F08.6 BLOCKED不变。
+
+## CORE.KNOWLEDGE.1（DONE，本地验证及已授权部署；真实查询待本人）— 命中结果契约与失败观察
+
+2026-11-06 用户补图后只读确认：后台未冻结；4个来源均有活动索引。“我的测试短语”在索引内全文/字面匹配均为0；“数据结构”全文命中3个分块、字面匹配4个分块。新用户输入已进入新运行片段，原计数正常重置，随后真实工具连续失败5次、同参无进展3次触发熔断。没有关闭或提高任何熔断阈值。
+
+根因与修复：personal.knowledge 0.1.0将不适用的page/line_start/line_end输出为null，违反既有integer结果Schema；空结果正常，有命中时经Gateway被拒。0.1.1只省略不适用字段，保留定位、来源及CURRENT/STALE/DELETED正文保护，不放宽Schema、不改旧迁移或重建索引。通用Agent此前只保存outcome.result，使FAILED变成null；现在失败观察只包含固定7字段：kind/tool_id/tool_version/error_code/retryable/same_call_as_previous/message，不转发原异常、参数或资料正文。成功结果仍原形，UNKNOWN提前暂停，进展计算仍使用原始outcome。Planner区分失败和成功空结果，避免无条件重复调用。
+
+修改范围：core/agent/{runtime,planner}.py；extensions/personal_knowledge的worker.py、__init__.py、extension.toml、pyproject.toml、README；新增test_runtime_tool_failure_observations.py、test_knowledge_output_contract.py，同步契约版本断言；TODO/NEXT/契约/TUI说明。知识库版本升为0.1.1，必需能力仍仅extension.data.sql，无第三方运行依赖。
+
+目标验证（Desktop项目根目录）：
+
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_knowledge_output_contract.py tests/unit/test_knowledge_index.py tests/unit/test_knowledge_extractors.py tests/contract/test_f05_contract_consistency.py tests/unit/test_tool_gateway.py -q -o addopts='' -p no:cacheprovider
+# 92 passed；新Gateway契约反例最初6 failed、1 passed，修复后全绿。
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_runtime_tool_failure_observations.py tests/unit/test_planner_validation_diagnostics.py tests/unit/test_runtime_delivery.py tests/unit/test_runtime_remediation_delivery.py tests/unit/test_runtime_crosscheck_delivery.py tests/unit/test_runtime_queue_lifecycle.py tests/unit/test_runtime_conversation_context.py tests/unit/test_safety_fuse.py -q -o addopts='' -p no:cacheprovider
+# 48 passed；新失败观察最初5 failed、2 passed，修复后7项全绿。
+~~~
+
+Ruff（本轮源码/测试7文件）、Mypy（worker/runtime/planner三源码）、git diff --check通过。合成中文只读SQL确认连续句子内短词可能被simple FTS漏召回；该已有检索局限另行保留，本轮不改词法，不把vector_mode=disabled当作模型配置故障。按本人避免过度完整套件的要求，未重跑全量/PostgreSQL/真实Worker测试套件；没有调用真实模型或运行用户的知识库查询，不将本地合成验证当作真实查询成功。
+
+本人明确授权精确材料升级并重启后，静态inspect再次核对如下摘要，再走正式upgrade：
+- 版本personal.knowledge 0.1.1，替换0.1.0。
+- 材料SHA-256：4d83a4b6cdee5b52a27d9dd778e0bd255832226526732e4688c758d88cb37234。
+- operation extop_3ccc5079d0f3479485bd5dc1d9ce82bb：SUCCEEDED；重启后ENABLED。
+- 授权目录配置规范化摘要前后一致，重启后4个来源/4个活动索引保留。
+- 正式stop后原守护器及四组件已退出，再隐藏启动新守护器；核实Agent待领取作业0后恢复原未冻结状态。Worker在线、health正常。
+- 旧任务task_e7d7f89f45f74560abb9fa9a2d67dc28保持PAUSED_SAFETY，未恢复或重放。原任务绑定0.1.0，应新建查询任务使用0.1.1；不需再次reindex。
+
+现场脱敏记录位于var/verification/core-knowledge-2026-11-06/upgrade.json（Git忽略）。首次inspect因缺少Idempotency-Key被400拒绝，未发升级；补齐头后唯一升级成功。一次只读状态查询误用tasks.state列，修正为status后验证完成；不将失败探针当作通过。没有提交或推送。下一编号回到CORE.RECONCILE.1；中文短词召回与fake SQL语义偏差另记后续局部修复。F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。
+
+## CORE.PLAN.1（DONE，本地验证；原任务待本人重启后继续）— 知识库任务提案诊断与排队提示
+
+2026-11-06 只读确认原任务的 personal.knowledge 已启用、授权目录存在、reindex/search 均在该运行工具快照；没有工具派发/观察记录。旧代码统一吞成通用校验提示，无法恢复历史失败的具体分类，不将其倒推为某种模型参数错误。当前冻结文件早于本次 guardian 启动22秒；未发现当前备份/磁盘故障反复冻结的证据。
+
+本轮最小实现：严格提案校验新增固定错误码（JSON、字段、工具/版本、参数、决策、说明），区分宿主准备/资源/工具/工作流校验；安全诊断进入 Checkpoint/Execution，trace 和 TUI 按白名单重建，不返回原模型输出、参数或异常消息。提示词采用合法 JSON 示例，要求每次只选择下一步并等待观察；不自动重试。排队时显示“等待领取（上次阶段：waiting）”。正常后续提案清理旧诊断，派发后 R2 校验异常仍保留 WAITING_RECONCILIATION，不允许普通继续重放。
+
+改动文件：core/agent/{decisions,planner,runtime}.py、api/workbench.py、cli/tui/app.py、tests/unit/test_planner_validation_diagnostics.py、tests/unit/test_tui_task_diagnostics.py、tests/api/test_workbench_api.py，以及本节、TODO、契约和TUI说明。没有更改扩展、数据库结构、审批规则或熔断阈值。
+
+可复现本轮目标验证（Desktop 项目根目录）：
+
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/api/test_workbench_api.py tests/unit/test_tui_task_diagnostics.py tests/unit/test_tui_polish.py tests/unit/test_tui_list_layout.py -q -o addopts='' -p no:cacheprovider
+# 35 passed、2 个既有依赖弃用警告。
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_planner_validation_diagnostics.py tests/api/test_workbench_api.py::WorkbenchApiTests::test_trace_projects_only_allowlisted_validation_diagnostic tests/unit/test_tui_task_diagnostics.py -q -o addopts='' -p no:cacheprovider
+# 最后新增诊断/安全投影/TUI组合11 passed、2 warnings；与上项重叠，不累加。
+~~~
+
+先失败后修复：模型诊断最初5项失败；API/TUI3项最初均失败，修复后通过。扩大运行器回归期间一个新增workflow测试夹具误写字段，修正为既有type契约后8项新测试通过；不把之前失败轮记为全绿。五个改动源码文件Mypy（3+2分组）、八个源码/测试文件Ruff通过。
+
+未操作原任务/原库，不重启、解冻、安装或执行插件；原任务尚未索引或搜索。尝试发起一次只用公开合成内容的DeepSeek协议检查（45秒、最多512输出token），但执行返回丢失，无法确认请求是否到达模型或验证结果，不计通过、未重复请求。按本人避免过度完整套件要求，仅验证受影响路径和安全回归，未重跑全量/PostgreSQL/Worker，不宣称真实知识库任务完成。下一编号回到CORE.RECONCILE.1；F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。
+
+## UX.QUEUE.1（DONE，本地验证）— 任务队列管理与列表面板稳定性
+
+2026-11-06 用户反馈无法完成的任务退出不及时、TUI缺少移除/排序入口，以及任务/扩展列表面板过窄且滚动抖动；随后明确不是滚动条本身。按本轮请求优先修复任务取消/失败收尾、持久队列排序和TUI列表布局与刷新。保留等待输入/审批/UNKNOWN的不同语义，不清空原库、不删除审计和回执、不重启或解冻原实例。范围为任务/队列服务及对应持久适配器、本机工作台API/TUI和目标回归；先失败反例，按用户要求避免重复完整套件。CORE.RECONCILE.1顺延，F08.6仍BLOCKED。
+
+本轮已完成：整个任务/扩展列表面板扩大并按终端伸缩，增量刷新保留高亮和滚动位置；任务页提供上移/下移/置顶/移除，键盘需Enter选定目标。排序影响真实领取顺序并持久化，不改计划时间；移除取消待执行工作并隐藏列表项，保留全部历史/审批/回执。UNKNOWN拒绝移除，迟到未知结果重新可见。模型规划/材料预览中取消会收尾原协程，缺失Task/Run作业失败不再击倒Worker。等待补充/审批不占执行器，保留原熔断。
+
+实际验证：后端/API/客户端/取消/UNKNOWN/熔断联合68 passed、2 warnings；原公共API6 passed、2 warnings；最终TUI列表与队列交互10 passed；真实临时PostgreSQL7 passed；此前TUI打磨/流式23 passed。Ruff、Mypy（本轮10个源文件，分组）及git diff --check通过。第一轮联合有1项新测试超时，已用固定时钟和逆序Job ID重现其错误领取假设，改为确认首任务已进入规划后再创建次任务；原2秒取消上限未变，最终联合68项全过。不将此前失败轮算通过。
+
+范围：core/agent/runtime、core/jobs/{queue,management}、core/tasks/{service,management}、memory/database job_queue、api/workbench、cli/tui/{app,service}，新增五份目标测试和本轮说明。没有迁移变更；原库/服务/profile未操作，未解冻、安装扩展、调用真实模型、提交或推送。临时PG容器已删除并按精确名称复查为0。按用户避免过度完整套件要求，仅运行受影响路径和真实PG事务/领取验证，未重跑项目完整套件或完整Worker/真实业务验收。需要本人重启后台与TUI后验证实际使用；F08.6 BLOCKED、F07/F08 IN_PROGRESS不变。下一编号回到CORE.RECONCILE.1，不在本轮继续实现。
+
+本轮可复现定向命令（在实际Desktop项目根目录；PG命令需先提供隔离的专用PA_TEST_DATABASE_URL，数据库名以_test结尾）：
+
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/api/test_workbench_queue.py tests/api/test_workbench_api.py tests/unit/test_tui_service.py tests/unit/test_task_queue_management.py tests/unit/test_job_queue.py tests/unit/test_runtime_queue_lifecycle.py tests/unit/test_runtime_delivery.py tests/unit/test_runtime_remediation_delivery.py tests/unit/test_runtime_crosscheck_delivery.py tests/unit/test_safety_fuse.py tests/unit/test_runtime_conversation_context.py -q -o addopts='' -p no:cacheprovider
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/api/test_api.py -q -o addopts='' -p no:cacheprovider
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_tui_list_layout.py -q -o addopts='' -p no:cacheprovider
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/integration/test_task_queue_management_postgres.py -q -o addopts='' -p no:cacheprovider
+~~~
+
+## UX.TRIAL.1（DONE，本地实现与配置）— 直接对话、真实流式回复与未安装扩展引导
+
+2026-11-06：根据本轮真测反馈，普通发送/带历史建任务移除额外确认；当前原profile已获本人明确授权设置automatic（包括授权目录/邮箱资料的模型处理），备份为同目录host.before-direct-chat.json，其他值保持。最终R2审批与SECRET阻断保留。原后台未重启、未解冻，未调用真实模型。nju.ehall真实失败原因是仅DISCOVERED、尚未安装；本人最后选择稍后手动安装，本轮没有build/install/import/enable该扩展。
+
+改动范围：core/models/provider/router/automatic，OpenAI兼容stream传输，Settings/host配置，Planner/runtime，api/workbench与system，TUI app/service；扩展supervision/operations和Admin错误映射；对应测试与本节/README/契约/TUI说明。没有新增迁移，没有更改外部审批canonicalization/风险等级，没有提交/推送。
+
+本轮验证（各集合有重叠，不相加）：
+
+~~~powershell
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/api/test_admin_extensions.py tests/unit/test_extension_supervision_service.py tests/unit/test_extension_operations_model.py -q -o addopts='' -p no:cacheprovider
+# 61 passed、2既有warnings；新未安装反例先2 failed、1 passed。
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_model_streaming.py tests/unit/test_model_router_f04.py tests/unit/test_model_adapters.py -q -o addopts='' -p no:cacheprovider
+# 95 passed；新增流式最初10 failed；后续仅新文件14 passed。
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/api/test_workbench_stream.py -q -o addopts='' -p no:cacheprovider
+# 11 passed、2既有warnings；初轮与原API/runtime/配置联合66 passed，新增最初6 failed。
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/unit/test_tui_stream.py tests/unit/test_tui_app.py tests/unit/test_tui_service.py tests/unit/test_tui_polish.py -q -o addopts='' -p no:cacheprovider
+# 初轮45 passed；追加两项后只复跑新文件13 passed，不把两批重叠数累加。
+.\.venv-win\Scripts\python.exe -Xutf8 -B -m pytest tests/integration/test_workbench_streaming_live.py -q -o addopts='' -p no:cacheprovider
+# 1 passed：真实随机回环HTTP，首delta到达时上游尚未完成，随后审计/回执完成，同键上游仅一次；端口与服务已回收。
+~~~
+
+受影响源码Ruff/Mypy通过；验证覆盖auto策略下真实Planner/Router/Runtime/Gateway仍WAITING_APPROVAL且外部执行器0次、SECRET拒绝、取消收尾、同键查询和Token只计一次。按本人避免过度完整套件要求，本轮仅运行受影响路径/安全回归与隔离HTTP联测，未重跑全量或PostgreSQL/Worker；不把本地通过当成真实DeepSeek/手机验收。TUI /ask真实流已实现，Agent规划/手机回复/Ollama增量仍不在本轮范围。F08.6 BLOCKED及F07/F08 IN_PROGRESS保持，下一编号回到CORE.RECONCILE.1。
+
+## CORE.RECONCILE.1（NEXT）— 外部动作对账到任务恢复的闭环
+
+本轮TUI.POLISH.1、CORE.FIX.1/2及MAINT.1/2/4的局部实现与文档校准已收尾；CORE.FIX.2的两项真实PG回归因测试环境未就绪尚待补证。下一编号先固化“宿主已对账成功但任务仍WAITING_RECONCILIATION”的跨层反例，再设计绑定原动作与权威回执的显式恢复接口。禁止普通继续、直接清unknown标记或重新派发旧外部动作；此较大功能尚未实施，不算本轮小修完成。后续范围、实际命令和未验项见项目细节清单。原F08.6 BLOCKED及F07/F08 IN_PROGRESS保持。
+
+
+## MAINT.4（DONE，文档校准）— 当前能力与操作文档校准
+
+MAINT.2及合并的MAINT.3已完成：真实Admin浏览器最初6 failed，原联合14 passed；新增明确拒绝组后浏览器7 passed，静态检查通过，未重复未变的API8例。当前仅修文档：README历史状态、配置PUT不得盲目同键重试、开发工作区及本地文件不在现有备份包范围。产品API与原实例不变。
+
+
+## MAINT.2（DONE，本地验证）— Admin 操作与配置回执恢复
+
+MAINT.1已完成，CLI/TUI启动目标13 passed；已知operation_id可用extension operation只读查询。现在合并原MAINT.3到本项，仅修web/admin前端和对应目标测试：成功后按钮恢复、预览mode绑定安装/升级路由、丢回执配置禁止盲目重发并先GET核对。页内刷新保留原请求，整页离开原生提醒，不持久化配置正文；不改后台API/CAS/审批，不操作原实例。
+
+
+## MAINT.1（DONE，本地验证）— CLI 管理断连与操作查询
+
+CORE.FIX.2本地21 passed；PostgreSQL两个用例因未配置专用测试库且Docker短探针超时而未运行，不记通过。原R2/UNKNOWN写入顺序未变。当前仅修CLI安装/升级/轮询的离线异常和只读operation查询，保留未知结果、不重发安装；范围cli/main.py、对应测试与文档。
+
+
+## CORE.FIX.2（DONE，本地；PG补证待运行）— 保留 Agent 的实际追问上下文
+
+CORE.FIX.1已完成：定时任务长积压三策略有界推进，目标30 passed，45组独立纯计算对照通过；具体命令见项目细节清单。当前只推进真实模型NEEDS_USER追问与用户短回答的上下文修复；仅core/agent、相关回归及文档。用既有检查点标记真实对话，排除宿主披露/状态提示，保持旧快照和精确披露兼容；不修改审批、Outbox、数据库结构或原运行实例。
+
+
+## CORE.FIX.1（DONE，本地验证）— 定时任务积压不得阻断 Worker
+
+2026-10-30 用户补充范围包含助手主体的搁置功能、设计遗漏及小bug。本项修复已隔离复现的有效每分钟coalesce调度停机两天后触发扫描上限、导致无关队列任务始终无法处理的问题。范围限调度计算/Worker必要接线、对应回归和文档；先失败回归再最小修复，不改审批/风险/Outbox，不运行原实例或外部动作。下一项CORE.FIX.2处理模型遗漏助手追问上下文；其他MAINT小项随后逐项推进。
+
+
+
+## TUI.POLISH.1（DONE，本地验证）— iCode 风格打磨与 TUI 细节修补
+
+2026-10-30 用户明确要求参考openJiuwen-ai/iCode调整粗糙TUI，并梳理全项目小缺口依次修补。本项先打磨TUI布局、输入/命令/帮助、Markdown显示、焦点与刷新/离线状态等已核实小缺口；授权cli/tui、对应目标测试和文档，不改Gateway/审批/Outbox协议，不自动部署或解冻。全项目只读梳理同时进行，发现的其他小项登记为后续MAINT编号；完成本项后再顺序推进，每次只保留一个NEXT。按用户要求避免重复完整套件，只做必要定向验证；已有F08.6/F07验收状态保留。
+
+## 2026-10-30 TUI.1（DONE，本地实现）— 电脑端助手工作台
+
+用户明确要求简约TUI：日常对话、任务发布与继续、扩展手工管理、助手参数配置，并允许参考成熟开源项目。本次开发范围为CLI/TUI、本机工作台API复用接线、可选Textual依赖、相关测试和文档；不改Gateway风险/审批/UNKNOWN协议，不自动启动或解冻原实例、不安装业务扩展。EXT.DEV.2待计算器安装确认；F08.6仍BLOCKED。按用户“避免完整套件过度验证”，只运行新路径与安全相邻定向回归，报告具体范围。
+
+
+本轮已完成问答/对话转Agent任务、工具状态、Token统计、扩展手工管理与模型参数设置。联合定向 **95 passed、2个依赖弃用警告**；Ruff、Mypy12源文件、pip check、CLI/PowerShell解析与差异检查通过。按本人要求未跑全量/PG或真实模型，不启动/解冻原实例；F08.6仍BLOCKED。使用与可复现命令见[TUI指南](TUI_WORKBENCH.md)及[实现报告](TUI_IMPLEMENTATION_2026-10-30.md)。
+
+## TUI.2（TODO）— 运行实例小型联调
+
+核对原实例配置、冻结与待处理队列后，连接本机Admin验证真实模型问答和简单READ工具任务；真实启动/解冻沿用用户明确授权范围，不自动执行旧队列。本轮尚未推进此项。EXT.DEV.2等待计算器候选安装确认，其他既有BLOCKED状态保留。
+
+## 2026-10-30 EXT.DEV.1（DONE，本地开发）— 受监督插件开发Agent
+
+独立assistant.plugin_developer@0.1.0已实现9工具：工作区/CAS/diff、静态检查、本人授权的固定验证、失败后修复、精确快照及本机确认安装/升级/启用/回滚桥。Agent不获取Admin确认nonce，无宿主核心修改。最终新扩展定向 **73 passed / 65.85秒**，Ruff、Mypy6源文件、Manifest只读解析、文档命令语法及差异检查通过。真实本地开发循环及stdio Worker已验证，实际安装CLI边界使用替身，无原实例操作/真实模型/发送/部署/提交推送。按用户要求未重复全宿主或PG套件。证据和命令见[交付报告](../extensions/plugin_developer/DELIVERY.md)。
+
+## 2026-10-30 EXT.DEV.2（WAITING，原实例安装/真实试写已完成，候选安装待确认）
+
+用户已授权安装开发插件并用系统DeepSeek密钥试写计算器。原持久实例已安装启用assistant.plugin_developer@0.1.0（9工具），环境DEEPSEEK_API_KEY经Windows凭据库引用接入deepseek-flash。真实模型经原TaskRuntime/Gateway/Worker写出sample.calculator候选，经错误反馈后完成，最终14项本地测试通过并生成待安装快照。无模型替身、实施者未代写计算器，不宣称无人干预开发成功。计算器尚未安装，下一步仍在本编号确认精确材料并验证实际工具调用。原四任务未运行；109个已终结试写任务的队列作业待后续收尾；后台恢复冻结，临时Admin关闭，未留常驻Web/Agent。无全量/PG套件、宿主源码修改或提交推送。报告及命令见[真实模型试写记录](EXT_DEV2_REAL_MODEL_TRIAL_2026-10-30.md)。F08.6仍BLOCKED，F07/F08整体IN_PROGRESS。
+
+## 2026-10-30 EXT.CAREER.1（IN_PROGRESS，真实安装/实站待验）— 独立简历投递插件与通用接线
+
+用户新增授权优先开发BOSS直聘、其次本地邮件名单；最新“完成插件并接入接线”覆盖此前仅规划/零宿主修改选择。本轮业务限独立`extensions/career_apply`，宿主只增加业务无关的R2只读预览、审批展示及执行丢回执UNKNOWN接线；不增加招聘专用核心表或路由。本地实现与定向验证已收尾：插件93 passed、JS33 passed、新宿主组合18 passed、相邻回归37 passed。按用户要求未完成/重复全量或完整PostgreSQL门禁；不安装到原运行实例、解冻或真实投递。当前仍IN_PROGRESS：0.2.0已补resume_roots授权目录简历列举/import_file导入，无需上传控件；本次仅插件文件适配，不改宿主/知识库。目录与BOSS本地适配41 passed，Worker/邮件兼容27 passed（重叠不相加），Ruff/Mypy11源文件通过。原实例未安装，BOSS实站兼容未验证，不能描述成一键可实投。见[交付总结](../extensions/career_apply/DELIVERY.md)、[安装说明](../extensions/career_apply/INSTALL.md)和[真实环境手测](MANUAL_REAL_ENV_TEST_GUIDE_2026-10-30.md)。F08.6原独立门禁问题仍BLOCKED，F07/F08整体状态不因本插件改变。
+
 ## 2026-10-30 F08.6：独立全量未全绿，单例复跑通过（BLOCKED）
 
 独立核验四份隔离测试 **37 passed**，140条原断言、79项交接摘要和wheel内容一致。随后独立完整本地为 **1407 passed、137 skipped、1 failed、6 warnings**（exit 1）：F07落地路径反例在创建Companion会话时超时，尚未执行到路径断言；原冻结文件未变。按本人要求仅重跑该用例，**1 passed / 20.95秒**，未改源码、断言或超时，不覆盖原全量失败。独立PostgreSQL/Worker尚未启动，实施者此前137 passed仍仅为实施证据。F08.6继续 **BLOCKED**，手机补证结论不变，无需新增手机操作；唯一后续验收项仍为F08.6，先定位F07会话创建超时及补齐独立门禁，不推进其他编号。精确命令及日志见[报告独立复验补记](F086_TEST_ISOLATION_GATE_REPORT_2026-10-30.md)。本次仅准备本地提交，不推送或部署。

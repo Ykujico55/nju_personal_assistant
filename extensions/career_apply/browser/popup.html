@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BOSS 职位采集</title>
+  <style>
+    body { width: 360px; margin: 18px; font: 14px/1.5 system-ui, sans-serif; color: #18253b; }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    button, a { display: inline-block; margin: 6px 8px 8px 0; padding: 8px 12px; }
+    textarea { box-sizing: border-box; width: 100%; height: 220px; font-size: 12px; }
+    #status { min-height: 42px; }
+    [hidden] { display: none; }
+  </style>
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <h1>BOSS 职位采集</h1>
+  <p>打开本人已登录的职位列表，读取当前已加载的可见卡片。</p>
+  <button id="capture" type="button">读取当前列表</button>
+  <a id="download" hidden download="boss-jobs.json">下载职位 JSON</a>
+  <p id="status" role="status" aria-live="polite">准备读取当前页职位。</p>
+  <label for="result">采集结果</label>
+  <textarea id="result" readonly spellcheck="false"></textarea>
+</body>
+</html>

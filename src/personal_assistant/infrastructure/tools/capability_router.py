@@ -19,6 +19,7 @@ from personal_assistant.core.tools.gateway import (
     ToolExecutor,
     UserActionRequiredError,
 )
+from personal_assistant.domain import RiskLevel
 from personal_assistant.domain.models import ToolDescriptor
 from personal_assistant.infrastructure.browser.executor import (
     BROWSER_ACTION_CAPABILITIES,
@@ -30,6 +31,8 @@ from personal_assistant.infrastructure.mail.executor import (
     MailSendExecutor,
 )
 
+from .extension_actions import ExtensionActionService
+
 
 class CapabilityRoutingExecutor(ToolExecutor):
     def __init__(
@@ -38,10 +41,12 @@ class CapabilityRoutingExecutor(ToolExecutor):
         extension_router: ExtensionToolInvoker,
         mail_send: MailSendExecutor | None = None,
         browser_actions: BrowserActionExecutor | None = None,
+        extension_actions: ExtensionActionService | None = None,
     ) -> None:
         self._extension_router = extension_router
         self._mail_send = mail_send
         self._browser_actions = browser_actions
+        self._extension_actions = extension_actions
 
     async def execute(
         self,
@@ -61,6 +66,10 @@ class CapabilityRoutingExecutor(ToolExecutor):
                     "the supervised browser capability is not configured on this host"
                 )
             return await self._browser_actions.execute(descriptor, arguments, context)
+        if descriptor.risk is RiskLevel.EXTERNAL_WRITE:
+            if self._extension_actions is None:
+                raise DefinitiveToolFailure("extension action review is unavailable")
+            await self._extension_actions.review(descriptor, arguments, task_id=context.task_id)
         return await self._invoke_extension(descriptor, arguments, context)
 
     async def _invoke_extension(
@@ -80,13 +89,37 @@ class CapabilityRoutingExecutor(ToolExecutor):
                 deadline_seconds=descriptor.timeout_seconds,
             )
         except Exception:  # noqa: BLE001 - worker failure is typed at the boundary
+            if descriptor.risk is RiskLevel.EXTERNAL_WRITE:
+                raise OutcomeUnknownError(
+                    context.idempotency_key,
+                    "external worker receipt lost",
+                ) from None
             raise DefinitiveToolFailure(
                 "the extension worker is unavailable or failed to execute"
             ) from None
+        if not isinstance(result, Mapping):
+            raise OutcomeUnknownError(context.idempotency_key, "extension receipt is invalid")
         outcome = result.get("outcome")
         if outcome == "SUCCEEDED":
+            receipt = result.get("external_receipt")
+            if descriptor.risk is RiskLevel.EXTERNAL_WRITE and (
+                not isinstance(receipt, Mapping)
+                or receipt.get("verified") is not True
+                or not isinstance(receipt.get("reference_id"), str)
+                or not receipt["reference_id"]
+            ):
+                raise OutcomeUnknownError(
+                    context.idempotency_key,
+                    "external receipt is unconfirmed",
+                )
             output = result.get("output")
             return dict(output) if isinstance(output, Mapping) else {}
+        if descriptor.risk is RiskLevel.EXTERNAL_WRITE:
+            # A worker's ordinary error code is not evidence that dispatch never happened.
+            raise OutcomeUnknownError(
+                context.idempotency_key,
+                "external worker outcome is unconfirmed",
+            )
         if outcome == "NEEDS_USER_ACTION":
             raise UserActionRequiredError(
                 str(result.get("message") or "the extension requires user action")
@@ -96,9 +129,7 @@ class CapabilityRoutingExecutor(ToolExecutor):
                 context.attempt_id,
                 "the extension reported an unknown outcome",
             )
-        raise DefinitiveToolFailure(
-            "the extension rejected the tool call"
-        )
+        raise DefinitiveToolFailure("the extension rejected the tool call")
 
 
 __all__ = ["CapabilityRoutingExecutor"]

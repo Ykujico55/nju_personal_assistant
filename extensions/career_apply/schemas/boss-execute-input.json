@@ -1,0 +1,123 @@
+{
+  "type": "object",
+  "properties": {
+    "local_action_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "target": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "company": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "recruiter": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "url",
+        "job_id",
+        "company",
+        "recruiter"
+      ],
+      "additionalProperties": false
+    },
+    "operation": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "greet",
+            "message",
+            "send_resume"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4000
+        },
+        "snapshot_fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "resume_label": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 180
+        }
+      },
+      "required": [
+        "kind",
+        "text",
+        "snapshot_fingerprint"
+      ],
+      "additionalProperties": false
+    },
+    "consequences": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "attachments": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 180
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 524288
+          }
+        },
+        "required": [
+          "artifact_id",
+          "name",
+          "sha256",
+          "size_bytes"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "local_action_id",
+    "target",
+    "operation",
+    "consequences",
+    "attachments"
+  ],
+  "additionalProperties": false
+}

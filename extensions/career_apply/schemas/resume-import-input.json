@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "properties": {
+    "filename": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 180
+    },
+    "media_type": {
+      "type": "string",
+      "enum": [
+        "application/pdf",
+        "text/plain",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      ]
+    },
+    "data_base64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 699052
+    }
+  },
+  "required": [
+    "filename",
+    "media_type",
+    "data_base64"
+  ],
+  "additionalProperties": false
+}

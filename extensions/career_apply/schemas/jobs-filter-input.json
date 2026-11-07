@@ -1,0 +1,112 @@
+{
+  "type": "object",
+  "properties": {
+    "jobs": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2048
+          },
+          "job_id": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2048
+          },
+          "title": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2048
+          },
+          "company": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2048
+          },
+          "recruiter": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2048
+          },
+          "location": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2048
+          },
+          "salary_text": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 2048
+          },
+          "description": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 10000
+          }
+        },
+        "required": [
+          "url",
+          "title",
+          "company"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filter": {
+      "type": "object",
+      "properties": {
+        "include_keywords": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "exclude_keywords": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "locations": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "company_denylist": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "daily_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "jobs"
+  ],
+  "additionalProperties": false
+}

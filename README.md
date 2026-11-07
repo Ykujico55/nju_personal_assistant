@@ -4,11 +4,72 @@
 
 完整设计见 [DESIGN_AND_DEVELOPMENT.md](./DESIGN_AND_DEVELOPMENT.md)，简要接力列表见 [TODO.md](./TODO.md)，后续实现顺序见 [docs/NEXT_STEPS.md](./docs/NEXT_STEPS.md)，稳定接口与持久化契约见 [docs/CONTRACTS_AND_INTERFACES.md](./docs/CONTRACTS_AND_INTERFACES.md)。
 
+## 2026-11-07 索引状态修复（0.1.6 已部署并核验）
+
+已按本人授权升级原实例至personal.knowledge 0.1.6并重启。现有目录一次完整扫描：复用40份有效索引、明确跳过2个空文本、无错误，状态READY；检索“数据结构”实际返回2条带正文和来源定位的CURRENT结果。后台在线、已恢复原先未冻结策略，原目录配置和15个任务保持。
+
+当前全文检索可为RAG提供正文证据，语义向量模型仍未配置，本轮未调用大模型。TUI按F5刷新后建议新开对话使用，旧任务不自动更换工具快照。部署与验证证据见[当前接力记录](docs/NEXT_STEPS.md)。
+
+## 2026-11-07 知识库文件正文（0.1.5 已部署）
+
+知识插件新增 `knowledge.read` 和 `knowledge.document`，可直接读取已授权目录内的指定 TXT、Markdown 或受支持 PDF 的正文，不依赖索引。对话可说“阅读 数据结构.md 并总结”，或使用明确的 `knowledge://根标识/相对路径`；同名文件会要求选择，文件路径不会扩大目录权限。关键词搜索仍需要有效索引，待索引会明确说明，不能当作没有匹配或目录为空。已按本人授权升级到原实例0.1.5并重启，Worker在线、未冻结；原目录、索引和任务保留。验证与安装边界见[接力记录](docs/NEXT_STEPS.md)。
+
+## 2026-11-07 日常使用修复已部署
+
+本轮补齐多宿主扩展恢复协调、配置保存/应用分离、旧任务工具差异与携目标新建、脱敏诊断、受控restart，以及TUI接口兼容检查和参考对话展示。已按本人要求切换原实例、升级知识插件至0.1.4/ENABLED；Worker在线并保留原先未冻结策略，原目录/索引/任务不变。已有TUI需退出重开；旧索引缺绑定证明，首次完整reindex前显示待索引。未恢复旧任务或强制启用其他隔离扩展。验证证据和状态见[接力记录](docs/NEXT_STEPS.md)，操作方法见[工作台指南](docs/TUI_WORKBENCH.md)。
+
+## 2026-11-06 对话与实例知识库
+
+本机 TUI 的 automatic 对话现在按需读取实例共享的知识上下文，并把明确执行请求创建为真实 Agent 任务；目录配置一次即可跨对话/任务复用。回答保留流式与来源，任务显示编号和状态，最终外部动作仍需审批。本轮代码已按本人授权部署到原后台；已有 TUI 窗口需重新打开。详见[工作台指南](docs/TUI_WORKBENCH.md)。
+
+`CORE.CONVERSATION.2` 已按本人授权升级原实例至知识插件 0.1.2，并重启后台：新增目录概览、明确模型失败提示及“放弃未完成回复”。原目录和索引保留；重开 TUI 后使用。启动隔离现象已通过正式启用恢复，根因另在 CORE.STARTUP.1 排查。
+
+`CORE.OUTPUT.1` 已于2026-11-07获本人授权部署：知识插件0.1.3/ENABLED，后台已重启且恢复未冻结；默认目录/上下文/回答长度裁剪及1024输出token预算已取消，运行保护保留。原目录、索引和任务保留；已有TUI窗口需退出重开。相关目标验证和部署状态见 [实现接力清单](docs/NEXT_STEPS.md)。
+
+## 当前能力与边界（2026-10-30）
+
+| 范围 | 当前可用形态 | 尚未完成或需验证 |
+|---|---|---|
+| 手机与电脑 | 手机PWA任务交互；本机TUI问答、Agent任务、扩展管理和配置；同持久实例共享任务 | TUI问答已支持DeepSeek真实流式；手机纯聊天及跨重启聊天历史尚未实现 |
+| 助手主体 | 真实模型规划、工具目录选择、工作流、持久检查点与只读调度；本轮补齐追问上下文和长期停机调度 | 外部动作UNKNOWN的宿主对账事实到任务恢复尚未接通；普通继续仍禁止绕过 |
+| 本地资料 | 知识库授权目录只读索引；简历插件从授权目录导入文件；开发插件可写自己的候选工作区 | 通用授权目录读写/整理文件能力尚未提供 |
+| 邮件与ehall | 邮件读写和受监督浏览器已接线，外部动作经过精确审批；真实只读收件与部分ehall试填有历史证据 | 当前版本受控真实发件、正式ehall完整材料与提交回执仍待验；本机直接交互不替代受监督验收 |
+| 招聘与编码插件 | 独立招聘插件本地实现；开发插件已安装原实例并通过真实DeepSeek计算器候选试写 | BOSS实站/招聘插件原实例安装待验；计算器候选本身尚未安装 |
+| 通知与移动端 | 无Google设备已通过ntfy订阅、锁屏接收、撤销恢复与点击；手机草稿回执、审批及缓存已补证 | F08.6仍因独立完整门禁中的F07创建超时记录保持BLOCKED；不据本轮小修宣告阶段完成 |
+| 凭据与备份 | Windows Credential Manager已实现；数据库允许表和登记制品支持加密备份/隔离恢复 | 外部资料原件、插件开发工作区和独立CLI SQLite不在此备份包中；完整迁机需另行准备 |
+
+这张表描述代码能力及已有证据，不代表原实例此刻正在运行或已部署本轮改动。TUI不自动启动、解冻或清空旧队列。DeepSeek真实试写记录见[说明](docs/EXT_DEV2_REAL_MODEL_TRIAL_2026-10-30.md)；本轮修补与下一批事项见[项目细节清单](docs/PROJECT_POLISH_2026-10-30.md)。本轮目标验证不替代完整发布门禁。
+
+## 2026-11-06 队列与列表面板修复
+
+本机TUI任务页新增持久排序与取消/移除入口；模型规划和材料预览期间也能响应取消，失败启动不会拖住后续作业。任务/扩展列表区域随终端大小扩展，刷新保留滚动位置；未决外部动作仍须对账，不删除历史。代码更新后需重启后台和TUI；本轮没有操作原实例。详见[工作台指南](docs/TUI_WORKBENCH.md)。
+
+## 2026-11-06 真测交互修复
+
+普通聊天和Agent模型处理可按本人配置采用 automatic 模式，不再逐次核对模型披露；仍记录实际字段/接收方绑定，SECRET及最终外部动作审批不变。TUI问答已支持DeepSeek/OpenAI兼容真实流式、原请求断流核对及实际Token统计；Agent结构化规划和手机消息尚未改为逐Token流。DISCOVERED明确表示未安装，界面提供安装引导，后台立即拒绝无效启用。当前原profile已按本人授权配置automatic，需要重启后台/TUI生效；未解冻、未安装新扩展。详见[工作台使用说明](docs/TUI_WORKBENCH.md)。
+
+## 2026-10-30 本机 TUI 工作台
+
+新增可选 Textual 工作台：带上下文的大模型问答、对话转Agent任务、已启用插件工具自动选择与执行状态、真实Token统计、扩展手工管理和模型参数设置。启动：
+
+~~~powershell
+.\scripts\assistant-tui.ps1 -Profile var/deployment/ext-dev2-2026-10-30/host.json
+~~~
+前提是对应持久实例的Local Admin已运行；入口不自动启动/解冻后台。手机当前支持同实例的任务式Agent交互，纯问答界面本轮只加入TUI。详见[使用指南](docs/TUI_WORKBENCH.md)和[交付记录](docs/TUI_IMPLEMENTATION_2026-10-30.md)。
+
+## 2026-10-30 受监督插件开发 Agent
+
+新增独立的 [assistant.plugin_developer](extensions/plugin_developer/README.md)：Agent 可在专用工作区创建和修改插件候选，查看差异、执行本人授权的本地测试、根据失败修复，再交接精确材料给本机安装确认。9 个标准工具，无宿主核心改动；安装/升级/启用和回滚复用现有 CLI。使用方式见[安装及配置](extensions/plugin_developer/INSTALL.md)。后续已在原实例安装启用，使用环境DeepSeek密钥完成受监督计算器试写，候选14项测试通过；计算器尚未安装，后台恢复冻结、未留常驻服务。见[真实试写记录](docs/EXT_DEV2_REAL_MODEL_TRIAL_2026-10-30.md)。证据和范围见[交付报告](extensions/plugin_developer/DELIVERY.md)。
+
+## 2026-10-30 招聘插件及真实环境试用
+
+独立招聘插件及通用审批接线的本地实现已收尾，尚未安装/部署到原实例，0.2.0已支持授权目录简历直接导入，BOSS实站兼容仍待验证。见[交付总结](extensions/career_apply/DELIVERY.md)、[安装说明](extensions/career_apply/INSTALL.md)和[全系统真实环境手工测试手册](docs/MANUAL_REAL_ENV_TEST_GUIDE_2026-10-30.md)。F08.6仍BLOCKED；下方为各日期的历史范围。
+
 ## 2026-10-13 开发交付
 
 新增持续任务执行、声明式组合工作流、模型披露审核、规则候选审核、本机管理页、Windows主机控制、加密备份/隔离恢复及离线升级入口。用户已配置 DeepSeek `deepseek-flash` 并完成单次公开自检；真实任务编排和外部动作的独立验收仍待进行。启动方式见 [本地运行手册](docs/RUNBOOK_LOCAL_BETA.md)，本轮实际门禁和边界见 [集中交付报告](docs/DEVELOPMENT_DELIVERY_2026-10-13.md)。开发主机18100与原线上8000独立，不在本轮自行部署。
 
-## 当前可用范围
+## 基架能力与阶段记录（历史快照，当前状态以上表为准）
 
 2026-10-10：按用户无 Google Play 的固定约束，F08.6 新增默认关闭的本机 ntfy 通知适配器及最小接线。当前仅本地测试，真实通知服务与手机未接入；F08.6 仍 BLOCKED。范围与实际证据见 [主机接线报告](docs/F08_6_NTFY_LOCAL_REPORT_2026-10-10.md)。
 
@@ -38,7 +99,7 @@ F08.6 的非部署准备工具 `scripts/prepare_f08.py` 可生成不会覆盖已
 .venv-win\Scripts\assistantctl.exe extension install extensions\example_echo
 ```
 
-扩展的非秘密配置经同一 Admin API 的通用通道设置（例如个人知识扩展的授权目录），保存后在下一次 enable/recover 时注入 Worker：
+扩展的非秘密配置经同一 Admin API 的通用通道设置（例如个人知识扩展的授权目录），保存只更新配置草稿；在本机 TUI 的扩展页点“应用配置”，才会同步到运行中的各个 Worker。请核对“已保存、待生效、已生效”和索引状态，保存不代表目录已经切换或完成索引：
 
 ```powershell
 $body = '{"config":{"roots":[{"path":"C:/Users/me/Documents/notes","key":"notes"}],"embedding":{"provider":"none"}}}'
@@ -50,7 +111,7 @@ Invoke-RestMethod -Method Put -Uri http://127.0.0.1:8001/admin/v1/extensions/per
 
 Cloudflare Access JWT 验证已实现并通过三轮独立验收（F03 DONE）；F08.6 已经用户授权手动临时接通 Tunnel 与私有 health Serve，服务守护、开机自启及完整部署编排仍待 F09/F10。真实 ehall 方面，**门户/SSO 只读采集已运行，真实教室借用已部分试填，完整填写至权威预览尚未验收；真实适配器指纹和提交回执未验收**。Windows Credential Manager 的最小 F09.1 后端及相邻 F06.P2 修复已于 2026-10-09 通过独立验收，均为 DONE；本日恢复的 Windows PostgreSQL 公共进程已加载该后端并配置 VAPID 公钥/句柄，手机真实 Push 尚未开始。Web Push 的 F08.5 本地范围已通过独立复验，F08.6 已运行本机、无认证公网边缘及同节点私有 HTTPS 检查，真实 Android/Push 服务验收尚未完成，不能用模拟结果替代真实投递。smail 已完成一次**受控真实只读同步**（2026-09-19）：经本机回环页面录入客户端专用密码（仅进程内存），真实 `imap.exmail.qq.com:993` 只读同步入库 15 封邮件/15 个事件（INBOX 13 + Sent Messages 2），第二次同步 0 新、0 发送动作；真实 SMTP 发送及实际邮件凭据配置仍未完成。F07 的受监督浏览器基架与 `nju.ehall` 扩展已实现；审计前快照的自动化套件曾全绿，随后独立复验有 1 项锁等待计时失败（单项复跑通过），当前快照的完整结果见 `docs/NEXT_STEPS.md`；真实门户/SSO 只读采集已由用户亲自完成（证据 `docs/evidence/real_ehall_2026-09-21.md`），真实完整填写、权威预览和提交回执仍需用户实时参与，F07 保持 `IN_PROGRESS`。当前恢复的 Windows PostgreSQL 组合根使用 Credential Manager，VAPID 私钥只存该后端；远程模型与实际邮件凭据尚未配置，原库 DSN 仍沿用已授权的临时本机文件例外；非 Windows 平台继续使用拒绝操作的 `UnavailableSecretStore`，不会静默使用内存明文；协议行为只能通过注入 HTTP transport 或模拟服务测试，尚未完成真实厂商/邮箱/Push 服务端到端验证。
 
-开发模式创建的任务会可靠进入内存队列，但 Agent Worker 仍有意锁定，因此会停在 `QUEUED`。这是基架状态，不是可用的完整助理。
+早期基架曾只入队而未启用Agent Worker；当前已实现持久Worker与真实模型工具调用。是否执行由实例的Worker、冻结状态、模型配置和披露许可共同决定。开发内存容器不跨进程共享任务，手机/桌面共用须连接同一个PostgreSQL持久实例。
 
 ## 本地启动（Windows）
 
@@ -68,7 +129,7 @@ Copy-Item .env.example .env
 docker compose up -d postgres
 ```
 
-生产环境必须设置 `PA_ENVIRONMENT=production`、`PA_STORAGE_BACKEND=postgres`，并完成 PostgreSQL 适配器；启动检查会拒绝生产环境使用内存存储。
+生产环境必须设置 `PA_ENVIRONMENT=production`、`PA_STORAGE_BACKEND=postgres`，并配置已实现的 PostgreSQL 适配器；启动检查会拒绝生产环境使用内存存储。
 
 远程访问必须设置 `PA_TRUST_CLOUDFLARE_ACCESS=true`，并提供 `PA_CF_ACCESS_TEAM_DOMAIN`、`PA_CF_ACCESS_AUD` 和 `PA_PUBLIC_ORIGIN`。team domain 只接受 `<team>`、`<team>.cloudflareaccess.com` 或 `https://<team>.cloudflareaccess.com`；签名密钥只从 `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` 获取。配置缺失或非法时启动失败，不会降级为无认证模式。
 
@@ -78,7 +139,7 @@ docker compose up -d postgres
 - 本地：`PA_MODEL_LOCAL_BASE_URL`（必须 loopback）+ `PA_MODEL_LOCAL_MODEL`。
 - 显式本地回退：`PA_MODEL_LOCAL_FALLBACK_PROVIDER_ID`，必须等于已配置的本地 provider ID。
 
-敏感/个人字段发往远端模型前必须存在持久的、精确绑定 provider、用途和字段摘要的披露许可；`SECRET` 在本地、远端和回退路径全部拒绝。生产环境当前没有 Windows Credential Manager（F09），远程凭据解析会 fail closed。
+敏感/个人字段发往远端模型前必须存在持久的、精确绑定 provider、用途和字段摘要的披露许可；`SECRET` 在本地、远端和回退路径全部拒绝。Windows Credential Manager已实现；远程凭据按SecretHandle解析。其他平台未提供受支持后端时仍拒绝解析，不降级为内存明文。
 
 smail 邮件扩展的读取与发送独立配置：`PA_MAIL_SEND_ENABLED=true` 时才开放 `mail.send` 能力，且必须提供 `PA_MAIL_TEST_RECIPIENTS`（逗号分隔的受控测试地址，未登记的收件人在建立连接前被拒绝）；`PA_MAIL_MAX_MESSAGE_BYTES` 限制单封大小。账户端点、端口与 `SecretHandle` 只保存在宿主所有的邮件账户注册表（Local Admin `GET/PUT /admin/v1/mail/accounts`，仅回环）；扩展配置只能引用 `account_id`，扩展无法提交服务器地址或凭据句柄，客户端专用密码进入宿主凭据后端，绝不写入配置文件或数据库。
 

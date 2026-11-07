@@ -259,6 +259,12 @@ class InMemoryExtensionArtifactAccess:
             "data_base64": base64.b64encode(data).decode("ascii"),
         }
 
+    async def metadata_for(self, artifact_id: str) -> Mapping[str, Any]:
+        metadata = self._metadata.get(artifact_id)
+        if metadata is None:
+            raise ArtifactAccessError("ARTIFACT_NOT_FOUND", "the artifact is unknown")
+        return dict(metadata)
+
     async def read_as_host(self, artifact_id: str) -> bytes:
         data = self._blobs.get(artifact_id)
         if data is None:

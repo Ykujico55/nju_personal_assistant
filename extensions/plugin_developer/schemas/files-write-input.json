@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^cand_[a-f0-9]{32}$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "content": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 131072
+    },
+    "expected_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "required": [
+    "candidate_id",
+    "path",
+    "content"
+  ],
+  "additionalProperties": false
+}

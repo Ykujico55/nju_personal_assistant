@@ -1,0 +1,69 @@
+manifest_version = "1"
+id = "assistant.plugin_developer"
+name = "Supervised Plugin Developer"
+version = "0.1.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.13"
+entrypoint = "plugin_developer.worker:create_extension"
+dependency_lock = "requirements.lock"
+config_schema = "schemas/config.json"
+state_schema_version = 1
+healthcheck = "system.health"
+
+[[tools]]
+id = "developer.workspace.create"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/workspace-create-input.json"
+output_schema = "schemas/workspace-create-output.json"
+
+[[tools]]
+id = "developer.candidates.list"
+risk = "READ"
+input_schema = "schemas/candidates-list-input.json"
+output_schema = "schemas/candidates-list-output.json"
+
+[[tools]]
+id = "developer.files.list"
+risk = "READ"
+input_schema = "schemas/files-list-input.json"
+output_schema = "schemas/files-list-output.json"
+
+[[tools]]
+id = "developer.files.read"
+risk = "READ"
+input_schema = "schemas/files-read-input.json"
+output_schema = "schemas/files-read-output.json"
+
+[[tools]]
+id = "developer.files.write"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/files-write-input.json"
+output_schema = "schemas/files-write-output.json"
+
+[[tools]]
+id = "developer.review"
+risk = "READ"
+input_schema = "schemas/review-input.json"
+output_schema = "schemas/review-output.json"
+
+[[tools]]
+id = "developer.validate"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/validate-input.json"
+output_schema = "schemas/validate-output.json"
+
+[[tools]]
+id = "developer.validation.status"
+risk = "READ"
+input_schema = "schemas/validation-status-input.json"
+output_schema = "schemas/validation-status-output.json"
+
+[[tools]]
+id = "developer.release.request"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/release-request-input.json"
+output_schema = "schemas/release-request-output.json"
+
+[capabilities]
+required = []
+optional = []

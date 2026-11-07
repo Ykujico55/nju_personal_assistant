@@ -547,8 +547,19 @@ class KnowledgeStore:
         await self._data.execute(
             "INSERT INTO knowledge_meta (key, value) VALUES ($1, $2::jsonb) "
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            [key, json.dumps(dict(value), sort_keys=True)],
+            [key, dict(value)],
         )
+
+    async def compare_set_meta(
+        self, key: str, expected: Mapping[str, Any], value: Mapping[str, Any]
+    ) -> bool:
+        rows = await self._rows(
+            "UPDATE knowledge_meta SET value = $3::jsonb "
+            "WHERE key = $1 AND (value = $2::jsonb OR value = to_jsonb($4::text)) "
+            "RETURNING key",
+            [key, dict(expected), dict(value), json.dumps(dict(expected), sort_keys=True)],
+        )
+        return bool(rows)
 
     async def get_meta(self, key: str) -> dict[str, Any] | None:
         rows = await self._rows(
@@ -557,6 +568,13 @@ class KnowledgeStore:
         if not rows:
             return None
         value = rows[0].get("value")
+        if isinstance(value, str):
+            # Old plugin writes serialized before the host's JSON codec. Decode
+            # precisely one legacy layer; malformed/scalar/nested values fail closed.
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return None
         return dict(value) if isinstance(value, Mapping) else None
 
     # -- retrieval ----------------------------------------------------------

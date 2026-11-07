@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "knowledge.read output",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "READ",
+        "RESOURCE_INVALID",
+        "RESOURCE_NOT_ALLOWED",
+        "NOT_FOUND",
+        "ROOT_UNAVAILABLE",
+        "NOT_CONFIGURED",
+        "CONFIGURATION_INVALID",
+        "AMBIGUOUS",
+        "LOOKUP_INCOMPLETE",
+        "UNSUPPORTED_FORMAT",
+        "FILE_TOO_LARGE",
+        "EXTRACTION_INCOMPLETE",
+        "FILE_CHANGED",
+        "READ_FAILED",
+        "EMPTY_FILE",
+        "DECODE_ERROR",
+        "PDF_MALFORMED",
+        "PDF_ENCRYPTED",
+        "PDF_UNSUPPORTED_FILTER",
+        "READ_ERROR",
+        "BUILD_FAILED",
+        "DOCUMENT_TOO_LARGE"
+      ]
+    },
+    "complete": {
+      "type": "boolean"
+    },
+    "text": {
+      "type": "string"
+    },
+    "source_uri": {
+      "type": "string"
+    },
+    "content_hash": {
+      "type": "string"
+    },
+    "media_type": {
+      "type": "string"
+    },
+    "locator": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "start": {
+          "type": "integer"
+        },
+        "end": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "start",
+        "end"
+      ],
+      "additionalProperties": false
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source_uri": {
+            "type": "string"
+          },
+          "relative_path": {
+            "type": "string"
+          },
+          "root_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_uri",
+          "relative_path",
+          "root_key"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "status",
+    "complete",
+    "text"
+  ],
+  "additionalProperties": false
+}

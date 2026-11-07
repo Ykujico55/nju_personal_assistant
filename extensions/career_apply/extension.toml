@@ -1,0 +1,95 @@
+manifest_version = "1"
+id = "career.apply"
+name = "Career Apply"
+version = "0.2.0"
+core_api = ">=1,<2"
+python = ">=3.12,<3.13"
+entrypoint = "career_apply.worker:create_extension"
+dependency_lock = "requirements.lock"
+config_schema = "schemas/config.json"
+state_schema_version = 1
+healthcheck = "system.health"
+forms = ["career.application_plan"]
+
+[[tools]]
+id = "career.jobs.filter"
+risk = "READ"
+input_schema = "schemas/jobs-filter-input.json"
+output_schema = "schemas/jobs-filter-output.json"
+
+[[tools]]
+id = "career.boss.plan"
+risk = "READ"
+input_schema = "schemas/boss-plan-input.json"
+output_schema = "schemas/boss-plan-output.json"
+
+[[tools]]
+id = "career.boss.prepare"
+risk = "READ"
+input_schema = "schemas/boss-prepare-input.json"
+output_schema = "schemas/boss-prepare-output.json"
+
+[[tools]]
+id = "career.boss.execute.preview"
+risk = "READ"
+input_schema = "schemas/boss-execute-preview-input.json"
+output_schema = "schemas/boss-execute-preview-output.json"
+
+[[tools]]
+id = "career.boss.execute"
+risk = "EXTERNAL_WRITE"
+input_schema = "schemas/boss-execute-input.json"
+output_schema = "schemas/boss-execute-output.json"
+
+[[tools]]
+id = "career.mail.plan"
+risk = "READ"
+input_schema = "schemas/mail-plan-input.json"
+output_schema = "schemas/mail-plan-output.json"
+
+[[tools]]
+id = "career.resume.list"
+risk = "READ"
+input_schema = "schemas/resume-list-input.json"
+output_schema = "schemas/resume-list-output.json"
+
+[[tools]]
+id = "career.resume.import_file"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/resume-import-file-input.json"
+output_schema = "schemas/resume-import-file-output.json"
+
+[[tools]]
+id = "career.resume.import"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/resume-import-input.json"
+output_schema = "schemas/resume-import-output.json"
+
+[[tools]]
+id = "career.mail.prepare"
+risk = "INTERNAL_WRITE"
+input_schema = "schemas/mail-prepare-input.json"
+output_schema = "schemas/mail-prepare-output.json"
+
+[[tools]]
+id = "career.mail.send.preview"
+risk = "READ"
+input_schema = "schemas/mail-send-preview-input.json"
+output_schema = "schemas/mail-send-preview-output.json"
+
+[[tools]]
+id = "career.mail.send"
+risk = "EXTERNAL_WRITE"
+input_schema = "schemas/mail-send-input.json"
+output_schema = "schemas/mail-send-output.json"
+capabilities = ["mail.send"]
+
+[[tools]]
+id = "career.mail.status"
+risk = "READ"
+input_schema = "schemas/mail-status-input.json"
+output_schema = "schemas/mail-status-output.json"
+
+[capabilities]
+required = ["artifact.read", "artifact.write"]
+optional = ["mail.read", "mail.send"]

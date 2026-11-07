@@ -39,6 +39,9 @@ from personal_assistant_sdk import (
 )
 from personal_assistant_sdk.worker import run_stdio_worker
 
+from . import EXTENSION_VERSION
+from .binding import DEFAULT_MAX_FILE_BYTES, binding_fingerprint, read_index_status
+from .documents import bounded_context, document_evidence, read_document, status_evidence
 from .embedding import (
     DeterministicTestEmbeddingProvider,
     EmbeddingProvider,
@@ -59,8 +62,8 @@ from .paths import (
     resolve_roots,
 )
 from .store import KnowledgeStore
+from .workspace import workspace_evidence
 
-DEFAULT_MAX_FILE_BYTES = 16 * 1024 * 1024
 EVENT_SOURCE_ID = "knowledge.file_changes"
 DEFAULT_POLL_LIMIT = 100
 MAX_POLL_LIMIT = 500
@@ -184,6 +187,16 @@ class PersonalKnowledgeExtension:
                 output_schema=_load_json("schemas/search-output.json"),
             ),
             ToolDescriptor(
+                id="knowledge.read",
+                risk=RiskLevel.READ,
+                description=("Read one complete authorized TXT/Markdown/PDF document "
+                             "without indexing. "
+                             "resource must be its exact knowledge://root/relative URI or unique "
+                             "filename including extension; ambiguous names return candidates."),
+                input_schema=_load_json("schemas/read-input.json"),
+                output_schema=_load_json("schemas/read-output.json"),
+            ),
+            ToolDescriptor(
                 id="knowledge.reindex",
                 risk=RiskLevel.INTERNAL_WRITE,
                 description="Scan authorized roots and rebuild changed index versions.",
@@ -201,6 +214,13 @@ class PersonalKnowledgeExtension:
         del context
         if tool_id == "knowledge.search":
             return await self._invoke_search(arguments)
+        if tool_id == "knowledge.read":
+            if set(arguments) != {"resource"}:
+                raise ValueError("read requires exactly one resource")
+            return ToolResult(
+                outcome=Outcome.SUCCEEDED,
+                output=read_document(self._require_runtime(), arguments["resource"]),
+            )
         if tool_id == "knowledge.reindex":
             return await self._invoke_reindex(arguments)
         raise ValueError(f"unknown tool: {tool_id}")
@@ -238,20 +258,51 @@ class PersonalKnowledgeExtension:
             # Install-time contract verification probes with an empty query and
             # must never touch the database or filesystem.
             return ()
+        limit = _search_limit(query.limit)
+        raw_filters = dict(query.filters)
+        selected = raw_filters.pop("provider_ids", ["knowledge.retrieve"])
+        if (not isinstance(selected, (list, tuple)) or not selected
+                or any(not isinstance(value, str) or value not in {
+                    "knowledge.retrieve", "knowledge.workspace", "knowledge.document"}
+                       for value in selected)):
+            raise ValueError("unknown or invalid context provider selection")
+        filters = _filters(raw_filters or None)
+        evidence: list[Evidence] = []
+        if "knowledge.document" in selected:
+            if filters:
+                raise ValueError("document retrieval uses the exact resource, not search filters")
+            evidence.append(document_evidence(self._require_runtime(), query.text))
+        if "knowledge.workspace" in selected and len(evidence) < limit:
+            if filters and set(filters) - {"root_keys"}:
+                raise ValueError("workspace overview accepts only configured root keys")
+            evidence.append(workspace_evidence(
+                self._require_runtime(), root_keys=filters.get("root_keys") if filters else None,
+                index_status=await self._workspace_index_status(),
+            ))
+        if "knowledge.retrieve" not in selected or len(evidence) >= limit:
+            return bounded_context(self._require_runtime(), evidence)
         index = self._require_index()
+        index_status = await index.index_status()
+        if index_status["index_state"] != "READY":
+            evidence.append(status_evidence(
+                self._require_runtime(),
+                {"kind": "knowledge_index_status", **index_status,
+                 "note": "正文索引尚未就绪；这不是无命中或目录为空。指定文件可使用直接读取。"},
+                source_id="knowledge.index-status",
+            ))
+            return bounded_context(self._require_runtime(), evidence)
         outcome = await index.search(
             query.text,
-            limit=_search_limit(query.limit),
-            filters=_filters(dict(query.filters) if query.filters else None),
+            limit=limit - len(evidence),
+            filters=filters,
         )
-        evidence: list[Evidence] = []
         for item in await index.evaluate(outcome.results, outcome.scores):
             if item.status is not EvidenceStatus.CURRENT:
                 # Only verified CURRENT sources may enter the model context;
                 # stale/deleted hits only trigger reconciliation.
                 continue
             evidence.append(_evidence(item, self._runtime))
-        return tuple(evidence)
+        return bounded_context(self._require_runtime(), evidence[:limit])
 
     # -- EventSource --------------------------------------------------------
 
@@ -363,6 +414,21 @@ class PersonalKnowledgeExtension:
         specs = parse_roots(raw)
         return resolve_roots(specs)
 
+    async def _workspace_index_status(self) -> dict[str, str]:
+        runtime = self._require_runtime()
+        if runtime.host_data is None:
+            return {"index_state": "UNAVAILABLE", "index_reason": "INDEX_METADATA_UNAVAILABLE"}
+        try:
+            config = runtime.non_secret_config
+            max_file_bytes, include_hidden = _scan_options(config)
+            fingerprint = binding_fingerprint(
+                self._authorized_roots(), max_file_bytes=max_file_bytes,
+                include_hidden=include_hidden,
+            )
+        except (ValueError, OSError):
+            return {"index_state": "UNAVAILABLE", "index_reason": "ROOT_CONFIGURATION_UNAVAILABLE"}
+        return await read_index_status(KnowledgeStore(runtime.host_data), fingerprint)
+
     def _require_index(self) -> KnowledgeIndex:
         if self._index is not None:
             return self._index
@@ -372,12 +438,7 @@ class PersonalKnowledgeExtension:
         roots = self._authorized_roots()
         config = runtime.non_secret_config
         embedder: EmbeddingProvider = build_embedding_provider(config.get("embedding"))
-        max_file_bytes = config.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES)
-        if isinstance(max_file_bytes, bool) or not isinstance(max_file_bytes, int):
-            raise ValueError("max_file_bytes must be an integer")
-        if not 1024 <= max_file_bytes <= 100 * 1024 * 1024:
-            raise ValueError("max_file_bytes is out of range")
-        include_hidden = config.get("include_hidden", False)
+        max_file_bytes, include_hidden = _scan_options(config)
         self._index = KnowledgeIndex(
             KnowledgeStore(runtime.host_data),
             roots,
@@ -389,6 +450,17 @@ class PersonalKnowledgeExtension:
             extension_version=runtime.extension_version,
         )
         return self._index
+
+
+def _scan_options(config: Mapping[str, Any]) -> tuple[int, bool]:
+    max_file_bytes = config.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES)
+    if (isinstance(max_file_bytes, bool) or not isinstance(max_file_bytes, int)
+            or not 1024 <= max_file_bytes <= 100 * 1024 * 1024):
+        raise ValueError("max_file_bytes is out of range")
+    include_hidden = config.get("include_hidden", False)
+    if not isinstance(include_hidden, bool):
+        raise ValueError("include_hidden must be a boolean")
+    return max_file_bytes, include_hidden
 
 
 def _search_limit(value: Any) -> int:
@@ -461,7 +533,7 @@ def _locator_view(record: ChunkRecord) -> dict[str, Any]:
 
 def _result_view(item: SearchResult, runtime: RuntimeContext | None) -> dict[str, Any]:
     record = item.record
-    return {
+    view: dict[str, Any] = {
         "text": item.text,
         "source_uri": _source_uri(record),
         "source_id": record.source_id,
@@ -469,17 +541,21 @@ def _result_view(item: SearchResult, runtime: RuntimeContext | None) -> dict[str
         "content_hash": record.content_hash,
         "locator": _locator_view(record),
         "heading_path": list(record.heading_path),
-        "page": record.locator.page,
-        "line_start": record.locator.start if record.locator.kind == "line_range" else None,
-        "line_end": record.locator.end if record.locator.kind == "line_range" else None,
         "media_type": record.media_type,
         "extension_id": runtime.extension_id if runtime else "personal.knowledge",
-        "extension_version": runtime.extension_version if runtime else "0.1.0",
+        "extension_version": runtime.extension_version if runtime else EXTENSION_VERSION,
         "sensitivity": SENSITIVITY,
         "trust": TRUST,
         "status": item.status.value,
         "score": round(float(item.score), 9),
     }
+
+    if record.locator.page is not None:
+        view["page"] = record.locator.page
+    if record.locator.kind == "line_range":
+        view["line_start"] = record.locator.start
+        view["line_end"] = record.locator.end
+    return view
 
 
 def _evidence(item: SearchResult, runtime: RuntimeContext | None) -> Evidence:
@@ -495,7 +571,7 @@ def _evidence(item: SearchResult, runtime: RuntimeContext | None) -> Evidence:
         "heading_path": list(record.heading_path),
         "media_type": record.media_type,
         "extension_id": runtime.extension_id if runtime else "personal.knowledge",
-        "extension_version": runtime.extension_version if runtime else "0.1.0",
+        "extension_version": runtime.extension_version if runtime else EXTENSION_VERSION,
         "sensitivity": SENSITIVITY,
         "trust": TRUST,
         "observed_at": datetime.now(UTC).isoformat(),

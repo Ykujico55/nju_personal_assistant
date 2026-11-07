@@ -17,6 +17,8 @@ import httpx
 from personal_assistant.core.models.cleanup import run_cleanup
 from personal_assistant.core.models.errors import (
     ModelCredentialUnavailableError,
+    ModelOutputFilteredError,
+    ModelOutputTruncatedError,
     ModelProviderProtocolError,
     ModelProviderRejectedError,
     ModelProviderResponseTooLargeError,
@@ -44,7 +46,7 @@ MAX_TIMEOUT_SECONDS = 600.0
 DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024
 MIN_MAX_RESPONSE_BYTES = 1024
 MAX_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+DEFAULT_MAX_OUTPUT_TOKENS: int | None = None
 MAX_OUTPUT_TOKENS = 32_768
 
 # A fixed, adapter-owned classification for a non-success status.  The vendor
@@ -109,7 +111,7 @@ class HttpJsonModelProvider:
         base_url: str,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
-        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        max_output_tokens: int | None = DEFAULT_MAX_OUTPUT_TOKENS,
         http_client: httpx.AsyncClient | None = None,
         allow_http: bool = False,
         require_loopback: bool = False,
@@ -136,9 +138,12 @@ class HttpJsonModelProvider:
                 f"{endpoint_field}: response limit must be between "
                 f"{MIN_MAX_RESPONSE_BYTES} and {MAX_MAX_RESPONSE_BYTES} bytes"
             )
-        if not 1 <= max_output_tokens <= MAX_OUTPUT_TOKENS:
+        if max_output_tokens is not None and (
+            type(max_output_tokens) is not int or not 1 <= max_output_tokens <= MAX_OUTPUT_TOKENS
+        ):
             raise ConfigurationError(
-                f"{endpoint_field}: max output tokens must be between 1 and {MAX_OUTPUT_TOKENS}"
+                f"{endpoint_field}: max output tokens must be None or between "
+                f"1 and {MAX_OUTPUT_TOKENS}"
             )
         self._timeout_seconds = timeout_seconds
         self._max_response_bytes = max_response_bytes
@@ -190,6 +195,7 @@ class HttpJsonModelProvider:
         output: ModelOutput | None = None
         malformed_request = False
         malformed_response = False
+        termination: str | None = None
         cancelled = False
         try:
             headers = await self._headers()
@@ -216,6 +222,10 @@ class HttpJsonModelProvider:
             output = self._parse_output(raw, recipient)
         except asyncio.CancelledError:
             cancelled = True
+        except ModelOutputTruncatedError:
+            termination = "length"
+        except ModelOutputFilteredError:
+            termination = "content_filter"
         except Exception:  # noqa: BLE001 - malformed or over-deep responses
             # ``RecursionError`` from a hostile deep JSON document and any
             # other parse failure become one typed protocol error, raised
@@ -225,6 +235,15 @@ class HttpJsonModelProvider:
             del raw
         if cancelled:
             raise asyncio.CancelledError()
+        # Rebuild only fixed terminal classifications after dropping the raw body.
+        if termination == "length":
+            raise ModelOutputTruncatedError(
+                "the model ended at its output limit", provider_id=self.provider_id
+            )
+        if termination == "content_filter":
+            raise ModelOutputFilteredError(
+                "the model ended with content filtering", provider_id=self.provider_id
+            )
         if malformed_response or output is None:
             raise ModelProviderProtocolError(
                 "the model response is malformed", provider_id=self.provider_id

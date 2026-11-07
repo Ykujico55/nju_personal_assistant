@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -107,11 +107,72 @@ class AdminExtensionConfigTests(unittest.TestCase):
             fetched = client.get("/admin/v1/extensions/demo.config/config").json()
         self.assertEqual(config, fetched["config"])
 
+    def test_saved_configuration_has_explicit_pending_status(self) -> None:
+        with self._client() as client:
+            saved = client.put(
+                "/admin/v1/extensions/demo.config/config",
+                json={"config": {"roots": [{"path": "C:/notes"}]}},
+            ).json()
+            self.assertEqual("PENDING", saved["application"]["state"])
+            digest = saved["application"]["saved_digest"]
+            self.assertEqual(71, len(digest))
+            current = client.get("/admin/v1/extensions/demo.config/config").json()
+            self.assertEqual(digest, current["application"]["saved_digest"])
+            self.assertNotEqual(digest, current["application"]["desired_digest"])
+
+    def test_apply_config_requires_enabled_installed_extension(self) -> None:
+        with self._client() as client:
+            response = client.post(
+                "/admin/v1/extensions/demo.config/config/apply",
+                json={"expected_digest": "sha256:" + "0" * 64, "extension_version": "0.1.0"},
+            )
+            self.assertEqual(409, response.status_code)
+            self.assertEqual("EXTENSION_NOT_ENABLED", response.json()["error"]["code"])
+
+    def test_apply_is_bound_to_saved_digest_and_installed_version(self) -> None:
+        from personal_assistant.core.extensions.manifest import ManifestParser
+        from personal_assistant.core.extensions.models import ExtensionRecord, ExtensionState
+
+        manifest = ManifestParser().parse(self.tmp / "extensions" / "demo_config")
+        record = ExtensionRecord(manifest, "sha256:" + "0" * 64, ExtensionState.ENABLED)
+        path = "/admin/v1/extensions/demo.config/config"
+        with self._client() as client:
+            saved = client.put(path, json={"config": {"roots": [{"path": "C:/one"}]}}).json()
+            digest = saved["application"]["saved_digest"]
+            body = {"expected_digest": digest, "extension_version": "0.1.0"}
+            with patch.object(
+                self.container.extension_supervisor, "record", AsyncMock(return_value=record)
+            ):
+                applied = client.post(path + "/apply", json=body)
+                self.assertEqual(200, applied.status_code, applied.text)
+                first = applied.json()["application"]
+                self.assertEqual(digest, first["desired_digest"])
+                again = client.post(path + "/apply", json=body).json()["application"]
+                self.assertEqual(first["generation"], again["generation"])
+                changed = {**body, "extension_version": "0.2.0"}
+                self.assertEqual(409, client.post(path + "/apply", json=changed).status_code)
+                client.put(path, json={"config": {"roots": [{"path": "C:/two"}]}})
+                self.assertEqual(409, client.post(path + "/apply", json=body).status_code)
+                latest = client.get(path).json()
+                schema_path = self.tmp / "extensions" / "demo_config" / "schemas" / "config.json"
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                schema["properties"]["roots"]["items"]["properties"]["path"]["type"] = "integer"
+                schema_path.write_text(json.dumps(schema), encoding="utf-8")
+                invalid = client.post(
+                    path + "/apply",
+                    json={
+                        "expected_digest": latest["application"]["saved_digest"],
+                        "extension_version": "0.1.0",
+                    },
+                )
+                self.assertEqual(422, invalid.status_code)
+                self.assertEqual("INVALID_EXTENSION_CONFIG", invalid.json()["error"]["code"])
+                self.assertEqual(digest, latest["application"]["desired_digest"])
+                self.assertEqual("C:/two", latest["config"]["roots"][0]["path"])
+
     def test_put_rejects_schema_violations(self) -> None:
         with self._client() as client:
-            response = client.put(
-                "/admin/v1/extensions/demo.config/config", json={"config": {}}
-            )
+            response = client.put("/admin/v1/extensions/demo.config/config", json={"config": {}})
         self.assertEqual(422, response.status_code)
         self.assertEqual("INVALID_EXTENSION_CONFIG", response.json()["error"]["code"])
 
@@ -124,9 +185,7 @@ class AdminExtensionConfigTests(unittest.TestCase):
         with self._client() as client:
             response = client.get("/admin/v1/extensions/demo.config/config")
         self.assertEqual(500, response.status_code)
-        self.assertEqual(
-            "EXTENSION_CONFIG_SCHEMA_UNREADABLE", response.json()["error"]["code"]
-        )
+        self.assertEqual("EXTENSION_CONFIG_SCHEMA_UNREADABLE", response.json()["error"]["code"])
 
     def test_unknown_extension_is_404(self) -> None:
         with self._client() as client:

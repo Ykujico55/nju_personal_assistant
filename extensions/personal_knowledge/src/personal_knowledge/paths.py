@@ -73,12 +73,12 @@ class AuthorizedRoot:
         return safe_read_bytes(self.path, relative_path, max_bytes=max_bytes)
 
 
-def parse_roots(
+def parse_root_specs(
     raw: object,
     *,
     default_key_prefix: str = "root",
 ) -> tuple[RootSpec, ...]:
-    """Parse the ``roots`` config value into validated, resolved root specs."""
+    """Validate configured root syntax without requiring paths to be available."""
 
     if not isinstance(raw, Iterable) or isinstance(raw, (str, bytes, Mapping)):
         raise RootConfigurationError("roots_invalid", "roots must be an array")
@@ -113,9 +113,16 @@ def parse_roots(
         if not isinstance(label, str) or len(label) > 128:
             raise RootConfigurationError("root_label_invalid", "root label is too long")
         specs.append(RootSpec(key=key, path=raw_path.strip(), label=label))
+    return tuple(specs)
+
+
+def parse_roots(
+    raw: object, *, default_key_prefix: str = "root",
+) -> tuple[RootSpec, ...]:
+    specs = parse_root_specs(raw, default_key_prefix=default_key_prefix)
     resolved = resolve_roots(specs)
     _reject_overlapping_roots(resolved)
-    return tuple(specs)
+    return specs
 
 
 def resolve_roots(specs: Iterable[RootSpec]) -> tuple[AuthorizedRoot, ...]:

@@ -140,6 +140,7 @@ from personal_assistant.infrastructure.push.transport import HttpWebPushSender
 from personal_assistant.infrastructure.secrets import default_secret_store
 from personal_assistant.infrastructure.storage import NullStorageLifecycle, StorageLifecycle
 from personal_assistant.infrastructure.tools import CapabilityRoutingExecutor
+from personal_assistant.infrastructure.tools.extension_actions import ExtensionActionService
 from personal_assistant.settings import ConfigurationError, Settings
 
 
@@ -184,6 +185,13 @@ class Container:
     browser_executor: BrowserActionExecutor | None
     tool_registry: ToolRegistry
     tool_gateway: ToolGateway
+
+    @property
+    def extension_actions(self) -> ExtensionActionService:
+        """Composition-owned generic action review; API depends on the container."""
+        return ExtensionActionService(
+            self.extension_supervisor, self.tool_registry, self.extension_artifacts,
+        )
 
     async def refresh_tool_registry(self) -> None:
         """Publish domain descriptors for every ENABLED extension record."""
@@ -379,6 +387,7 @@ def _build_supervisor(
     runtime = ProcessRuntimeSupervisor(
         data_access=data_access,
         config_store=config_store,
+        record_reader=store.get,
         mail_capability=mail_capability,
         mail_send_available=mail_send_available,
         artifact_access=artifact_access,
@@ -565,6 +574,7 @@ def _build_postgres_container(
             approvals=approvals,
             executor=CapabilityRoutingExecutor(
                 extension_router=supervisor,
+                extension_actions=ExtensionActionService(supervisor, tool_registry, artifacts),
                 mail_send=mail_send,
                 browser_actions=browser_actions,
             ),
@@ -728,6 +738,7 @@ def _build_memory_container(
             approvals=approvals,
             executor=CapabilityRoutingExecutor(
                 extension_router=supervisor,
+                extension_actions=ExtensionActionService(supervisor, tool_registry, artifacts),
                 mail_send=mail_send,
                 browser_actions=browser_actions,
             ),

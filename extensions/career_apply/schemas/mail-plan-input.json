@@ -1,0 +1,89 @@
+{
+  "type": "object",
+  "properties": {
+    "recipients": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 254
+          },
+          "name": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 500
+          },
+          "company": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 500
+          },
+          "position": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20000
+    },
+    "resume": {
+      "type": "object",
+      "properties": {
+        "filename": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8388608
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "filename",
+        "sha256",
+        "size_bytes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "recipients",
+    "subject",
+    "body"
+  ],
+  "additionalProperties": false
+}

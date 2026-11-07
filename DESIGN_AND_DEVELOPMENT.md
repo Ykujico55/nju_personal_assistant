@@ -831,7 +831,10 @@ PWA 页面至少包括任务列表/详情、对话与缺口、草稿编辑器、
 #### 能力注册
 
 - `EventSource: knowledge.file_changes`
-- `ContextProvider: knowledge.retrieve`
+- `ContextProvider: knowledge.retrieve`（有效索引关键词检索）
+- `ContextProvider: knowledge.workspace`（实例目录元数据）
+- `ContextProvider: knowledge.document`（0.1.5，指定授权文件正文，不依赖索引）
+- `ToolProvider: knowledge.read`（0.1.5，READ，同一文件直读实现）
 - `ToolProvider: knowledge.search`
 - `ToolProvider: knowledge.reindex`
 - `ScheduleProvider: knowledge.reconcile`
@@ -1717,3 +1720,18 @@ Beta 发布前必须存在下列可执行 Runbook，每份均包含触发条件�
 - [Python `smtplib`](https://docs.python.org/3/library/smtplib.html)
 - [Playwright Authentication](https://playwright.dev/python/docs/auth)
 - [W3C Push API](https://www.w3.org/TR/push-api/)
+
+
+### 2026-11-06 实例工作环境与本机对话
+
+工作环境复用实例的扩展配置和持久数据：知识roots只授权一次，任务与对话共享索引；任务ID不是资料目录的授权单位。本机工作台通过通用ContextProvider按需取证，证据仅作不可信模型上下文。普通问答不创建任务，动作请求由意图路由转成原TaskService持久命令，再由现有Worker/Gateway规划执行。聊天控制面不增加独立执行器，不直接发送或提交；外部审批和UNKNOWN不变。当前实现及使用边界见docs/TUI_WORKBENCH.md，冻结接口见CORE.CONVERSATION.1契约。
+
+
+### 2026-11-06 对话目录概览与失败边界
+
+实例工作区通过标准ContextProvider提供元数据概览和正文检索两种能力，宿主只传递经过Manifest验证的槽选择，具体目录规则仍留在插件。目录清单不依赖某个Task或索引建立；未配置、已配置但不可访问和检索无命中是三个不同事实。对话明确失败必须进入可回放终态；仅纯回复阶段允许用户放弃等待，CAS防止迟到回复改写结果，任务派发与外部UNKNOWN不适用。
+
+
+### 2026-11-07 默认输出长度策略
+
+呈现内容不默认裁短：知识目录扫描返回所有已扫描条目，通用资料适配保留完整证据，模型适配器默认不发送人为token上限，TUI和API完整保存正常结束的回答。用户输入/上下文容量与运行时间/协议字节预算是独立边界；超预算拒绝或明确不完整，不以截断正文、隐藏历史或重复模型调用制造成功。长回答可用于下一轮，超出整轮输入容量时由用户开启新对话。资料授权、来源校验和外部动作审批不随长度策略变化。

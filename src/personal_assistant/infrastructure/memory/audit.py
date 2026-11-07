@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from typing import Any
 
 from personal_assistant.core.audit import AuditEvent, redact
+from personal_assistant.core.audit.usage import MAX_USAGE_CALLS, summarize_usage
 
 
 class InMemoryAuditWriter:
@@ -27,3 +29,14 @@ class InMemoryAuditWriter:
         async with self._lock:
             return deepcopy(self._events)
 
+
+    async def model_usage(self, *, limit: int = MAX_USAGE_CALLS) -> dict[str, Any]:
+        if type(limit) is not int or not 1 <= limit <= MAX_USAGE_CALLS:
+            raise ValueError("invalid usage limit")
+        async with self._lock:
+            rows = [
+                {"usage": event.data.get("usage", {})}
+                for event in reversed(self._events)
+                if event.event_type == "model.completed"
+            ][:limit + 1]
+        return summarize_usage(rows, limit=limit)

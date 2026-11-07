@@ -13,6 +13,7 @@ import json
 import re
 import secrets
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -157,6 +158,10 @@ class ContractVerifier(Protocol):
 
 
 class LifecycleStore(Protocol):
+    def operation_lock(self) -> AbstractAsyncContextManager[None]:
+        """Coordinate recovery and lifecycle commands across host processes."""
+        ...
+
     async def get(self, extension_id: str) -> ExtensionRecord | None: ...
 
     async def all(self) -> Sequence[ExtensionRecord]: ...

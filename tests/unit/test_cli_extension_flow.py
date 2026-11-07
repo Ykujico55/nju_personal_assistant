@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import threading
 import unittest
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from unittest.mock import patch
 
 from personal_assistant.cli.main import main
 
@@ -117,6 +119,141 @@ class CliExtensionFlowTests(unittest.TestCase):
             ["/admin/v1/extensions/inspect", "/admin/v1/extension-plans/install_plan-1/reject"],
             paths,
         )
+
+
+class CliConnectivityTests(unittest.TestCase):
+    url = "http://127.0.0.1:18001"
+    recovery = [
+        "assistantctl", "--admin-url", url, "extension", "operation", "op-1"
+    ]
+
+    def test_install_and_upgrade_offline_before_preview_return_diagnostic(self) -> None:
+        for command in (
+            ["install", "fixture", "--yes"],
+            ["upgrade", "example.echo", "fixture", "--yes"],
+        ):
+            with self.subTest(command=command), patch(
+                "personal_assistant.cli.main._request",
+                side_effect=ConnectionRefusedError("offline"),
+            ) as request, patch("personal_assistant.cli.main._print") as output:
+                self.assertEqual(2, main(["--admin-url", self.url, "extension", *command]))
+                self.assertEqual("ADMIN_API_UNREACHABLE", output.call_args.args[0]["error"])
+                self.assertEqual(1, request.call_count)
+
+    def test_submission_receipt_loss_never_repeats_write_or_claims_failure(self) -> None:
+        for mode in ("install", "upgrade"):
+            command = ([mode, "fixture"] if mode == "install"
+                       else [mode, "example.echo", "fixture"])
+            with self.subTest(mode=mode), patch(
+                "personal_assistant.cli.main._request",
+                side_effect=[(200, {**PREVIEW, "mode": mode}), TimeoutError("lost receipt")],
+            ) as request, patch("personal_assistant.cli.main._print") as output:
+                code = main(["--admin-url", self.url, "extension", *command, "--yes"])
+                self.assertEqual(2, code)
+                diagnostic = output.call_args.args[0]
+                self.assertEqual("COMMAND_RESULT_UNCONFIRMED", diagnostic["error"])
+                self.assertNotIn("operation_id", diagnostic)
+                self.assertEqual(
+                    ["assistantctl", "--admin-url", self.url,
+                     "extension", "status", "example.echo"],
+                    diagnostic["recovery_command"],
+                )
+                self.assertIn("not resubmit", diagnostic["message"])
+                self.assertEqual(2, request.call_count)
+                self.assertTrue(all(call.args[1] == "POST" for call in request.call_args_list))
+
+    def test_accepted_operation_poll_disconnect_preserves_read_only_recovery(self) -> None:
+        for prior_poll in ([], [(200, {"id": "op-1", "status": "RUNNING"})]):
+            with self.subTest(prior_poll=bool(prior_poll)), patch(
+                "personal_assistant.cli.main._request",
+                side_effect=[
+                    (200, PREVIEW),
+                    (202, {"id": "op-1", "status": "PENDING"}),
+                    *prior_poll, ConnectionResetError("poll disconnected"),
+                ],
+            ) as request, patch("personal_assistant.cli.main._print") as output, patch(
+                "personal_assistant.cli.main.time.sleep"
+            ):
+                code = main([
+                    "--admin-url", self.url, "extension", "install", "fixture", "--yes"
+                ])
+                self.assertEqual(2, code)
+                diagnostic = output.call_args.args[0]
+                self.assertEqual("op-1", diagnostic["operation_id"])
+                self.assertEqual(self.recovery, diagnostic["recovery_command"])
+                self.assertEqual(2, sum(call.args[1] == "POST" for call in request.call_args_list))
+                self.assertTrue(all(
+                    call.args[1:3] == ("GET", "/admin/v1/extension-operations/op-1")
+                    for call in request.call_args_list[2:]
+                ))
+
+    def test_lifecycle_write_receipt_loss_is_also_unconfirmed(self) -> None:
+        with patch(
+            "personal_assistant.cli.main._request", side_effect=TimeoutError("lost receipt")
+        ) as request, patch("personal_assistant.cli.main._print") as output:
+            self.assertEqual(2, main([
+                "--admin-url", self.url, "extension", "disable", "example.echo"
+            ]))
+            self.assertEqual("COMMAND_RESULT_UNCONFIRMED", output.call_args.args[0]["error"])
+            self.assertEqual(1, request.call_count)
+
+    def test_operation_command_queries_once_and_reports_server_status(self) -> None:
+        for status in ("PENDING", "RUNNING", "SUCCEEDED", "FAILED"):
+            with self.subTest(status=status), patch(
+                "personal_assistant.cli.main._request",
+                return_value=(200, {"id": "op-1", "status": status}),
+            ) as request, patch("personal_assistant.cli.main._print") as output:
+                code = main(["--admin-url", self.url, "extension", "operation", "op-1"])
+                self.assertEqual(1 if status == "FAILED" else 0, code)
+                request.assert_called_once_with(
+                    self.url, "GET", "/admin/v1/extension-operations/op-1", None
+                )
+                self.assertEqual(status, output.call_args.args[0]["status"])
+
+    def test_operation_lookup_and_poll_http_error_retain_identifier(self) -> None:
+        from personal_assistant.cli.main import _poll_operation
+
+        body = {"error": {"code": "EXTENSION_OPERATION_NOT_FOUND"}}
+        invocations: tuple[Callable[[], int], ...] = (
+            lambda: main(["--admin-url", self.url, "extension", "operation", "op-1"]),
+            lambda: _poll_operation(self.url, "op-1"),
+        )
+        for invoke in invocations:
+            with self.subTest(invoke=invoke), patch(
+                "personal_assistant.cli.main._request", return_value=(404, body)
+            ) as request, patch("personal_assistant.cli.main._print") as output:
+                self.assertEqual(1, invoke())
+                diagnostic = output.call_args.args[0]
+                self.assertEqual(body["error"], diagnostic["error"])
+                self.assertEqual("op-1", diagnostic["operation_id"])
+                self.assertEqual(self.recovery, diagnostic["recovery_command"])
+                self.assertEqual(1, request.call_count)
+                self.assertEqual("GET", request.call_args.args[1])
+
+    def test_operation_query_offline_preserves_identifier(self) -> None:
+        with patch(
+            "personal_assistant.cli.main._request", side_effect=ConnectionRefusedError("offline")
+        ) as request, patch("personal_assistant.cli.main._print") as output:
+            self.assertEqual(2, main([
+                "--admin-url", self.url, "extension", "operation", "op-1"
+            ]))
+            diagnostic = output.call_args.args[0]
+            self.assertEqual("op-1", diagnostic["operation_id"])
+            self.assertEqual(self.recovery, diagnostic["recovery_command"])
+            self.assertEqual(1, request.call_count)
+
+    def test_poll_timeout_retains_query_command_without_starting_another_operation(self) -> None:
+        from personal_assistant.cli.main import _poll_operation
+
+        with patch("personal_assistant.cli.main._request") as request, patch(
+            "personal_assistant.cli.main._print"
+        ) as output:
+            self.assertEqual(1, _poll_operation(self.url, "op-1", timeout_seconds=0))
+            diagnostic = output.call_args.args[0]
+            self.assertEqual("OPERATION_TIMEOUT", diagnostic["error"])
+            self.assertEqual("op-1", diagnostic["operation_id"])
+            self.assertEqual(self.recovery, diagnostic["recovery_command"])
+            request.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -61,6 +61,14 @@ class ExtensionArtifactAccess(Protocol):
     @property
     def available(self) -> bool: ...
 
+    async def read_as_host(self, artifact_id: str) -> bytes:
+        """Host-only material verification; never exposed as a worker RPC."""
+        ...
+
+    async def metadata_for(self, artifact_id: str) -> Mapping[str, Any]:
+        """Host-only ownership metadata for exact action previews."""
+        ...
+
     async def handle(
         self,
         method: str,

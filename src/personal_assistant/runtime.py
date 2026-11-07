@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 from personal_assistant.bootstrap import Container
 from personal_assistant.core.agent.planner import StructuredPlanner
 from personal_assistant.core.agent.runtime import TaskRuntime
 from personal_assistant.core.event_delivery import EventCollector
+from personal_assistant.core.models import ModelRequest
+from personal_assistant.core.models.automatic import authorize_automatic
 from personal_assistant.core.tools.gateway import DefinitiveToolFailure
 from personal_assistant.domain import ToolCall, ValidationError
 from personal_assistant.infrastructure.mail.executor import MAIL_SEND_CAPABILITY
@@ -51,7 +54,10 @@ def build_runtime(container: Container) -> TaskRuntime:
                 )
             except DefinitiveToolFailure:
                 raise ValidationError("authoritative mail materials are unavailable") from None
-        raise ValidationError("a complete host-bound authority preview is required")
+        try:
+            return await container.extension_actions.prepare_call(call)
+        except DefinitiveToolFailure:
+            raise ValidationError("a complete host-bound authority preview is required") from None
 
     async def sink(event: dict[str, Any], identity: str) -> None:
         for binding in await container.records.list("event-bindings"):
@@ -84,6 +90,12 @@ def build_runtime(container: Container) -> TaskRuntime:
     async def poll_job(payload: dict[str, Any], job_id: str) -> dict[str, Any]:
         return await collector.collect(payload, job_id=job_id)
 
+    async def automatic_disclosure(request: ModelRequest, provider: str, user: str) -> str:
+        return await authorize_automatic(
+            request, provider_id=provider, user_id=user, key="auto-plan:" + uuid4().hex,
+            disclosures=container.disclosures, audit=container.audit_writer,
+        )
+
     return TaskRuntime(
         tasks=container.tasks,
         jobs=container.jobs,
@@ -96,6 +108,12 @@ def build_runtime(container: Container) -> TaskRuntime:
             container.model_router,
             provider,
             owner_id=getattr(getattr(container.storage, "config", None), "owner_id", "owner"),
+            automatic_disclosure=(
+                automatic_disclosure
+                if (settings.model_disclosure_mode == "automatic"
+                    and not settings.model_local_base_url)
+                else None
+            ),
             policy_identity={
                 "provider_id": provider,
                 "endpoint": settings.model_local_base_url or settings.model_remote_base_url,

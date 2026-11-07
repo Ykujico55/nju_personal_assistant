@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "pattern": "^cand_[a-f0-9]{32}$"
+    }
+  },
+  "required": [
+    "candidate_id"
+  ],
+  "additionalProperties": false
+}

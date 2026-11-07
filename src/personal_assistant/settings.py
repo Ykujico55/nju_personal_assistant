@@ -402,6 +402,7 @@ class Settings:
     cf_access_aud: str | None
     database_secret_handle: str | None = None
     embedded_agent: bool = False
+    model_disclosure_mode: str = "manual"
     model_remote_provider_id: str = "remote.openai"
     model_remote_base_url: str | None = None
     model_remote_model: str | None = None
@@ -587,6 +588,7 @@ class Settings:
             cf_access_aud=normalize_audience(audience) if audience else None,
             database_secret_handle=os.getenv("PA_DATABASE_SECRET_HANDLE") or None,
             embedded_agent=_env_bool("PA_EMBEDDED_AGENT", False),
+            model_disclosure_mode=os.getenv("PA_MODEL_DISCLOSURE_MODE", "manual"),
             model_remote_provider_id=os.getenv(
                 "PA_MODEL_REMOTE_PROVIDER_ID", "remote.openai"
             ).strip(),
@@ -635,6 +637,8 @@ class Settings:
         return settings
 
     def validate(self) -> None:
+        if self.model_disclosure_mode not in {"manual", "automatic"}:
+            raise ConfigurationError("PA_MODEL_DISCLOSURE_MODE must be manual or automatic")
         if self.environment == "production" and self.embedded_agent:
             raise ConfigurationError("production requires an independent durable worker")
         if self.database_secret_handle is not None:
