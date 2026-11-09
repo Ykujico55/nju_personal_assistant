@@ -54,6 +54,7 @@ from .protocols import (
     ToolProvider,
     WorkflowProvider,
 )
+from .workspace import WorkspaceConfigurationError, workspace_config
 
 PROTOCOL_VERSION = "1"
 
@@ -96,6 +97,8 @@ __all__ = [
     "PollResult",
     "RiskLevel",
     "RuntimeContext",
+    "WorkspaceConfigurationError",
+    "workspace_config",
     "ScheduleDefinition",
     "ScheduleMisfirePolicy",
     "ScheduleProvider",

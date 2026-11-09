@@ -515,6 +515,7 @@ class ExtensionWorker:
         self,
         *,
         non_secret_config: Mapping[str, Any] | None = None,
+        workspace: Mapping[str, Any] | None = None,
         capability_handles: Sequence[Mapping[str, Any]] = (),
         timeout_seconds: float = 10.0,
     ) -> Mapping[str, Any]:
@@ -531,6 +532,7 @@ class ExtensionWorker:
                     "data_namespace": data_namespace(self.manifest.id),
                     "manifest_schema_hash": expected_schema_hash,
                     "non_secret_config": dict(non_secret_config or {}),
+                    **({"workspace": dict(workspace)} if workspace is not None else {}),
                     "capability_handles": list(capability_handles),
                 },
             },

@@ -1,6 +1,6 @@
 # 通用本地文件扩展
 
-`personal.files@0.1.0` 为助手实例提供共享的授权文件目录。扩展只依赖 Python 标准库和公开 `personal_assistant_sdk`，通过既有 ToolProvider / ContextProvider 槽接入；不在核心加入文件业务表或专用路由。
+`personal.files@0.1.1` 为助手实例提供共享的授权文件目录。扩展只依赖 Python 标准库和公开 `personal_assistant_sdk`，通过既有 ToolProvider / ContextProvider 槽接入；不在核心加入文件业务表或专用路由。
 
 构建、安装、启用须按宿主现有流程完成正式静态审查，并由本人确认版本、材料摘要和权限。此文档描述插件用法；具体实例的安装、配置和验证状态以验收部署记录为准。
 
@@ -33,6 +33,14 @@
 `state_directory` 是私有控制 SQLite 所在目录，必须位于所有授权根目录外，并与它们相互隔离。它保存计划、差异和回执，**计划可能包含完整文件正文**；应限制本机访问并单独备份。现有宿主数据库备份不会自动包含这些资料文件与此目录，不要通过删除 SQLite 或换状态目录来重试未确认写入。
 
 配置切换后，旧配置绑定的计划不能直接执行；应重新读取目标并产生新计划。旧任务仍保留创建时的工具快照与权限：首次启用插件后如旧任务看不到工具，使用宿主“携带原目标创建新任务”，不要修改旧审批或未决动作。
+
+### 跟随统一实例工作区（0.1.1 起）
+
+在宿主保存并应用统一工作区后，插件配置使用 `{"workspace_binding":"instance","state_directory":"C:/AssistantData/personal-files-control"}`，不要再同时填写 `roots`。宿主通过公开 SDK 注入已应用的目录和配置修订号；保存但未应用的目录不会生效。文件读写与知识库都选择该绑定后，统一工作区的目录和读写模式会一起更新。
+
+旧的 `roots` 配置仍可独立使用，未绑定的插件不会自动取得统一工作区授权。绑定时若工作区缺失、为空或无效，会拒绝访问，不回退旧目录。工作区 A→B→A 也会产生新修订，旧写入计划失效；UNKNOWN 和历史回执仍留在原状态库，不自动重试。知识索引是否已经就绪是独立状态。
+
+绑定模式仍支持本人终端删除，但必须把 `--config` 指向宿主插件的已应用快照 `var/extensions/config/.applied/personal.files.json`，并额外传 `--workspace-state var/workspace/.applied/instance.workspace.json`（按实际实例路径调整）。两份文件都必须是宿主当前权威文件，不能使用导出的副本；确认前后会重读，修订变化或文件内容变化即拒绝旧计划。缺少工作区快照返回 `WORKSPACE_APPLIED_SNAPSHOT_REQUIRED`，不允许复制旧 roots 回退。Agent 的 `files.write` 仍不执行删除。
 
 ## 工具和对话入口
 

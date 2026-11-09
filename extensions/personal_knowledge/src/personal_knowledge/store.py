@@ -16,6 +16,7 @@ from typing import Any, cast
 from personal_assistant_sdk import HostDataClient
 
 from .embedding import EmbeddingIdentity
+from .lease_data import LeaseDataClient
 from .models import Chunk, ChunkRecord, Locator, SourceRecord
 
 MAX_CHUNK_BATCH = 200
@@ -50,6 +51,9 @@ class KnowledgeStore:
     def __init__(self, data: HostDataClient) -> None:
         self._data = data
 
+    def with_build_lease(self, owner: str) -> KnowledgeStore:
+        return KnowledgeStore(LeaseDataClient(self._data, owner))
+
     # -- migrations ---------------------------------------------------------
 
     async def migrate(self, migrations: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
@@ -80,6 +84,39 @@ class KnowledgeStore:
             for row in rows
             if row.get("source_id") is not None
         }
+
+    async def workspace_index_records(
+        self, files: Sequence[tuple[str, str]],
+    ) -> dict[tuple[str, str], dict[str, Any]]:
+        """Read active-version metadata for exactly the safely observed file paths."""
+        if not files:
+            return {}
+        statement = (
+            "SELECT s.root_key, s.relative_path, s.active_version, "
+            "s.content_hash AS source_hash, s.size_bytes, s.mtime_ns, "
+            "v.content_hash AS version_hash, v.state AS version_state "
+            "FROM knowledge_sources s "
+            "JOIN unnest($1::text[], $2::text[]) AS wanted(root_key, relative_path) "
+            "ON wanted.root_key = s.root_key AND wanted.relative_path = s.relative_path "
+            "LEFT JOIN knowledge_versions v "
+            "ON v.source_id = s.source_id AND v.version_id = s.active_version"
+        )
+        records: dict[tuple[str, str], dict[str, Any]] = {}
+        for batch in _workspace_batches(files):
+            wanted = set(batch)
+            roots, paths = zip(*batch, strict=True)
+            result = await self._data.execute(statement, [list(roots), list(paths)])
+            rows = result.get("rows")
+            if not isinstance(rows, list) or len(rows) > len(wanted):
+                raise RuntimeError("workspace index metadata is unavailable")
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    raise RuntimeError("workspace index metadata is invalid")
+                key = (str(row.get("root_key", "")), str(row.get("relative_path", "")))
+                if key not in wanted or key in records:
+                    raise RuntimeError("workspace index metadata has an unexpected file")
+                records[key] = dict(row)
+        return records
 
     async def get_source(self, source_id: str) -> SourceRecord | None:
         rows = await self._rows(
@@ -541,6 +578,106 @@ class KnowledgeStore:
         rows = await self._rows("SELECT count(*) AS total FROM knowledge_events")
         return int(rows[0]["total"]) if rows else 0
 
+    # A single lease serializes full scans across Admin/Agent replicas and bindings.
+    async def _lease_rows(
+        self, statement: str, parameters: Sequence[Any], *,
+        create: bool = False, metadata_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        # Do not put time/owner predicates on the locking SELECT: PostgreSQL can
+        # evaluate them before waiting for the row. A subsequent statement sees
+        # the locked row and evaluates clock_timestamp() after that wait.
+        statements: list[Mapping[str, Any]] = []
+        if create:
+            statements.append({
+                "statement": "INSERT INTO knowledge_meta (key, value) "
+                "VALUES ('index.build.lease.v1', '{}'::jsonb) ON CONFLICT (key) DO NOTHING",
+                "parameters": [],
+            })
+        statements.append({
+            "statement": "SELECT key FROM knowledge_meta "
+            "WHERE key = 'index.build.lease.v1' FOR UPDATE",
+            "parameters": [],
+        })
+        if metadata_key is not None:
+            statements.append({
+                "statement": "SELECT key FROM knowledge_meta WHERE key = $1 FOR UPDATE",
+                "parameters": [metadata_key],
+            })
+        statements.append({"statement": statement, "parameters": list(parameters)})
+        response = await self._data.transaction(statements)
+        results = response.get("results")
+        if not isinstance(results, list) or len(results) != len(statements):
+            raise ValueError("INDEX_LEASE_PROTOCOL_ERROR")
+        result = results[-1]
+        if not isinstance(result, Mapping):
+            raise ValueError("INDEX_LEASE_PROTOCOL_ERROR")
+        rows = result.get("rows")
+        if not isinstance(rows, list):
+            raise ValueError("INDEX_LEASE_PROTOCOL_ERROR")
+        return [dict(cast(Mapping[str, Any], row)) for row in rows]
+
+    async def claim_build(
+        self, owner: str, binding: str, ttl_seconds: float, *, retry_failed: bool = False
+    ) -> bool:
+        rows = await self._lease_rows(
+            "UPDATE knowledge_meta SET value = jsonb_build_object("
+            "'owner', $1::text, 'binding_hash', $2::text, 'state', 'RUNNING', "
+            "'expires_at', extract(epoch from clock_timestamp()) + $3::double precision) "
+            "WHERE key = 'index.build.lease.v1' "
+            "AND (COALESCE(value->>'state', '') <> 'RUNNING' "
+            "OR (value->>'expires_at')::double precision "
+            "<= extract(epoch from clock_timestamp())) "
+            "AND ($4::boolean OR COALESCE(value->>'binding_hash', '') <> $2 "
+            "OR COALESCE(value->>'state', '') <> 'FAILED') RETURNING key",
+            [owner, binding, ttl_seconds, retry_failed], create=True,
+        )
+        return bool(rows)
+
+    async def renew_build(self, owner: str, ttl_seconds: float) -> bool:
+        rows = await self._lease_rows(
+            "UPDATE knowledge_meta SET value = jsonb_set(value, '{expires_at}', "
+            "to_jsonb(extract(epoch from clock_timestamp()) + $2::double precision)) "
+            "WHERE key = 'index.build.lease.v1' AND value->>'owner' = $1 "
+            "AND value->>'state' = 'RUNNING' "
+            "AND (value->>'expires_at')::double precision "
+            "> extract(epoch from clock_timestamp()) "
+            "RETURNING key", [owner, ttl_seconds],
+        )
+        return bool(rows)
+
+    async def finish_build(self, owner: str, state: str) -> bool:
+        rows = await self._rows(
+            "UPDATE knowledge_meta SET value = jsonb_set(value, '{state}', to_jsonb($2::text)) "
+            "WHERE key = 'index.build.lease.v1' AND value->>'owner' = $1 "
+            "AND value->>'state' = 'RUNNING' RETURNING key", [owner, state],
+        )
+        return bool(rows)
+
+    async def set_meta_under_build_lease(
+        self, key: str, value: Mapping[str, Any], owner: str
+    ) -> bool:
+        rows = await self._lease_rows(
+            "INSERT INTO knowledge_meta (key, value) SELECT $1, $2::jsonb "
+            "FROM knowledge_meta AS lease WHERE lease.key = 'index.build.lease.v1' "
+            "AND lease.value->>'owner' = $3 AND lease.value->>'state' = 'RUNNING' "
+            "AND (lease.value->>'expires_at')::double precision "
+            "> extract(epoch from clock_timestamp()) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value RETURNING key",
+            [key, dict(value), owner], metadata_key=key,
+        )
+        return bool(rows)
+
+    async def get_build_lease(self) -> dict[str, Any] | None:
+        rows = await self._rows(
+            "SELECT value, COALESCE(value->>'state' = 'RUNNING' "
+            "AND (value->>'expires_at')::double precision "
+            "> extract(epoch from clock_timestamp()), false) AS active "
+            "FROM knowledge_meta WHERE key = 'index.build.lease.v1'"
+        )
+        if not rows or not isinstance(rows[0].get("value"), Mapping):
+            return None
+        return {**dict(rows[0]["value"]), "active": rows[0].get("active") is True}
+
     # -- meta ---------------------------------------------------------------
 
     async def set_meta(self, key: str, value: Mapping[str, Any]) -> None:
@@ -551,14 +688,25 @@ class KnowledgeStore:
         )
 
     async def compare_set_meta(
-        self, key: str, expected: Mapping[str, Any], value: Mapping[str, Any]
+        self, key: str, expected: Mapping[str, Any], value: Mapping[str, Any],
+        *, lease_owner: str | None = None,
     ) -> bool:
-        rows = await self._rows(
+        statement = (
             "UPDATE knowledge_meta SET value = $3::jsonb "
             "WHERE key = $1 AND (value = $2::jsonb OR value = to_jsonb($4::text)) "
-            "RETURNING key",
-            [key, dict(expected), dict(value), json.dumps(dict(expected), sort_keys=True)],
         )
+        parameters = [key, dict(expected), dict(value), json.dumps(dict(expected), sort_keys=True)]
+        if lease_owner is None:
+            rows = await self._rows(statement + "RETURNING key", parameters)
+        else:
+            rows = await self._lease_rows(
+                statement + "AND EXISTS (SELECT 1 FROM knowledge_meta AS lease "
+                "WHERE lease.key = 'index.build.lease.v1' AND lease.value->>'owner' = $5 "
+                "AND lease.value->>'state' = 'RUNNING' "
+                "AND (lease.value->>'expires_at')::double precision "
+                "> extract(epoch from clock_timestamp())) RETURNING key",
+                [*parameters, lease_owner], metadata_key=key,
+            )
         return bool(rows)
 
     async def get_meta(self, key: str) -> dict[str, Any] | None:
@@ -670,6 +818,26 @@ class KnowledgeStore:
         if not isinstance(rows, list):
             return []
         return [dict(cast(Mapping[str, Any], row)) for row in rows]
+
+
+def _workspace_batches(files: Sequence[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    """Bound both request and response metadata frames; never truncate the inventory."""
+    batches: list[list[tuple[str, str]]] = []
+    batch: list[tuple[str, str]] = []
+    size = 0
+    for key in dict.fromkeys(files):
+        # ASCII escaping is the conservative size, including non-BMP filenames.
+        cost = len(json.dumps(key, ensure_ascii=True))
+        if cost > 128 * 1024:
+            raise ValueError("workspace file identity is too large")
+        if batch and (len(batch) >= 100 or size + cost > 128 * 1024):
+            batches.append(batch)
+            batch, size = [], 0
+        batch.append(key)
+        size += cost
+    if batch:
+        batches.append(batch)
+    return batches
 
 
 def parse_locator(value: Any) -> Locator:

@@ -11,7 +11,7 @@ def test_config_presentation_does_not_claim_saved_is_applied():
     assert "等待各运行副本" in text
     assert "已生效" not in text
     text = WorkbenchApp._configuration_label({"application": {"state": "APPLIED"}})
-    assert "已生效" in text and "索引需单独重建" in text
+    assert "已生效" in text and "索引就绪状态需另外核对" in text
 
 
 def test_apply_failure_shows_safe_code():

@@ -46,11 +46,17 @@
         "additionalProperties": false
       },
       "minItems": 1
+    },
+    "workspace_binding": {
+      "type": "string",
+      "enum": [
+        "instance"
+      ],
+      "description": "Use the host applied instance workspace; omit legacy roots."
     }
   },
   "required": [
-    "state_directory",
-    "roots"
+    "state_directory"
   ],
   "additionalProperties": false
 }

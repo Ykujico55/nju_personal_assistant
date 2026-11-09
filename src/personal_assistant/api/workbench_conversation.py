@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -14,14 +14,17 @@ from starlette.responses import StreamingResponse
 
 from personal_assistant.api.dependencies import get_actor, get_container
 from personal_assistant.api.errors import ApplicationError
+from personal_assistant.api.workbench_conversation_diagnostics import ConversationDiagnostics
 from personal_assistant.bootstrap import Container
 from personal_assistant.core.context.extension_provider import ExtensionContextService
 from personal_assistant.core.conversation import (
     answer_request,
+    conversation_validation_reason,
     parse_route,
     routing_request,
     task_objective,
 )
+from personal_assistant.core.conversation_diagnostics import parse_diagnostic
 from personal_assistant.core.models import ContextField
 from personal_assistant.core.models.automatic import authorize_automatic
 from personal_assistant.core.models.cleanup import run_cleanup
@@ -29,6 +32,7 @@ from personal_assistant.core.models.errors import (
     ModelCredentialUnavailableError,
     ModelOutputFilteredError,
     ModelOutputTruncatedError,
+    ModelProviderProtocolError,
     ModelProviderRejectedError,
 )
 from personal_assistant.core.models.provider import AUDITABLE_USAGE_KEYS, bounded_usage
@@ -56,7 +60,8 @@ _FAILURE_MESSAGES = {
 
 
 async def record_model_failure(
-    container: Container, key: str, error: Exception, *, version: int
+    container: Container, key: str, error: Exception, *, version: int,
+    diagnostics: ConversationDiagnostics | None = None,
 ) -> dict[str, Any]:
     # Persist only host-owned codes. Never copy provider text/status bodies or prompts.
     code = next((code for kind, code in _CONFIRMED_FAILURES.items()
@@ -64,11 +69,16 @@ async def record_model_failure(
     if code is None:
         return {"state": "UNKNOWN"}
     value = {"state": "FAILED", "error_code": code}
+    if diagnostics is not None:
+        diagnostics.stage = "RECEIPT"
     try:
         await container.records.put(BUCKET, key, value, expected_version=version)
     except Exception:
         # A known model failure is not a known durable receipt until it is committed.
-        return {"state": "UNKNOWN"}
+        diagnostic = await diagnostics.record(
+            reason_code="RECEIPT_WRITE_FAILED", stage="RECEIPT"
+        ) if diagnostics else None
+        return {"state": "UNKNOWN", "diagnostic": diagnostic}
     return value
 
 
@@ -103,7 +113,7 @@ def sse(event: str, value: dict[str, Any]) -> str:
     return "event: " + event + "\ndata: " + json.dumps(value, ensure_ascii=False) + "\n\n"
 
 
-def receipt(value: dict[str, Any]) -> str:
+def receipt(value: dict[str, Any], diagnostic: object = None) -> str:
     if value.get("state") == "SUCCEEDED":
         return sse("completed", value["response"])
     failed = value.get("state") == "FAILED"
@@ -111,9 +121,11 @@ def receipt(value: dict[str, Any]) -> str:
     if failed and isinstance(code, str) and code in _FAILURE_MESSAGES:
         return sse("error", {"code": code, "message": _FAILURE_MESSAGES[code],
                              "uncertain": False})
+    diagnosis = parse_diagnostic(diagnostic if diagnostic is not None else value.get("diagnostic"))
     return sse(
         "error",
         {
+            **({"diagnostic": diagnosis} if diagnosis else {}),
             "code": "CHAT_RESPONSE_INVALID" if failed else "CHAT_RESULT_UNKNOWN",
             "message": "对话决策无效，未执行新动作。"
             if failed
@@ -226,6 +238,26 @@ async def conversation_stream(
     key = "conversation:" + fingerprint({"actor": actor, "key": request.state.idempotency_key})
     token = uuid4().hex
     history = [item.model_dump() for item in payload.history]
+    diagnostics = ConversationDiagnostics(
+        container, key, getattr(request.state, "request_id", None), actor
+    )
+
+    async def unknown(error: Exception | None = None, *, reason_code: str | None = None) -> str:
+        diagnosis = await diagnostics.record(error, reason_code=reason_code)
+        return receipt({"state": "UNKNOWN"}, diagnosis)
+
+    async def timeout_receipt() -> str:
+        # Mark the cause before cancelling the pending reader during cleanup.
+        diagnostics.total_timeout = True
+        if claimed["dispatch_token"] != token and diagnostics.stage != "TASK_ENQUEUE":
+            # A status-only query cannot diagnose the original execution.
+            return receipt({"state": "UNKNOWN"})
+        return await unknown(reason_code="CONVERSATION_TIMEOUT")
+
+    async def record_cancellation() -> None:
+        if not diagnostics.total_timeout:
+            await run_cleanup(diagnostics.record(reason_code="REQUEST_CANCELLED"))
+
 
     async def claim() -> dict[str, Any]:
         await container.records.put(BUCKET, key, {"state": "DISPATCHING"}, expected_version=0)
@@ -233,17 +265,22 @@ async def conversation_stream(
 
     claimed = await container.records.command(key, {"actor": actor, **payload.model_dump()}, claim)
 
-    async def body() -> AsyncIterator[str]:
+    async def generate() -> AsyncGenerator[str, None]:
         if claimed["dispatch_token"] != token:
             record = await container.records.get(BUCKET, key)
             value = record["value"] if record else {"state": "UNKNOWN"}
             if value.get("state") == "READY_TASK":
+                diagnostics.stage = "TASK_ENQUEUE"
                 try:
                     value = await finish_task(container, key, actor, value)
-                except Exception:
-                    yield receipt({"state": "UNKNOWN"})
+                except Exception as error:
+                    yield await unknown(error)
                     return
-            yield receipt(value)
+            diagnosis = (
+                await diagnostics.load() if value.get("state") != "SUCCEEDED"
+                else None
+            )
+            yield receipt(value, diagnosis)
             return
         assert container.model_router is not None
         context = ExtensionContextService(container.extension_supervisor)
@@ -265,7 +302,7 @@ async def conversation_stream(
             routed = await container.model_router.complete(
                 route_request, provider_id=provider, consent_id=consent, user_id=actor
             )
-            route = parse_route(routed.text, catalog)
+            route = parse_route(routed.text, catalog, fallback_query=payload.message)
             route_usage = bounded_usage(routed.usage, AUDITABLE_USAGE_KEYS)
             if route.kind == "TASK":
                 value = {
@@ -277,24 +314,38 @@ async def conversation_stream(
                 }
             else:
                 value = {"state": "STREAMING"}
+            diagnostics.stage = "RECEIPT"
             await container.records.put(BUCKET, key, value, expected_version=1)
         except _CONFIRMED_FAILURE_TYPES as error:
-            yield receipt(await record_model_failure(container, key, error, version=1))
+            yield receipt(await record_model_failure(
+                container, key, error, version=1, diagnostics=diagnostics
+            ))
             return
-        except ValidationError:
+        except ValidationError as error:
+            reason = conversation_validation_reason(error)
             value = {"state": "FAILED"}
-            await container.records.put(BUCKET, key, value, expected_version=1)
-            yield receipt(value)
+            diagnostics.stage = "RECEIPT"
+            try:
+                await container.records.put(BUCKET, key, value, expected_version=1)
+            except Exception:
+                yield await unknown(reason_code="RECEIPT_WRITE_FAILED")
+                return
+            diagnosis = await diagnostics.record(reason_code=reason, stage="ROUTE")
+            yield receipt(value, diagnosis)
             return
-        except Exception:
+        except Exception as error:
             # The dispatched marker is deliberately not cleared on uncertain failure.
-            yield receipt({"state": "UNKNOWN"})
+            yield await unknown(
+                error,
+                reason_code="RECEIPT_WRITE_FAILED" if diagnostics.stage == "RECEIPT" else None,
+            )
             return
         if value["state"] == "READY_TASK":
+            diagnostics.stage = "TASK_ENQUEUE"
             try:
                 result = await finish_task(container, key, actor, value)
-            except Exception:
-                yield receipt({"state": "UNKNOWN"})
+            except Exception as error:
+                yield await unknown(error)
                 return
             yield receipt(result)
             return
@@ -304,6 +355,7 @@ async def conversation_stream(
         output = None
         text = ""
         try:
+            diagnostics.stage = "RETRIEVE"
             if route.kind == "RETRIEVE":
                 retrieved = await context.retrieve(
                     route.query, request_id=key, provider_ids=route.providers
@@ -313,6 +365,7 @@ async def conversation_stream(
                 warnings = list(retrieved.warnings)
                 if not fields:
                     warnings.append("本次没有取得可用资料；不代表授权目录为空。")
+            diagnostics.stage = "ANSWER"
             model_request = answer_request(
                 payload.message,
                 history,
@@ -334,7 +387,7 @@ async def conversation_stream(
             try:
                 async for event in stream:
                     if output is not None:
-                        raise ValueError("event after completed output")
+                        raise ModelProviderProtocolError("event after completed output")
                     if event.output is not None:
                         output = event.output
                     elif event.delta:
@@ -345,14 +398,14 @@ async def conversation_stream(
                 if close is not None:
                     await run_cleanup(close())
             if output is None:
-                raise ValueError("unconfirmed stream")
-        except asyncio.CancelledError:
-            raise
+                raise ModelProviderProtocolError("unconfirmed stream")
         except _CONFIRMED_FAILURE_TYPES as error:
-            yield receipt(await record_model_failure(container, key, error, version=2))
+            yield receipt(await record_model_failure(
+                container, key, error, version=2, diagnostics=diagnostics
+            ))
             return
-        except Exception:
-            yield receipt({"state": "UNKNOWN"})
+        except Exception as error:
+            yield await unknown(error)
             return
         if not output.text.strip() or (text and text != output.text):
             result = {"state": "FAILED"}
@@ -369,42 +422,72 @@ async def conversation_stream(
                     "warnings": warnings,
                 },
             }
+        diagnostics.stage = "RECEIPT"
         try:
             await container.records.put(BUCKET, key, result, expected_version=2)
         except Exception:
-            yield receipt({"state": "UNKNOWN"})
+            yield await unknown(reason_code="RECEIPT_WRITE_FAILED")
             return
-        yield receipt(result)
+        diagnosis = await diagnostics.record(
+            reason_code="ANSWER_CONTENT_INVALID", stage="ANSWER"
+        ) if result.get("state") == "FAILED" else None
+        yield receipt(result, diagnosis)
+
+    async def body() -> AsyncIterator[str]:
+        source = generate()
+        try:
+            async for frame in source:
+                yield frame
+        except asyncio.CancelledError:
+            # A cancelled status-only replay is not a new failure of the original command.
+            if claimed["dispatch_token"] == token or diagnostics.stage == "TASK_ENQUEUE":
+                await record_cancellation()
+            raise
+        finally:
+            await run_cleanup(source.aclose())
 
     return StreamingResponse(
-        bounded_stream(body()),
+        bounded_stream(body(), on_timeout=timeout_receipt),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 
 async def bounded_stream(
-    source: AsyncIterator[str], *, timeout: float = 80.0, heartbeat: float = 10.0
+    source: AsyncIterator[str], *, timeout: float = 660.0, heartbeat: float = 10.0,
+    on_timeout: Callable[[], Awaitable[str]] | None = None,
 ) -> AsyncIterator[str]:
     """One conversation budget, including routing, retrieval and answer streaming."""
     pending: asyncio.Future[str] | None = None
     expired = False
+    timeout_frame: str | None = None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     try:
-        async with asyncio.timeout(timeout):
-            while True:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                expired = True
+                break
+            if pending is None:
                 pending = asyncio.ensure_future(anext(source))
-                while not pending.done():
-                    done, _ = await asyncio.wait({pending}, timeout=heartbeat)
-                    if not done:
-                        yield ": keep-alive\n\n"
-                try:
-                    frame = pending.result()
-                except StopAsyncIteration:
-                    return
-                pending = None
-                yield frame
-    except TimeoutError:
-        expired = True
+            done, _ = await asyncio.wait({pending}, timeout=min(heartbeat, remaining))
+            if not done:
+                if loop.time() >= deadline:
+                    expired = True
+                    break
+                # Never leave an asyncio.timeout context active across yield:
+                # it would cancel the caller while the caller consumes this frame.
+                yield ": keep-alive\n\n"
+                continue
+            try:
+                frame = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield frame
+        if expired and on_timeout is not None:
+            timeout_frame = await on_timeout()
     finally:
 
         async def close() -> None:
@@ -417,4 +500,4 @@ async def bounded_stream(
 
         await run_cleanup(close())
     if expired:
-        yield receipt({"state": "UNKNOWN"})
+        yield timeout_frame or receipt({"state": "UNKNOWN"})

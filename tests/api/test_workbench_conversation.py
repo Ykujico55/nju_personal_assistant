@@ -89,6 +89,59 @@ class ConversationTests(unittest.TestCase):
         self.assertIn("资料摘录", str(self.calls[0][0].fields))
         self.assertEqual([], self.client.get(PREFIX + "/tasks").json()["items"])
 
+    def test_overview_without_search_words_uses_original_question(self):
+        self.plan("RETRIEVE", providers=["fixture.overview"])
+        retrieved = SimpleNamespace(fields=(), citations=(), warnings=())
+        with patch(
+            "personal_assistant.api.workbench_conversation.ExtensionContextService"
+        ) as service:
+            service.return_value.catalog = AsyncMock(
+                return_value=({"provider_ids": ["fixture.overview"]},)
+            )
+            service.return_value.retrieve = AsyncMock(return_value=retrieved)
+            response = events(self.post({"message": "当前知识库文件有哪些"}))[-1]
+            self.assertEqual("completed", response[0])
+            self.assertEqual("当前知识库文件有哪些",
+                             service.return_value.retrieve.call_args.args[0])
+            self.assertEqual(("fixture.overview",),
+                             service.return_value.retrieve.call_args.kwargs["provider_ids"])
+        self.assertEqual([], self.client.get(PREFIX + "/tasks").json()["items"])
+
+    def test_invalid_route_has_fixed_diagnosis_and_replay_never_reroutes(self):
+        model = self.plan("RETRIEVE", query="x", providers=["private-unknown-provider"])
+        first = events(self.post())[-1][1]
+        self.assertEqual("CHAT_RESPONSE_INVALID", first["code"])
+        self.assertFalse(first["uncertain"])
+        self.assertEqual("ROUTE_PROVIDER_UNAVAILABLE", first["diagnostic"]["reason_code"])
+        self.assertEqual("ROUTE", first["diagnostic"]["stage"])
+        self.assertTrue(first["diagnostic"]["persisted"])
+        self.assertNotIn("private-unknown-provider", json.dumps(first))
+        replay = events(self.post())[-1][1]
+        self.assertEqual(first["diagnostic"], replay["diagnostic"])
+        self.assertEqual(1, model.await_count)
+        self.assertEqual([], self.calls)
+        self.assertEqual([], self.client.get(PREFIX + "/tasks").json()["items"])
+
+    def test_mismatched_answer_is_diagnosed_without_accepting_partial_history(self):
+        from personal_assistant.core.models.provider import ModelStreamEvent
+
+        self.plan()
+
+        async def stream(*args, **kwargs):
+            yield ModelStreamEvent(delta="public partial")
+            yield ModelStreamEvent(output=ModelOutput(
+                text="different final", provider_id="remote.openai", model_id="fixture"))
+
+        self.container.model_router.stream = stream
+        result = events(self.post())[-1][1]
+        self.assertEqual("CHAT_RESPONSE_INVALID", result["code"])
+        self.assertFalse(result["uncertain"])
+        self.assertEqual("ANSWER_CONTENT_INVALID", result["diagnostic"]["reason_code"])
+        self.assertEqual("ANSWER", result["diagnostic"]["stage"])
+        self.assertNotIn("different final", json.dumps(result))
+        self.assertEqual(result["diagnostic"], events(self.post())[-1][1]["diagnostic"])
+        self.assertEqual([], self.client.get(PREFIX + "/tasks").json()["items"])
+
     def test_invalid_or_forged_route_cannot_create_task(self):
         for i, plan in enumerate(
             (

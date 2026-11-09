@@ -171,7 +171,7 @@ class FileAccess:
     """Configuration is independent of task and run IDs, shared by the instance."""
 
     def __init__(self, config: Mapping[str, Any]) -> None:
-        if not isinstance(config, Mapping):
+        if not isinstance(config, Mapping) or "workspace_binding" in config:
             raise FilesError("CONFIG_INVALID")
         raw_roots = config.get("roots")
         if not isinstance(raw_roots, list) or not 1 <= len(raw_roots) <= 16:
@@ -236,11 +236,16 @@ class FileAccess:
                 }
                 for root in sorted(roots.values(), key=lambda item: item.key)
             ]
-            canonical = {
+            canonical: dict[str, object] = {
                 "roots": binding,
                 "state": os.path.normcase(str(self.state_directory)),
                 "state_identity": self._state_identity,
             }
+            if "_workspace_revision" in config:
+                canonical["workspace"] = {
+                    "id": config.get("_workspace_id"),
+                    "revision": config["_workspace_revision"],
+                }
             self.configuration_hash = hashlib.sha256(
                 json.dumps(
                     canonical,

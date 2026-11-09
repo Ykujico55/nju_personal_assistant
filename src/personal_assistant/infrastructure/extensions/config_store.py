@@ -66,6 +66,16 @@ class FileExtensionConfigStore:
         self._lease_guard = threading.Lock()
         self._leases: dict[str, BinaryIO] = {}
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    async def list_configured_ids(self) -> tuple[str, ...]:
+        def scan() -> tuple[str, ...]:
+            paths = (*self._root.glob("*.json"), *(self._root / ".applied").glob("*.json"))
+            return tuple(sorted({path.stem for path in paths if _SAFE_ID_RE.fullmatch(path.stem)}))
+        return await asyncio.to_thread(scan)
+
     async def get(self, extension_id: str) -> Mapping[str, Any]:
         path = self._path(extension_id)
         return await asyncio.to_thread(self._read, path)

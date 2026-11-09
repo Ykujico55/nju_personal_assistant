@@ -358,6 +358,13 @@ class ModelSettingsTests(unittest.TestCase):
                 )
             )
 
+    def test_default_remote_budget_supports_long_reasoning_and_can_be_overridden(self) -> None:
+        self.assertEqual(300.0, Settings(**direct_settings_values()).model_remote_timeout_seconds)
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(300.0, Settings.from_env().model_remote_timeout_seconds)
+        with patch.dict(os.environ, {"PA_MODEL_REMOTE_TIMEOUT_SECONDS": "45"}, clear=True):
+            self.assertEqual(45.0, Settings.from_env().model_remote_timeout_seconds)
+
     def test_model_timeout_bounds(self) -> None:
         for bad in (0.0, 601.0):
             with self.subTest(timeout=bad), self.assertRaises(ConfigurationError):

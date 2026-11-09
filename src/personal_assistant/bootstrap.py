@@ -97,6 +97,7 @@ from personal_assistant.infrastructure.extensions.artifact_access import (
     FileExtensionArtifactAccess,
 )
 from personal_assistant.infrastructure.extensions.data import InMemoryExtensionDataStore
+from personal_assistant.infrastructure.extensions.workspace import WorkspaceExtensionConfigStore
 from personal_assistant.infrastructure.filesystem import LocalArtifactBlobStore
 from personal_assistant.infrastructure.mail.broker import ConfiguredMailTransportBroker
 from personal_assistant.infrastructure.mail.executor import MailSendExecutor
@@ -435,7 +436,22 @@ def _build_postgres_container(
     disclosures = DisclosureConsentService(
         adapters.disclosure_consents, recipients=_remote_recipients(providers)
     )
-    config_store = FileExtensionConfigStore(settings.extension_root / "config")
+    config_store = WorkspaceExtensionConfigStore(
+        FileExtensionConfigStore(settings.extension_root / "config"),
+        settings.extension_root.parent / "workspace",
+        protected_paths=(
+            settings.extension_root, settings.artifact_root,
+            settings.extension_root.parent / "control",
+            settings.extension_root.parent / "deployment",
+            settings.extension_root.parent / "extension-state",
+            settings.extension_root.parent / "logs",
+            settings.extension_root.parent / "backups",
+            settings.extension_root.parent / "rules-history",
+            settings.extension_root.parent / "config",
+            Path(__file__).resolve().parent,
+            _bundled_extensions_root(),
+        ),
+    )
     policy = _mail_policy(settings)
     mail_accounts = FileMailAccountRegistry(settings.extension_root / "mail" / "accounts.json")
     mail_broker = ConfiguredMailTransportBroker(
@@ -604,7 +620,22 @@ def _build_memory_container(
     disclosures = DisclosureConsentService(
         InMemoryDisclosureConsentStore(), recipients=_remote_recipients(providers)
     )
-    config_store = FileExtensionConfigStore(settings.extension_root / "config")
+    config_store = WorkspaceExtensionConfigStore(
+        FileExtensionConfigStore(settings.extension_root / "config"),
+        settings.extension_root.parent / "workspace",
+        protected_paths=(
+            settings.extension_root, settings.artifact_root,
+            settings.extension_root.parent / "control",
+            settings.extension_root.parent / "deployment",
+            settings.extension_root.parent / "extension-state",
+            settings.extension_root.parent / "logs",
+            settings.extension_root.parent / "backups",
+            settings.extension_root.parent / "rules-history",
+            settings.extension_root.parent / "config",
+            Path(__file__).resolve().parent,
+            _bundled_extensions_root(),
+        ),
+    )
     policy = _mail_policy(settings)
     mail_accounts = InMemoryMailAccountRegistry()
     mail_broker = ConfiguredMailTransportBroker(

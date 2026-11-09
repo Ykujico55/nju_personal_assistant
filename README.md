@@ -1,14 +1,24 @@
 # Personal Assistant Framework
 
+2026-11-09：对话预算与逐文件索引状态修复已通过目标验证，知识库0.1.8已正式升级，后台重启就绪；见[修复记录](docs/CONVERSATION_LIMITS_INDEX_2026-11-09.md)。
+
 这是一个本地优先、扩展驱动的个人助理基架。FastAPI 只负责控制面；Agent、上下文、工具策略、审批与扩展生命周期都通过稳定接口组合。具体业务能力必须放在 `extensions/`，不能在核心里添加扩展 ID 分支。
 
 完整设计见 [DESIGN_AND_DEVELOPMENT.md](./DESIGN_AND_DEVELOPMENT.md)，简要接力列表见 [TODO.md](./TODO.md)，后续实现顺序见 [docs/NEXT_STEPS.md](./docs/NEXT_STEPS.md)，稳定接口与持久化契约见 [docs/CONTRACTS_AND_INTERFACES.md](./docs/CONTRACTS_AND_INTERFACES.md)。
 
-## 当前交付：通用本地文件扩展 FILES.1
+## 当前交付：统一实例工作区 WORKSPACE.1
 
-**FILES.1 已验收并安装**：独立的 `personal.files@0.1.0` 已在原实例登记ENABLED，将现有知识库根配置为共享read_write，支持文本列举/读取、差异预览、版本核对后写入及逐层创建子目录。删除仅开放本机本人交互确认。原后台保持此前停止/冻结状态，没有自动执行任务；正常启动后从新对话/任务使用。当前两插件仍独立保存目录配置，不自动跟随知识库切换。下一唯一待办为WORKSPACE.1统一实例工作区，已获授权、尚未实施；FILES.BACKUP.1顺延。范围见[插件说明](extensions/personal_files/README.md)，证据见[验收安装记录](docs/FILES1_ACCEPTANCE_AND_INSTALL_2026-11-07.md)。
+**已授权安装，WAITING 最后终端人工检查。** 原实例已升级并启用 personal.files 0.1.1、personal.knowledge 0.1.8，现有知识库目录及 read_write 授权已迁移到统一实例工作区。两插件共享目录来源，保存/应用分离；配置已 APPLIED，知识索引自动达到 READY。后续切换共享目录时不必再手动创建索引任务。
+
+工作区安装时保留手动冻结；随后实例已由日常操作转为未冻结。本轮对话诊断修复受控重启后保留未冻结策略，Worker在线、原15任务/作业/profile不变。工作区安装时源文件哈希核验相同。实际安装候选的隔离 TUI/HTTP/PostgreSQL/Worker 检查通过，尚待本人检查终端显示、输入和滚动，不提前标 DONE。邮件、ehall 安装前既有的 QUARANTINED 状态未改。FILES.BACKUP.1继续WAITING。
+
+操作与证据见[安装记录](docs/WORKSPACE1_INSTALL_2026-11-09.md)、[工作台指南](docs/TUI_WORKBENCH.md)；此前 A01–A04 均已[独立复验关闭](docs/WORKSPACE1_CLAIM_CANCEL_REAUDIT_2026-11-09.md)。FILES.1原安装历史见[记录](docs/FILES1_ACCEPTANCE_AND_INSTALL_2026-11-07.md)。
 
 前项 **CORE.RECONCILE.1 本地实现完成，WAITING 正式验收/部署**：宿主以原动作绑定的持久证据确认结果后，任务转为等待用户明确继续，保留旧审批及 Outbox 历史，不重发原动作。既有专项 **37 passed**、隔离 PostgreSQL **5 passed**；后续关键回归 **643 passed**。本次收尾复用这些证据，未冒称完整套件、独立验收或原实例部署通过。旧完整门禁失败过程保留在[对账报告](docs/CORE_RECONCILIATION_2026-11-07.md)。
+
+## 对话未确认诊断（2026-11-09 已加载）
+
+流式对话保留UNKNOWN和原请求，新增固定失败原因、阶段及原故障关联编号；同键查询不重新调用模型。修正总预算跨yield取消调用方的问题。首轮诊断专项144 passed；随后已按本人要求将模型/对话/TUI预算调整为300/660/690秒、传输保护16MiB，追加对话及契约专项114 passed。思考配置不变，未重复全套或调用真实模型。旧记录没有诊断时不猜测原因，已有TUI窗口需退出重开才能加载新提示。详见[诊断修复报告](docs/CONVERSATION_DIAGNOSTICS_2026-11-09.md)。
 
 ## 日常测试入口
 

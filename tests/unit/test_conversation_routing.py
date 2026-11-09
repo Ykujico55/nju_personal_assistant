@@ -5,11 +5,85 @@ import json
 import unittest
 
 from personal_assistant.api.workbench_conversation import bounded_stream
+from personal_assistant.core import conversation
 from personal_assistant.core.conversation import parse_route, routing_request, task_objective
 from personal_assistant.domain import ValidationError
 
 
 class RoutingTests(unittest.TestCase):
+    def test_overview_without_search_words_uses_current_request_as_read_query(self):
+        catalog = [{"provider_ids": ["fixture.overview"]}]
+        route = parse_route(
+            '{"kind":"RETRIEVE","query":"  ","providers":["fixture.overview"]}',
+            catalog, fallback_query="  当前知识库文件有哪些  ",
+        )
+        self.assertEqual("RETRIEVE", route.kind)
+        self.assertEqual("当前知识库文件有哪些", route.query)
+        self.assertEqual(("fixture.overview",), route.providers)
+
+    def test_fallback_does_not_replace_an_explicit_document_target(self):
+        route = parse_route(
+            json.dumps({"kind": "RETRIEVE", "query": "Exact filename.md",
+                        "providers": ["fixture.document"]}),
+            [{"provider_ids": ["fixture.document"]}],
+            fallback_query="请读取这份文件，不执行其他动作",
+        )
+        self.assertEqual("Exact filename.md", route.query)
+
+    def test_fallback_does_not_authorize_unknown_providers_or_additional_fields(self):
+        catalog = [{"provider_ids": ["fixture.overview"]}]
+        cases = [
+            {"kind": "RETRIEVE", "query": "", "providers": ["unregistered"]},
+            {"kind": "RETRIEVE", "query": "", "providers": []},
+            {"kind": "RETRIEVE", "query": "", "providers": ["fixture.overview"],
+             "approved": True},
+            {"kind": "TASK", "query": "", "providers": ["fixture.overview"]},
+            {"kind": "ANSWER", "query": "unexpected", "providers": []},
+        ]
+        for value in cases:
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                parse_route(json.dumps(value), catalog, fallback_query="列举文件")
+
+    def test_fallback_must_be_nonempty_and_is_never_truncated(self):
+        text = '{"kind":"RETRIEVE","query":"","providers":["fixture.overview"]}'
+        catalog = [{"provider_ids": ["fixture.overview"]}]
+        for fallback in (None, "", "  ", "字" * 2001):
+            with self.subTest(length=len(fallback or "")), self.assertRaises(ValidationError):
+                parse_route(text, catalog, fallback_query=fallback)
+        self.assertEqual("字" * 2000, parse_route(
+            text, catalog, fallback_query="字" * 2000,
+        ).query)
+
+    def test_route_validation_has_fixed_content_free_reasons(self):
+        catalog = [{"provider_ids": ["fixture.overview"]}]
+        cases = [
+            ("private malformed model text", "ROUTE_FORMAT_INVALID"),
+            (json.dumps({"kind": "RETRIEVE", "query": "", "providers": ["private-id"]}),
+             "ROUTE_PROVIDER_UNAVAILABLE"),
+            (json.dumps({"kind": "RETRIEVE", "query": "", "providers": ["fixture.overview"]}),
+             "ROUTE_QUERY_REQUIRED"),
+            (json.dumps({"kind": "ANSWER", "query": "private-content", "providers": []}),
+             "ROUTE_CONTEXT_UNEXPECTED"),
+        ]
+        for text, expected in cases:
+            with self.subTest(expected=expected), self.assertRaises(ValidationError) as raised:
+                parse_route(text, catalog)
+            self.assertEqual(
+                expected, conversation.conversation_validation_reason(raised.exception),
+            )
+            self.assertNotIn("private", str(raised.exception))
+        with self.assertRaises(ValidationError) as raised:
+            task_objective("x" * 10001, [])
+        self.assertEqual("TASK_CONTEXT_TOO_LARGE",
+                         conversation.conversation_validation_reason(raised.exception))
+
+        class PrivateError(ValidationError):
+            def __str__(self) -> str:
+                raise AssertionError("exception text must not be read")
+
+        self.assertEqual("CONVERSATION_VALIDATION_FAILED",
+                         conversation.conversation_validation_reason(PrivateError()))
+
     def test_output_never_contains_executable_arguments_or_authority(self):
         catalog = [{"provider_ids": ["fixture.lookup"]}]
         cases = [

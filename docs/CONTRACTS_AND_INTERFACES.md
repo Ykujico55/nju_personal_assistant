@@ -1054,7 +1054,7 @@ personal.knowledge 0.1.1的搜索结果遵守原输出Schema：page只在有页�
 - 目录授权来自扩展现有实例配置；会话关联ID仅用于追踪，不是目录绑定。监督器验证ENABLED/当前版本/已发布provider，再调用既有context.retrieve RPC。SDK同扩展多个provider共用一个retrieve，实现按扩展去重；并行独立查询各8秒，上限8个provider、10条证据；默认完整保留返回证据文本，显式max_chars可在256–24000间指定文本预算，RPC帧边界继续有效。仅CURRENT、非SECRET、有效期内且来源/producer版本一致的证据进入不可信资料字段；引用元数据随回执返回。旧SDK省略source_version/observed_at时以内容hash作为版本、宿主收到时间作为观察时间，不能冒称源时间。
 - 命令在模型调用前持久认领；路由决定TASK先保存READY_TASK再经TaskService.create创建任务/agent.start。原始目标绑定确定幂等键，外层RecordStore.command覆盖任务/队列/回执同一生产事务。同键仅首个命令调用模型；READY_TASK可以恢复创建，其他未确认模型阶段只查状态，不自动再调用。队列执行经原Runtime/Gateway，R2审批、UNKNOWN和所有熔断不变。
 - SSE继续delta/completed/error；completed增加可选task{id,state}、sources和warnings，tools_executed=false表示请求本身未直接执行动作工具，不能据此否认后台Worker后续执行。资料不冒充系统指令；无有效证据明确提示，不能宣称目录空。回执只代表创建/回答完成，不代表任务成功。
-- 真实回答流不拆字模拟；路由与回答实际token审计分别记录，UI合计仅两次都报告的字段。单请求80秒总预算、10秒SSE注释心跳；取消/超时清理读取协程与模型流，保留原命令。冻结状态、目录配置和安装管理不由聊天自动修改。
+- 真实回答流不拆字模拟；路由与回答实际token审计分别记录，UI合计仅两次都报告的字段。单请求660秒总预算、10秒SSE注释心跳；取消/超时清理读取协程与模型流，保留原命令。冻结状态、目录配置和安装管理不由聊天自动修改。
 
 
 ## CORE.CONVERSATION.2：工作区概览与明确失败（2026-11-06）
@@ -1072,7 +1072,7 @@ personal.knowledge 0.1.1的搜索结果遵守原输出Schema：page只在有页�
 - ExtensionContextService默认max_chars=None，不裁短完整证据或因100000字符任意拒绝正文；只选定已启用、有效、非SECRET来源，RPC传输字节界限及8秒查询超时保留。正文检索的top-k条数不改变，也不宣称所有资料自动全部发送。
 - 模型适配器默认max_output_tokens=None：OpenAI兼容请求省略max_tokens，Ollama省略num_predict，显式合法整数仍生效。配置自检的显式512 token预算不改。模型服务自身上下文/输出限制仍有效，length终止不作为完整成功，不自动补写或再次调用。
 - 聊天提示词、流式/非流式回答回执及TUI不再限制回答为8000字符；只有完整终态进已确认历史，输出和尾帧必须一致。后续请求保留完整历史；超过用户输入8000/历史20条/整轮64000时明确拒绝并保留输入，不静默切片。显式Agent任务仍受10000字符目标校验且不丢弃旧对话限制。
-- 保留80秒回答总时限、10秒心跳、模型HTTP响应字节和TUI累计SSE字节保护；这些是运行失败边界，不把片段伪装为正常完整结果。原UNKNOWN、同键重放、审批和熔断契约不变；旧manual chat明确失败分类接线本轮未扩大。
+- 回答总时限660秒、10秒心跳、模型HTTP响应字节和TUI累计SSE字节保护；这些是运行失败边界，不把片段伪装为正常完整结果。原UNKNOWN、同键重放、审批和熔断契约不变；旧manual chat明确失败分类接线本轮未扩大。
 - 默认省略模型输出参数依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/)与[Ollama Modelfile](https://github.com/ollama/ollama/blob/main/docs/modelfile.mdx)。这不承诺供应商无限输出。
 
 
@@ -1154,3 +1154,31 @@ TUI 初始刷新、远程操作前及远程确认返回后协商。确认窗口�
 - stdlib最终哈希检查与replace不构成对任意外部编辑器的原子CAS，ACL/扩展属性不保证保留；私有计划目录含正文须单独保护备份。扩展为可信本机代码，不是沙箱。
 
 具体使用、测试范围与安装状态见 `FILES1_LOCAL_FILES_2026-11-07.md` 及 `extensions/personal_files/README.md`。
+
+
+## WORKSPACE.1 统一目录与自动索引（2026-11-08候选）
+
+- 本机 GET/PUT `/admin/v1/workspace` 与 POST `/admin/v1/workspace/apply` 仅允许回环工作台、专用头且无 Origin；PUT保存草稿，POST绑定saved_digest。宿主以单一快照管理workspace_id、revision和roots；旧配置不隐式迁移。root key稳定，mode显式为read_only/read_write，roots为空表示撤销。
+- 插件config显式声明并选择workspace_binding=instance后，SDK RuntimeContext.workspace接收已应用信封；禁止同时保留roots。未绑定或旧schema不会注入新授权，缺失/错误信封不回退。现有非秘密业务参数和私有状态目录仍由插件自己维护。
+- 运行目标generation绑定插件配置及工作区修订。初始化发布前、实际RPC派发前及只读结果返回前核对当前修订；切换时拒绝旧结果，不取消/自动重放外部动作。状态聚合跨修订时需重新读取，不以新副本ACK证明旧目标已应用。
+- personal.files 0.1.1把workspace修订纳入持久计划hash，目录A→B→A不复活旧计划，UNKNOWN历史保留；删除仍需本人终端精确确认，CLI重读两份已应用快照和文件版本。
+- personal.knowledge 0.1.7在有效配置初始化/应用后自动索引，旧READY匹配则复用；工作区修订、根配置/扫描参数/embedding配置绑定索引。单一数据库租约协调多个副本；每个构建批次的数据事务前后验证并锁住同一lease，失租事务整体回滚，旧任务不能破坏后继索引。纯文件IO在线程执行并在取消时回收。
+- 配置APPLIED不等于索引READY。知识概览按持久结果优先返回READY，进行中/失败分别显示INDEXING/FAILED及固定原因。失败同配置不无限重试，保留手动reindex补救；无新核心业务分支、无迁移历史改写。此处描述候选协议，不表示原实例已升级。
+
+### WORKSPACE.1 验收修复补充（2026-11-08）
+
+- GET返回的config必须与application.saved_digest一致；两次读取间发生保存时有限重读，持续竞争返回CONFIG_REVISION_CONFLICT。消费者聚合后的修订变化仍标记refresh_required，TUI拒绝该材料及任何正文摘要错配。未保存工作区返回真实空对象，编辑模板不等于已保存授权。
+- 知识构建领取/续租/发布须在同事务先锁lease行、再于下一语句使用数据库clock_timestamp校验，不允许等锁期间过期的owner续活。概览使用数据库返回的active事实；过期RUNNING不作为进度，明确显示失败或INDEX_LEASE_EXPIRED。
+- 索引取消须保护完整子任务取消、IO回收与owner-CAS终结；重复取消不得跳过收尾，完成后仍传播取消，清理失败保留原因。 已发出的领取请求也在保护区内：须等响应或回读本次唯一owner证明提交后再收尾，不能将没有回执当作未提交。领取false不终结其他owner；验证RPC须完成，最终取回迟到响应异常。数据库/通道失败或强制终止仍保留失败及原租约兜底，不承诺立即释放。
+
+
+## CORE.CONVERSATION.DIAG.1：未知回复诊断（2026-11-09）
+
+- UNKNOWN错误可附diagnostic，严格固定字段reason_code/stage/request_id/elapsed_ms/persisted；原因与阶段白名单、原req号或null、有限非负整数毫秒、严格bool。不保存或展示原始异常、提示词、响应正文或凭据。未识别/损坏诊断按无诊断处理。
+- 首个确认提交的诊断保存于独立workbench-conversation-diagnostics桶，追加conversation.failed脱敏审计；原workbench-conversation版本、CAS和dispatch_token不变。同键只读取原诊断；成功/明确失败回执优先，旧记录无诊断不推测。诊断写读有独立1秒预算，不把诊断存储失败说成原请求已失败或成功。
+- TUI区分原故障request_id和当前HTTP X-Request-ID，未确认片段及诊断不进入已确认对话历史；原输入/命令保留。放弃仍限纯回复STREAMING，不能用于解除任务/外部动作UNKNOWN。
+- 对话总预算现为660秒，使用单调截止时间约束生成器内部等待，禁止跨yield保留会取消调用方的asyncio.timeout上下文。先标记总超时再取消读取，取消继续传播并回收源；远端模型默认300秒、TUI总预算及read690秒，显式模型配置仍优先。
+
+### 2026-11-09 对话预算/确定拒绝与文件索引投影
+
+默认max_tokens仍省略，模型累计wire和TUI SSE资源保护均16MiB。非法路由与不一致最终回答保持FAILED/uncertain=false，可附同一白名单诊断；诊断不存正文。只有已验证RETRIEVE提供者的空query可使用本轮原问题（≤2000字，不截断）；未知提供者、额外字段及其他意图夹带检索仍拒绝。同键纯查询超时不登记为原执行失败。personal.knowledge 0.1.8逐文件投影活动版本及大小/时间元数据，标INDEXED/STALE/NOT_INDEXED/UNSUPPORTED/UNKNOWN；content_verification=NOT_CHECKED，正文CURRENT仍依赖原检索校验。

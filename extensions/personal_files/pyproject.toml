@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-assistant-personal-files"
-version = "0.1.0"
+version = "0.1.1"
 description = "Instance-wide authorized local files with versioned plans and receipts"
 requires-python = ">=3.12,<3.14"
 dependencies = ["personal-assistant-extension-sdk==1.0.0"]

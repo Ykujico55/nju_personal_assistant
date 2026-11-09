@@ -7,9 +7,10 @@ no credential, connection string or host path crosses the worker boundary.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,8 @@ from personal_assistant_sdk import (
     ScheduleMisfirePolicy,
     ToolDescriptor,
     ToolResult,
+    WorkspaceConfigurationError,
+    workspace_config,
 )
 from personal_assistant_sdk.worker import run_stdio_worker
 
@@ -49,6 +52,7 @@ from .embedding import (
     build_embedding_provider,
 )
 from .index import KnowledgeIndex
+from .indexing import IndexBuildError, build_index
 from .models import (
     ChunkRecord,
     EvidenceStatus,
@@ -62,7 +66,7 @@ from .paths import (
     resolve_roots,
 )
 from .store import KnowledgeStore
-from .workspace import workspace_evidence
+from .workspace import runtime_workspace_snapshot, workspace_evidence
 
 EVENT_SOURCE_ID = "knowledge.file_changes"
 DEFAULT_POLL_LIMIT = 100
@@ -108,11 +112,15 @@ class PersonalKnowledgeExtension:
         self._runtime: RuntimeContext | None = None
         self._index: KnowledgeIndex | None = None
         self._draining = False
+        self._indexing_task: asyncio.Task[None] | None = None
+        self._indexing_error: str | None = None
 
     # -- Extension protocol -------------------------------------------------
 
     async def initialize(self, runtime: RuntimeContext) -> ExtensionInfo:
         self._runtime = runtime
+        if runtime.host_data is not None and runtime.non_secret_config:
+            self._indexing_task = asyncio.create_task(self._automatic_index())
         return ExtensionInfo(
             id=runtime.extension_id,
             version=runtime.extension_version,
@@ -133,6 +141,10 @@ class PersonalKnowledgeExtension:
             return HealthReport(healthy=False, status="draining")
         try:
             self._authorized_roots()
+        except WorkspaceConfigurationError as exc:
+            return HealthReport(
+                healthy=False, status="workspace_unavailable", details={"code": exc.code}
+            )
         except RootConfigurationError as exc:
             if exc.code in {"roots_invalid", "roots_empty", "roots_too_many"}:
                 return HealthReport(healthy=True, status="awaiting_configuration")
@@ -140,7 +152,7 @@ class PersonalKnowledgeExtension:
                 healthy=False, status="config_invalid", details={"code": exc.code}
             )
         try:
-            config = self._runtime.non_secret_config
+            config = workspace_config(self._runtime, include_modes=False)
             build_embedding_provider(config.get("embedding"))
             max_file_bytes = config.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES)
             if (
@@ -161,19 +173,42 @@ class PersonalKnowledgeExtension:
                 status="config_invalid",
                 details={"code": "KNOWLEDGE_CONFIG_INVALID"},
             )
-        return HealthReport(healthy=True, status="ready")
+        details = {}
+        if self._indexing_task is not None and not self._indexing_task.done():
+            details["index_state"] = "INDEXING"
+        elif self._indexing_error is not None:
+            details.update(index_state="FAILED", code=self._indexing_error)
+        return HealthReport(healthy=True, status="ready", details=details)
 
     async def drain(self, deadline: float) -> DrainReport:
         del deadline
         self._draining = True
+        await self._stop_indexing()
         return DrainReport(drained=True, active_calls=0)
 
     async def shutdown(self) -> None:
         self._draining = True
+        await self._stop_indexing()
         if self._index is not None:
             await self._index.embedder.aclose()
         self._index = None
         self._runtime = None
+
+    async def _automatic_index(self) -> None:
+        try:
+            await build_index(self._require_index(), automatic=True)
+        except asyncio.CancelledError:
+            raise
+        except IndexBuildError as exc:
+            self._indexing_error = str(exc)
+        except Exception:
+            self._indexing_error = "INDEX_BUILD_FAILED"
+
+    async def _stop_indexing(self) -> None:
+        task, self._indexing_task = self._indexing_task, None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     # -- ToolProvider -------------------------------------------------------
 
@@ -248,7 +283,12 @@ class PersonalKnowledgeExtension:
         if mode not in {"incremental", "full"}:
             raise ValueError("mode must be 'incremental' or 'full'")
         index = self._require_index()
-        report = await index.reconcile(mode=str(mode))
+        try:
+            report = await build_index(index, automatic=False, mode=str(mode))
+        except IndexBuildError as exc:
+            return ToolResult(outcome=Outcome.NEEDS_USER_ACTION, output={"code": str(exc)})
+        assert report is not None
+        self._indexing_error = None
         return ToolResult(outcome=Outcome.SUCCEEDED, output=_report_view(report))
 
     # -- ContextProvider ----------------------------------------------------
@@ -275,9 +315,8 @@ class PersonalKnowledgeExtension:
         if "knowledge.workspace" in selected and len(evidence) < limit:
             if filters and set(filters) - {"root_keys"}:
                 raise ValueError("workspace overview accepts only configured root keys")
-            evidence.append(workspace_evidence(
-                self._require_runtime(), root_keys=filters.get("root_keys") if filters else None,
-                index_status=await self._workspace_index_status(),
+            evidence.append(await self._workspace_overview(
+                root_keys=filters.get("root_keys") if filters else None,
             ))
         if "knowledge.retrieve" not in selected or len(evidence) >= limit:
             return bounded_context(self._require_runtime(), evidence)
@@ -410,24 +449,69 @@ class PersonalKnowledgeExtension:
 
     def _authorized_roots(self) -> tuple[AuthorizedRoot, ...]:
         runtime = self._require_runtime()
-        raw = runtime.non_secret_config.get("roots", [])
+        raw = workspace_config(runtime, include_modes=False).get("roots", [])
         specs = parse_roots(raw)
         return resolve_roots(specs)
+
+    async def _workspace_overview(self, *, root_keys: Sequence[str] | None) -> Evidence:
+        runtime = self._require_runtime()
+        snapshot = runtime_workspace_snapshot(runtime, root_keys=root_keys)
+        status = await self._workspace_index_status()
+        records = None
+        if status["index_state"] == "READY" and runtime.host_data is not None:
+            files = [(item["root_key"], item["relative_path"]) for item in snapshot["files"]]
+            try:
+                records = await KnowledgeStore(runtime.host_data).workspace_index_records(files)
+            except Exception:
+                # Absence of usable metadata must not be reported as absence of an index.
+                status = {"index_state": "UNAVAILABLE",
+                          "index_reason": "FILE_INDEX_METADATA_UNAVAILABLE"}
+            else:
+                # A different root binding or a new incomplete scan invalidates this projection.
+                status = await self._workspace_index_status()
+                if status["index_state"] != "READY":
+                    records = None
+        return workspace_evidence(runtime, snapshot=snapshot, index_status=status,
+                                  index_records=records)
 
     async def _workspace_index_status(self) -> dict[str, str]:
         runtime = self._require_runtime()
         if runtime.host_data is None:
             return {"index_state": "UNAVAILABLE", "index_reason": "INDEX_METADATA_UNAVAILABLE"}
         try:
-            config = runtime.non_secret_config
+            config = workspace_config(runtime, include_modes=False)
             max_file_bytes, include_hidden = _scan_options(config)
             fingerprint = binding_fingerprint(
                 self._authorized_roots(), max_file_bytes=max_file_bytes,
                 include_hidden=include_hidden,
+                workspace_revision=config.get("_workspace_revision"),
+                workspace_id=config.get("_workspace_id"),
+                embedding_config=config.get("embedding"),
             )
         except (ValueError, OSError):
             return {"index_state": "UNAVAILABLE", "index_reason": "ROOT_CONFIGURATION_UNAVAILABLE"}
-        return await read_index_status(KnowledgeStore(runtime.host_data), fingerprint)
+        store = KnowledgeStore(runtime.host_data)
+        status = await read_index_status(store, fingerprint)
+        # Durable success wins over this replica's earlier background failure.
+        if status["index_state"] == "READY":
+            return status
+        try:
+            lease = await store.get_build_lease()
+        except Exception:
+            return status
+        if lease and lease.get("binding_hash") == fingerprint:
+            if lease.get("state") == "FAILED":
+                return {"index_state": "FAILED", "index_reason": "INDEX_BUILD_FAILED"}
+            if lease.get("state") == "RUNNING" and lease.get("active") is True:
+                return {"index_state": "INDEXING", "index_reason": "INDEX_BUILD_RUNNING"}
+        if self._indexing_task is not None and not self._indexing_task.done():
+            return {"index_state": "INDEXING", "index_reason": "INDEX_BUILD_WAITING"}
+        if self._indexing_error:
+            return {"index_state": "FAILED", "index_reason": self._indexing_error}
+        if (lease and lease.get("binding_hash") == fingerprint
+                and lease.get("state") == "RUNNING"):
+            return {"index_state": "PENDING", "index_reason": "INDEX_LEASE_EXPIRED"}
+        return status
 
     def _require_index(self) -> KnowledgeIndex:
         if self._index is not None:
@@ -436,7 +520,7 @@ class PersonalKnowledgeExtension:
         if runtime.host_data is None:
             raise ValueError("DATA_UNAVAILABLE: the host data capability is not available")
         roots = self._authorized_roots()
-        config = runtime.non_secret_config
+        config = workspace_config(runtime, include_modes=False)
         embedder: EmbeddingProvider = build_embedding_provider(config.get("embedding"))
         max_file_bytes, include_hidden = _scan_options(config)
         self._index = KnowledgeIndex(
@@ -448,6 +532,9 @@ class PersonalKnowledgeExtension:
             include_hidden=bool(include_hidden),
             extension_id=runtime.extension_id,
             extension_version=runtime.extension_version,
+            workspace_revision=config.get("_workspace_revision"),
+            workspace_id=config.get("_workspace_id"),
+            embedding_config=config.get("embedding"),
         )
         return self._index
 

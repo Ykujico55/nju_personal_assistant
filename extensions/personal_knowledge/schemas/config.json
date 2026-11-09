@@ -10,27 +10,69 @@
       "items": {
         "type": "object",
         "properties": {
-          "path": {"type": "string", "minLength": 1, "maxLength": 1024},
-          "key": {"type": "string", "minLength": 1, "maxLength": 64},
-          "label": {"type": "string", "maxLength": 128}
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 128
+          }
         },
-        "required": ["path"],
+        "required": [
+          "path"
+        ],
         "additionalProperties": false
       }
     },
-    "include_hidden": {"type": "boolean"},
-    "max_file_bytes": {"type": "integer", "minimum": 1024, "maximum": 104857600},
+    "include_hidden": {
+      "type": "boolean"
+    },
+    "max_file_bytes": {
+      "type": "integer",
+      "minimum": 1024,
+      "maximum": 104857600
+    },
     "embedding": {
       "type": "object",
       "properties": {
-        "provider": {"type": "string", "enum": ["none", "ollama"]},
-        "base_url": {"type": "string", "maxLength": 512},
-        "model": {"type": "string", "maxLength": 128},
-        "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 120}
+        "provider": {
+          "type": "string",
+          "enum": [
+            "none",
+            "ollama"
+          ]
+        },
+        "base_url": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 120
+        }
       },
       "additionalProperties": false
+    },
+    "workspace_binding": {
+      "type": "string",
+      "enum": [
+        "instance"
+      ],
+      "description": "Use the host applied instance workspace; omit legacy roots."
     }
   },
-  "required": ["roots"],
+  "required": [],
   "additionalProperties": false
 }

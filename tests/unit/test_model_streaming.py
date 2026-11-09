@@ -149,6 +149,20 @@ class ModelStreamingTests(unittest.IsolatedAsyncioTestCase):
         await events.aclose()
         self.assertTrue(wire.closed)
 
+    async def test_reasoning_wire_over_old_limit_preserves_complete_answer(self):
+        # Wire size includes reasoning and repeated JSON envelopes, not just answer text.
+        reasoning = b'data: {"choices":[{"delta":{"reasoning_content":"' + b'x' * 65536
+        reasoning += b'"},"finish_reason":null}]}\n\n'
+        wire = Stream([reasoning] * 18 + [chunk("complete"), chunk(finish="stop"),
+                                         b"data: [DONE]\n\n"])
+        provider = await self.provider(wire)
+        events = [event async for event in provider.stream(ModelRequest("chat", "answer"))]
+        self.assertEqual(events[-1].output.text, "complete")
+        self.assertEqual([event.delta for event in events if event.delta], ["complete"])
+        self.assertTrue(wire.closed)
+        self.assertEqual(wire.read, 21)
+        self.assertNotIn("max_tokens", json.loads(self.requests[0].content))
+
     async def test_total_deadline_cancels_pending_read(self):
         wire = Stream([chunk("first"), chunk("second")], gate=asyncio.Event())
         provider = await self.provider(wire, timeout_seconds=0.05)

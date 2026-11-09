@@ -232,6 +232,20 @@ class ProcessRuntimeSupervisor:
             schema = load_extension_config_schema(record.manifest)
             if config:
                 config = validate_extension_config(schema, config)
+            workspace = target.get("workspace") if target is not None else None
+            if config.get("workspace_binding") == "instance" or workspace is not None:
+                properties = schema.get("properties", {}) if schema is not None else {}
+                if (
+                    config.get("workspace_binding") != "instance"
+                    or not isinstance(properties, Mapping)
+                    or "workspace_binding" not in properties
+                    or not isinstance(workspace, Mapping)
+                ):
+                    # Accepting additional properties is not an opt-in to receive
+                    # instance directory grants. The installed schema must declare it.
+                    raise ExtensionOperationError(
+                        "CONFIG_APPLY_FAILED", "workspace binding is unavailable or undeclared"
+                    )
             if existing is not None:
                 await existing.close()
                 self._workers.pop(extension_id, None)
@@ -241,7 +255,16 @@ class ProcessRuntimeSupervisor:
                 max_frame_bytes=self._max_frame_bytes,
                 host_handler=self._host_handler(record),
             )
-            await worker.start(non_secret_config=config, timeout_seconds=self._handshake_timeout)
+            if workspace is None:
+                await worker.start(
+                    non_secret_config=config, timeout_seconds=self._handshake_timeout
+                )
+            else:
+                await worker.start(
+                    non_secret_config=config,
+                    workspace=workspace,
+                    timeout_seconds=self._handshake_timeout,
+                )
             if target is not None:
                 health = await worker.health(timeout_seconds=self._health_timeout)
                 if not health.get("healthy"):
@@ -251,6 +274,14 @@ class ProcessRuntimeSupervisor:
             await self._current_record(record, allow_starting=allow_starting)
             if self._records.get(extension_id) is not record:
                 raise ExtensionOperationError("EXTENSION_NOT_ENABLED", "worker start was stopped")
+            if target is not None and isinstance(store, ExtensionConfigApplyStore):
+                current = await store.get_applied(extension_id)
+                if current["generation"] != target["generation"]:
+                    # Handshake/health may wait while another host applies roots.
+                    # A not-yet-dispatched command must never enter this stale worker.
+                    raise ExtensionOperationError(
+                        "CONFIG_CHANGED", "configuration changed during worker startup"
+                    )
             self._workers[extension_id] = worker
             if target is not None:
                 self._loaded[extension_id] = target
@@ -366,6 +397,18 @@ class ProcessRuntimeSupervisor:
             worker = self._workers.get(extension_id)
             if worker is None or not worker.client.running:
                 raise RpcCallError(-32090, "extension worker is not running")
+            if isinstance(self._config_store, ExtensionConfigApplyStore):
+                current = await self._config_store.get_applied(extension_id)
+                loaded = self._loaded.get(extension_id)
+                if loaded is None or loaded["generation"] != current["generation"]:
+                    # Runtime acknowledgement itself can wait for cross-process IO.
+                    # Establish the call's configuration before dispatch, not after
+                    # a possibly side-effecting RPC has already run.
+                    await shield_cleanup(worker.close())
+                    self._workers.pop(extension_id, None)
+                    raise ExtensionOperationError(
+                        "CONFIG_CHANGED", "configuration changed before tool dispatch"
+                    )
             yield worker
             if not retain_inflight_result and record is not None:
                 await self._current_record(record)

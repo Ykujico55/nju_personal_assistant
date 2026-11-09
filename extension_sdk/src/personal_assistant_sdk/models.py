@@ -289,6 +289,7 @@ class RuntimeContext:
     host_mail: HostMailClient | None = None
     host_artifact: HostArtifactClient | None = None
     host_browser: HostBrowserClient | None = None
+    workspace: Mapping[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True, slots=True)

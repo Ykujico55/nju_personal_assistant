@@ -218,7 +218,7 @@ async def test_chunked_terminal_larger_than_64k_preserves_answer(method, ascii_j
 
 @pytest.mark.asyncio
 async def test_chunked_stream_total_byte_budget_remains_enforced():
-    wire = SplitWire([b": " + b"x" * 65530 + b"\n\n"] * 40)
+    wire = SplitWire([b": " + b"x" * 65530 + b"\n\n"] * 300)
     async def respond(request):
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=wire)
     service = WorkbenchService(transport=httpx.MockTransport(respond))

@@ -240,7 +240,7 @@ async def test_document_provider_and_read_tool_are_registered_and_index_free(tmp
     assert evidence[0].source_uri == "knowledge://notes/note.txt"
     assert evidence[0].metadata["sensitivity"] == "SENSITIVE"
     assert evidence[0].metadata["trust"] == "USER_SOURCE"
-    assert evidence[0].metadata["extension_version"] == "0.1.5"
+    assert evidence[0].metadata["extension_version"] == EXTENSION_VERSION
     assert not worker._require_index.called
     assert await worker.retrieve(ContextQuery("", limit=0)) == ()
 

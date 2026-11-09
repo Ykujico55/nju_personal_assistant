@@ -340,3 +340,34 @@ async def test_stream_render_does_not_pull_reader_from_history():
         app._render_chat()
         await pilot.pause()
         assert log.scroll_y == 0
+
+
+@pytest.mark.asyncio
+async def test_large_completed_reply_survives_old_wire_limit_with_extended_deadline(monkeypatch):
+    from personal_assistant.cli.tui import service as service_module
+
+    budgets = []
+    timeout = asyncio.timeout
+
+    def measured_timeout(seconds):
+        budgets.append(seconds)
+        return timeout(min(seconds, 5))
+
+    monkeypatch.setattr(service_module.asyncio, "timeout", measured_timeout)
+    answer = "完整回答" * 100000
+    payload = event("delta", {"text": answer}) + event("completed", {**DONE, "answer": answer})
+    assert len(payload) > 2_097_152
+
+    async def respond(request):
+        assert request.extensions["timeout"] == {
+            "connect": 15, "read": 690, "write": 30, "pool": 15,
+        }
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=payload)
+
+    service = WorkbenchService(transport=httpx.MockTransport(respond))
+    try:
+        result = await service.conversation_stream("question", [], "large-reply")
+        assert result["answer"] == answer and service.pending is None
+        assert budgets[0] == 690
+    finally:
+        await service.aclose()

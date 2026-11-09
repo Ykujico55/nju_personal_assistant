@@ -21,6 +21,9 @@ class FakeKnowledgeStore:
         self.fail_activation = False
         self.vector_identities: list[Any] = []
 
+    def with_build_lease(self, owner):
+        return _LeasedFakeStore(self, owner)
+
     async def migrate(self, migrations: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
         self.migrations_applied = [int(item["version"]) for item in migrations]
         return {"applied": self.migrations_applied, "skipped": []}
@@ -67,6 +70,23 @@ class FakeKnowledgeStore:
             for source_id, row in self.sources.items()
             if row["root_key"] in set(root_keys)
         }
+
+    async def workspace_index_records(self, files):
+        wanted = set(files)
+        result = {}
+        for source in self.sources.values():
+            key = (source["root_key"], source["relative_path"])
+            if key not in wanted:
+                continue
+            version = self.versions.get((source["source_id"], source["active_version"]), {})
+            result[key] = {
+                "active_version": source["active_version"],
+                "source_hash": source["content_hash"],
+                "version_hash": version.get("content_hash"),
+                "version_state": version.get("state"),
+                "size_bytes": source["size_bytes"], "mtime_ns": source["mtime_ns"],
+            }
+        return result
 
     async def get_source(self, source_id: str) -> Any:
         rows = await self.fetch_all_sources()
@@ -303,12 +323,58 @@ class FakeKnowledgeStore:
     async def fetch_events(self, *, after: int, limit: int) -> list[dict[str, Any]]:
         return [row for row in self.events if row["sequence"] > after][:limit]
 
+    def _build_owned(self, owner):
+        lease = self.meta.get("index.build.lease.v1", {})
+        return (lease.get("owner") == owner and lease.get("state") == "RUNNING"
+                and lease.get("expires_at", 0) > time.time())
+
+    async def claim_build(self, owner, binding, ttl_seconds, *, retry_failed=False):
+        old = self.meta.get("index.build.lease.v1")
+        if old and old["state"] == "RUNNING" and old["expires_at"] > time.time():
+            return False
+        if old and old["state"] == "FAILED" and old["binding_hash"] == binding and not retry_failed:
+            return False
+        self.meta["index.build.lease.v1"] = {
+            "owner": owner, "binding_hash": binding, "state": "RUNNING",
+            "expires_at": time.time() + ttl_seconds,
+        }
+        return True
+
+    async def get_build_lease(self):
+        lease = self.meta.get("index.build.lease.v1")
+        if lease is None:
+            return None
+        return {**lease, "active": lease.get("state") == "RUNNING"
+                and lease.get("expires_at", 0) > time.time()}
+
+    async def renew_build(self, owner, ttl_seconds):
+        if not self._build_owned(owner):
+            return False
+        self.meta["index.build.lease.v1"]["expires_at"] = time.time() + ttl_seconds
+        return True
+
+    async def finish_build(self, owner, state):
+        lease = self.meta.get("index.build.lease.v1", {})
+        if lease.get("owner") != owner or lease.get("state") != "RUNNING":
+            return False
+        lease["state"] = state
+        return True
+
+    async def set_meta_under_build_lease(self, key, value, owner):
+        if not self._build_owned(owner):
+            return False
+        self.meta[key] = dict(value)
+        return True
+
     async def set_meta(self, key: str, value: Mapping[str, Any]) -> None:
         self.meta[key] = dict(value)
 
     async def compare_set_meta(
-        self, key: str, expected: Mapping[str, Any], value: Mapping[str, Any]
+        self, key: str, expected: Mapping[str, Any], value: Mapping[str, Any],
+        *, lease_owner: str | None = None,
     ) -> bool:
+        if lease_owner is not None and not self._build_owned(lease_owner):
+            return False
         if self.meta.get(key) != dict(expected):
             return False
         self.meta[key] = dict(value)
@@ -411,3 +477,17 @@ def _passes_filters(source: Mapping[str, Any], filters: Mapping[str, Sequence[st
 
 
 __all__ = ["FakeKnowledgeStore"]
+
+
+class _LeasedFakeStore:
+    """Model the real SQL wrapper's atomic per-operation ownership check."""
+    def __init__(self, store, owner):
+        self.store, self.owner = store, owner
+
+    def __getattr__(self, name):
+        method = getattr(self.store, name)
+        async def guarded(*args, **kwargs):
+            if not self.store._build_owned(self.owner):
+                raise ValueError("INDEX_LEASE_LOST")
+            return await method(*args, **kwargs)
+        return guarded

@@ -143,7 +143,8 @@ async def test_workspace_reports_binding_status_without_index_or_body_reads(tmp_
     data = json.loads(result[0].text)
     assert data["index_state"] == "READY"
     assert data["index_reason"] == "INDEX_READY"
-    assert data["files"][0]["index_state"] == "UNKNOWN"
+    assert data["files"][0]["index_state"] == "INDEXED"
+    assert data["files"][0]["content_verification"] == "NOT_CHECKED"
     assert "private body" not in result[0].text
     assert str(tmp_path) not in result[0].text
     assert not worker._require_index.called

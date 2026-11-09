@@ -31,6 +31,8 @@ from textual.widgets import (
 
 from personal_assistant.core.agent.decisions import validation_diagnostic
 from personal_assistant.core.agent.failure_diagnostics import failure_diagnostic
+from personal_assistant.core.conversation_diagnostics import diagnostic_message, parse_diagnostic
+from personal_assistant.core.extensions.config import config_digest
 
 from .panels import EditorScreen, HelpScreen, safe_markdown
 from .task_presentation import present_task_objective
@@ -326,6 +328,16 @@ class WorkbenchApp(App[None]):
                     yield Button("配置", id="extension-config")
                     yield Button("应用配置", id="extension-apply-config")
             with TabPane("设置", id="settings-tab"), VerticalScroll(id="settings-fields"):
+                yield Static("实例共享工作区", classes="hint", markup=False)
+                yield Static(
+                    "目录授权供绑定工作区的插件共享；保存后需明确应用，生效不代表索引已就绪。",
+                    markup=False,
+                )
+                yield Static("点击读取状态，或编辑共享目录。", id="workspace-status", markup=False)
+                with Horizontal(classes="buttons"):
+                    yield Button("编辑工作区", id="workspace-edit")
+                    yield Button("应用工作区", id="workspace-apply")
+                    yield Button("读取状态", id="workspace-reload")
                 yield Static(
                     "配置本机模型参数；保存后需重启对应服务。密钥不在终端表单显示。",
                     classes="hint",
@@ -890,6 +902,9 @@ class WorkbenchApp(App[None]):
             "extension-uninstall",
             "extension-config",
             "extension-apply-config",
+            "workspace-edit",
+            "workspace-apply",
+            "workspace-reload",
             "save-settings",
             "reload-settings",
         }
@@ -960,6 +975,8 @@ class WorkbenchApp(App[None]):
                 await self._call(
                     self.service.inspect_extension(source, self._key()), self._confirm_install
                 )
+            elif action.startswith("workspace-"):
+                await self._workspace_action(action.removeprefix("workspace-"))
             elif action.startswith("extension-"):
                 await self._extension_action(action.removeprefix("extension-"))
             elif action == "reload-settings":
@@ -989,14 +1006,28 @@ class WorkbenchApp(App[None]):
                 self._render_chat()
             raise
         except Exception as error:
+            code = clean_text(getattr(error, "code", "操作失败"))
+            diagnostic = (
+                parse_diagnostic(getattr(error, "diagnostic", None))
+                if code in {"CHAT_RESULT_UNKNOWN", "CHAT_RESPONSE_INVALID"} else None
+            )
+            details = diagnostic_message(diagnostic) if diagnostic else ""
+            if diagnostic and diagnostic["request_id"]:
+                details += f" · 原故障编号 {diagnostic['request_id']}"
+            reference = getattr(error, "correlation_id", None)
+            if reference:
+                label = "本次请求编号" if diagnostic else "关联编号"
+                details += f" · {label} {reference}"
             if self._stream_question is not None:
                 self._stream_state = (
                     "未完成 · 回复已停止，片段不计入对话上下文"
                     if getattr(error, "uncertain", None) is False else
                     "未完成 · 回复未确认，不计入对话上下文"
                 )
+                if diagnostic:
+                    # Keep diagnostics readable beyond the two-line notice area.
+                    self._stream_state += "\n" + details
                 self._render_chat()
-            code = clean_text(getattr(error, "code", "操作失败"))
             message = clean_text(getattr(error, "message", "请核对输入或刷新状态后重试。"))
             if code == "WORKBENCH_INCOMPATIBLE":
                 self.notice("工作台与后台接口不兼容，请重启更新后的后台；原请求和输入仍保留。")
@@ -1009,9 +1040,8 @@ class WorkbenchApp(App[None]):
                     )
             else:
                 self.notice(f"{code}：{message}")
-            reference = getattr(error, "correlation_id", None)
-            if reference:
-                self.notice(self.last_notice + f" · 关联编号 {reference}")
+            if details:
+                self.notice(self.last_notice + " · " + details.lstrip(" ·"))
         finally:
             self._busy = False
             self._buttons()
@@ -1400,7 +1430,7 @@ class WorkbenchApp(App[None]):
         labels = {
             "PENDING": "已保存，待生效：点击应用配置；未启动副本会在下次启动时加载。",
             "APPLYING": "应用中：等待各运行副本确认新配置，在途操作结束后切换。",
-            "APPLIED": "已生效：运行副本已确认。目录变更后的索引需单独重建。",
+            "APPLIED": "已生效：运行副本已确认；索引就绪状态需另外核对。",
             "FAILED": "配置应用失败：查看副本错误码；修正配置后应用，临时启动故障请重启后台。",
             "UNAVAILABLE": "后台未提供配置应用状态，请检查后台版本。",
         }
@@ -1409,6 +1439,118 @@ class WorkbenchApp(App[None]):
             if isinstance(runtime, dict) and runtime.get("error_code"):
                 text += "\n" + str(runtime["error_code"])
         return clean_text(text)
+
+    @staticmethod
+    def _workspace_label(value: Payload) -> str:
+        text = WorkbenchApp._configuration_label(value).replace("点击应用配置", "点击应用工作区")
+        text += "\n知识插件自动索引；目录生效不代表索引已就绪。索引进度和失败原因请查看知识库概览。"
+        consumers = (value.get("application") or {}).get("consumers", [])
+        for consumer in consumers:
+            if isinstance(consumer, dict):
+                text += "\n" + str(consumer.get("extension_id", "")) + ": " + str(
+                    consumer.get("state", "UNAVAILABLE")
+                )
+        return clean_text(text)
+
+    @staticmethod
+    def _workspace_material_matches(value: object) -> bool:
+        if not isinstance(value, dict):
+            return False
+        current, application = value.get("config"), value.get("application")
+        if not isinstance(current, dict) or not isinstance(application, dict):
+            return False
+        if application.get("refresh_required", False) is not False:
+            return False
+        state = application.get("state")
+        if not isinstance(state, str) or state not in {
+            "PENDING", "APPLYING", "APPLIED", "FAILED", "UNAVAILABLE",
+        }:
+            return False
+        for field in ("runtimes", "consumers"):
+            records = application.get(field, [])
+            if not isinstance(records, list) or not all(isinstance(row, dict) for row in records):
+                return False
+        if current:
+            if (set(current) != {"workspace_id", "roots"}
+                    or current["workspace_id"] != "instance"
+                    or not isinstance(current["roots"], list)):
+                return False
+            for root in current["roots"]:
+                if (not isinstance(root, dict) or set(root) != {"key", "label", "path", "mode"}
+                        or not all(isinstance(item, str) for item in root.values())
+                        or root["mode"] not in {"read_only", "read_write"}):
+                    return False
+        try:
+            return config_digest(current) == application.get("saved_digest")
+        except (TypeError, ValueError, RecursionError):
+            return False
+
+    async def _workspace_action(self, action: str) -> None:
+        try:
+            value = await self.service.workspace()
+        except Exception as error:
+            code = clean_text(getattr(error, "code", "WORKSPACE_UNAVAILABLE"))
+            self.notice(f"工作区配置无法读取（{code}）；请核对后台版本并重启新版。")
+            return
+        if not self._workspace_material_matches(value):
+            message = "工作区确认材料不一致或已变化，不能应用；请重新读取。"
+            self._home.query_one("#workspace-status", Static).update(message)
+            self.notice(message)
+            return
+        current = value["config"]
+        if not current:
+            message = "工作区尚未保存，请先编辑并保存，再应用。"
+            self._home.query_one("#workspace-status", Static).update(message)
+            if action != "edit":
+                self.notice(message)
+                return
+        else:
+            self._home.query_one("#workspace-status", Static).update(self._workspace_label(value))
+        if action == "reload":
+            self.notice(self._workspace_label(value))
+            return
+        if action == "edit":
+            template = current or {"workspace_id": "instance", "roots": []}
+            edited = await self.push_screen_wait(ConfigScreen("实例共享工作区", template))
+            if edited is None:
+                return
+            accepted = await self._confirm_remote(ConfirmScreen(
+                "核对共享目录授权", document(edited) +
+                "\n目录授权：read_only 允许读取；read_write 允许在该根内新建和修改。"
+                "\nroots 为空表示撤销工作区目录；保存仅为待生效稿，之后需明确应用。"
+                "\n现有独立插件不会被自动迁移；需在插件配置中选择 workspace_binding=instance。",
+                "保存工作区",
+            ))
+            if accepted:
+                async def saved(result: Payload) -> None:
+                    if not self._workspace_material_matches(result):
+                        self.notice("保存回执材料不一致，请重新读取核对；本次没有应用。")
+                        return
+                    label = self._workspace_label(result)
+                    self._home.query_one("#workspace-status", Static).update(label)
+                    self.notice("工作区已保存，待生效；本次没有应用。" + label)
+                await self._call(self.service.save_workspace(edited, self._key()), saved)
+            return
+        if action == "apply":
+            digest = (value.get("application") or {}).get("saved_digest")
+            if not isinstance(digest, str):
+                self.notice("后台缺少保存版本，不能应用；请重新读取。")
+                return
+            accepted = await self._confirm_remote(ConfirmScreen(
+                "应用共享目录授权", document(current) +
+                "\n将切换所有绑定工作区的插件；原有写入计划需要重新预览，知识插件自动建立新索引。"
+                "\n未决结果和旧任务不会被自动重试或继续。", "应用工作区",
+            ))
+            if accepted:
+                async def applied(result: Payload) -> None:
+                    if (not self._workspace_material_matches(result)
+                            or result["application"]["saved_digest"] != digest):
+                        self.notice("应用回执材料不一致或已变化，请重新读取核对。")
+                        return
+                    label = self._workspace_label(result)
+                    self._home.query_one("#workspace-status", Static).update(label)
+                    self.notice(label)
+                await self._call(self.service.apply_workspace(digest, self._key()), applied)
 
     async def _show_extension_config(self, identifier: str) -> None:
         try:

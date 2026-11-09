@@ -419,7 +419,7 @@ class Settings:
     model_remote_base_url: str | None = None
     model_remote_model: str | None = None
     model_remote_secret_handle: str | None = None
-    model_remote_timeout_seconds: float = 60.0
+    model_remote_timeout_seconds: float = 300.0
     model_remote_json_mode: bool = False
     model_remote_thinking: str | None = None
     model_local_provider_id: str = "local.ollama"
@@ -607,7 +607,7 @@ class Settings:
             model_remote_base_url=os.getenv("PA_MODEL_REMOTE_BASE_URL") or None,
             model_remote_model=os.getenv("PA_MODEL_REMOTE_MODEL") or None,
             model_remote_secret_handle=os.getenv("PA_MODEL_REMOTE_SECRET_HANDLE") or None,
-            model_remote_timeout_seconds=_env_float("PA_MODEL_REMOTE_TIMEOUT_SECONDS", 60.0),
+            model_remote_timeout_seconds=_env_float("PA_MODEL_REMOTE_TIMEOUT_SECONDS", 300.0),
             model_remote_json_mode=_env_bool("PA_MODEL_REMOTE_JSON_MODE", False),
             model_remote_thinking=os.getenv("PA_MODEL_REMOTE_THINKING") or None,
             model_local_provider_id=os.getenv("PA_MODEL_LOCAL_PROVIDER_ID", "local.ollama").strip(),

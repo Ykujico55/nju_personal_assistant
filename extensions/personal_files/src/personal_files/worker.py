@@ -23,6 +23,8 @@ from personal_assistant_sdk import (
     RuntimeContext,
     ToolDescriptor,
     ToolResult,
+    WorkspaceConfigurationError,
+    workspace_config,
 )
 from personal_assistant_sdk.models import JsonValue
 from personal_assistant_sdk.worker import run_stdio_worker
@@ -250,6 +252,11 @@ class PersonalFilesExtension:
 
     async def health(self) -> HealthReport:
         ready = self._runtime is not None and not self._draining
+        if ready and self._runtime and "workspace_binding" in self._runtime.non_secret_config:
+            try:
+                self._files()
+            except FilesError as exc:
+                return HealthReport(False, "workspace_unavailable", {"code": exc.code})
         return HealthReport(ready, "ready" if ready else "not_ready")
 
     async def drain(self, deadline: float) -> DrainReport:
@@ -279,7 +286,11 @@ class PersonalFilesExtension:
         if self._runtime is None or self._draining:
             raise FilesError("EXTENSION_NOT_READY")
         if self._service is None:
-            self._service = FileService(self._runtime.non_secret_config)
+            try:
+                config = workspace_config(self._runtime)
+            except WorkspaceConfigurationError as exc:
+                raise FilesError(exc.code) from None
+            self._service = FileService(config)
         return self._service
 
     async def invoke(

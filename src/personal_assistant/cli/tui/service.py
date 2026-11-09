@@ -14,6 +14,8 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from personal_assistant.core.conversation_diagnostics import parse_diagnostic
+
 from .model_settings import ModelSettings, ModelSettingsError
 
 PREFIX = "/admin/v1/workbench"
@@ -34,11 +36,15 @@ _ERROR_HINTS = {
     "MODEL_OUTPUT_TRUNCATED": "模型输出达到服务端上限，本次回复未完成。",
     "MODEL_OUTPUT_FILTERED": "模型服务停止了本次输出。",
     "CHAT_RESULT_UNKNOWN": "回复结果未确认，请重试原请求。",
+    "CHAT_RESPONSE_INVALID": "模型返回的对话决策或回复未通过校验，请查看具体原因。",
     "HOST_ALREADY_RUNNING": "此实例已运行；如需加载更新，请使用 restart。",
     "HOST_PORT_IN_USE": "本机端口已占用，请核对运行实例和端口配置。",
     "HOST_CREDENTIAL_UNAVAILABLE": "宿主凭据不可用，请检查安全凭据句柄。",
     "EXTENSION_NOT_ENABLED": "扩展尚未启用或已被隔离，请检查扩展状态。",
     "CONFIG_APPLY_FAILED": "配置未能应用，请修正配置或重启后台。",
+    "WORKSPACE_UNAVAILABLE": "后台尚未提供统一工作区，请重启更新后的后台。",
+    "INVALID_WORKSPACE_CONFIG": "工作区配置无效，请核对目录、权限及保留目录边界。",
+    "CONFIG_REVISION_CONFLICT": "已保存的工作区已变化，请重新读取后核对。",
     "CONFIG_CHANGED": "配置已变化，请重新读取并核对。",
     "INVALID_EXTENSION_CONFIG": "保存的配置不符合当前扩展Schema，请修正配置。",
     "EXTENSION_VERSION_CHANGED": "扩展版本已变化，请重新读取配置。",
@@ -52,10 +58,13 @@ def _error_hint(code: str) -> str:
 
 class WorkbenchError(RuntimeError):
     def __init__(self, code: str, message: str = "", *, uncertain: bool = False,
-                 correlation_id: str | None = None) -> None:
+                 correlation_id: str | None = None, diagnostic: object = None) -> None:
         self.code = code
         self.message = message or code
         self.uncertain = uncertain
+        self.diagnostic = parse_diagnostic(diagnostic) if code in {
+            "CHAT_RESULT_UNKNOWN", "CHAT_RESPONSE_INVALID",
+        } else None
         self.correlation_id = correlation_id if isinstance(correlation_id, str) and re.fullmatch(
             r"(?:req|diag)_[0-9a-f]{32}", correlation_id
         ) else None
@@ -126,7 +135,9 @@ class WorkbenchService:
 
     @staticmethod
     def _retryable(command: _Command) -> bool:
-        return not (command.method == "PUT" and command.path.endswith("/config"))
+        return not (command.method == "PUT" and (
+            command.path.endswith("/config") or command.path == "/admin/v1/workspace"
+        ))
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -184,9 +195,10 @@ class WorkbenchService:
                         code,
                         _error_hint(code),
                         uncertain=uncertain,
-                        correlation_id=error.get(
-                            "request_id", response.headers.get("X-Request-ID")
+                        correlation_id=(
+                            response.headers.get("X-Request-ID") or error.get("request_id")
                         ),
+                        diagnostic=error.get("diagnostic"),
                     )
                 return body
         except httpx.HTTPError:
@@ -209,10 +221,11 @@ class WorkbenchService:
             )
 
         try:
-            async with asyncio.timeout(90):
+            async with asyncio.timeout(690):
                 async with self._client.stream(
                     command.method,
                     command.path,
+                    timeout=httpx.Timeout(connect=15, read=690, write=30, pool=15),
                     content=command.body,
                     headers={
                         "Accept": "text/event-stream",
@@ -240,7 +253,8 @@ class WorkbenchService:
                                 response.status_code >= 500 and code != "CHAT_RESPONSE_INVALID"
                             )
                             or code == "CHAT_RESULT_UNKNOWN",
-                            correlation_id=error.get("request_id", request_id),
+                            correlation_id=request_id or error.get("request_id"),
+                            diagnostic=error.get("diagnostic"),
                         )
                     if (
                         response.headers.get("content-type", "").split(";")[0]
@@ -252,7 +266,7 @@ class WorkbenchService:
                     size = 0
                     async for chunk in response.aiter_bytes():
                         size += len(chunk)
-                        if size > 2_097_152:
+                        if size > 16 * 1024 * 1024:
                             raise bad()
                         buffer += decoder.decode(chunk)
                         while "\n" in buffer:
@@ -328,6 +342,7 @@ class WorkbenchService:
                                         _error_hint(stream_code),
                                         uncertain=uncertain,
                                         correlation_id=request_id,
+                                        diagnostic=value.get("diagnostic"),
                                     )
                                 else:
                                     raise bad()
@@ -399,7 +414,10 @@ class WorkbenchService:
                     self._pending, self._stream_delta = None, None
                     raise
                 # Retry an uncertain discard through the ORIGINAL receipt only.
-                raise WorkbenchError(error.code, error.message, uncertain=True) from None
+                raise WorkbenchError(
+                    error.code, error.message, uncertain=True,
+                    correlation_id=error.correlation_id, diagnostic=error.diagnostic,
+                ) from None
             self._pending, self._stream_delta = None, None
             return result
 
@@ -643,6 +661,17 @@ class WorkbenchService:
             "/admin/v1/extensions/" + self._id(extension_id) + "/" + action,
             {},
             key,
+        )
+
+    async def workspace(self) -> dict[str, Any]:
+        return await self._request("GET", "/admin/v1/workspace")
+
+    async def save_workspace(self, config: dict[str, Any], key: str) -> dict[str, Any]:
+        return await self._request("PUT", "/admin/v1/workspace", {"config": config}, key)
+
+    async def apply_workspace(self, digest: str, key: str) -> dict[str, Any]:
+        return await self._request(
+            "POST", "/admin/v1/workspace/apply", {"expected_digest": digest}, key,
         )
 
     async def extension_config(self, extension_id: str) -> dict[str, Any]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -12,7 +13,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from personal_assistant_sdk import Evidence, RuntimeContext
+from personal_assistant_sdk import (
+    Evidence,
+    RuntimeContext,
+    WorkspaceConfigurationError,
+    workspace_config,
+)
 
 from .paths import (
     DEFAULT_IGNORED_DIRECTORY_NAMES,
@@ -167,9 +173,11 @@ def workspace_snapshot(
                                         f"{quote(relative, safe='/')}"
                                     ),
                                     "size_bytes": stat.st_size,
+                                    "mtime_ns": stat.st_mtime_ns,
                                     "media_type": media_type_for(relative)
                                     or "application/octet-stream",
                                     "index_state": "UNKNOWN",
+                                    "content_verification": "NOT_CHECKED",
                                 }
                             )
             except (OSError, RuntimeError, PathSafetyError):
@@ -181,18 +189,70 @@ def workspace_snapshot(
     return result
 
 
+def runtime_workspace_snapshot(
+    runtime: RuntimeContext, *, root_keys: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    try:
+        config = workspace_config(runtime, include_modes=False)
+        return workspace_snapshot(config, root_keys=root_keys)
+    except WorkspaceConfigurationError as error:
+        snapshot = workspace_snapshot({}, root_keys=root_keys)
+        snapshot.update(configuration_state="UNAVAILABLE", configuration_error=error.code)
+        return snapshot
+
+
+def _file_index_state(
+    item: Mapping[str, Any], records: Mapping[tuple[str, str], Mapping[str, Any]] | None,
+) -> tuple[str, str]:
+    if media_type_for(str(item["relative_path"])) is None:
+        return "UNSUPPORTED", "FORMAT_UNSUPPORTED"
+    if records is None:
+        return "UNKNOWN", "INDEX_METADATA_NOT_CHECKED"
+    record = records.get((str(item["root_key"]), str(item["relative_path"])))
+    if record is None:
+        return "NOT_INDEXED", "NO_INDEX_RECORD"
+    version = record.get("active_version")
+    if not version:
+        return "NOT_INDEXED", "NO_ACTIVE_VERSION"
+    source_hash = record.get("source_hash")
+    if (
+        not isinstance(version, str) or re.fullmatch(r"[0-9a-f]{64}", version) is None
+        or record.get("version_state") != "READY"
+        or not isinstance(source_hash, str)
+        or re.fullmatch(r"[0-9a-f]{64}", source_hash) is None
+        or source_hash != record.get("version_hash")
+    ):
+        return "STALE", "INDEX_VERSION_INVALID"
+    if (record.get("size_bytes") != item["size_bytes"]
+            or record.get("mtime_ns") != item["mtime_ns"]):
+        return "STALE", "SOURCE_METADATA_CHANGED"
+    return "INDEXED", "ACTIVE_VERSION_METADATA_MATCH"
+
+
 def workspace_evidence(
     runtime: RuntimeContext, *, root_keys: Sequence[str] | None = None,
     index_status: Mapping[str, str] | None = None,
+    snapshot: dict[str, Any] | None = None,
+    index_records: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
 ) -> Evidence:
-    snapshot = workspace_snapshot(runtime.non_secret_config, root_keys=root_keys)
+    if snapshot is None:
+        snapshot = runtime_workspace_snapshot(runtime, root_keys=root_keys)
     if index_status is not None:
         snapshot.update(index_status)
         snapshot["note"] = (
-            "目录元数据概览；未读取正文。索引状态仅表示当前目录绑定的最近扫描结果，"
-            "单个文件是否仍有效须检索时重新校验；PENDING 表示需要重新建立索引。"
+            "目录元数据概览；未读取正文。整体索引状态表示当前目录绑定的最近扫描结果。"
+            "文件 INDEXED 仅表示存在活动索引版本且源/版本哈希及当前大小、修改时间元数据吻合；"
+            "content_verification=NOT_CHECKED 表示本轮未重读正文核对内容哈希，"
+            "不能据此宣称正文 CURRENT。STALE 表示元数据变化或索引版本无效；"
+            "UNKNOWN 表示未能核对索引记录，不等于没有索引。"
+            "NOT_INDEXED 表示没有活动索引记录；空文本可能按规则跳过。"
             + _FILE_REFERENCE_NOTE
         )
+    if snapshot.get("index_state") != "READY":
+        index_records = None
+    for item in snapshot["files"]:
+        item["index_state"], item["index_reason"] = _file_index_state(item, index_records)
+        item["content_verification"] = "NOT_CHECKED"
     text = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     # This hash identifies the metadata snapshot, never any file's body.

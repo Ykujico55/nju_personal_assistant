@@ -41,3 +41,16 @@ tests/api/test_workbench_stream.py
 tests/api/test_workbench_queue.py
 tests/api/test_task_reconciliation_api.py
 tests/integration/test_conversation_workspace.py
+tests/unit/test_instance_workspace_store.py
+tests/unit/test_workspace_runtime.py
+tests/unit/test_workspace_sdk.py
+tests/unit/test_knowledge_auto_index.py
+tests/unit/test_knowledge_instance_workspace.py
+tests/api/test_admin_workspace.py
+tests/unit/test_knowledge_lease_status.py
+tests/unit/test_knowledge_index_cancellation.py
+tests/unit/test_knowledge_claim_cancellation.py
+tests/integration/test_conversation_diagnostics_wire.py
+tests/unit/test_conversation_diagnostics.py
+tests/unit/test_tui_error_diagnostics.py
+tests/unit/test_knowledge_workspace_index.py

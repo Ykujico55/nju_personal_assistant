@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import hashlib
 import uuid
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, TypeVar
 
@@ -74,6 +74,24 @@ async def _shield[T](awaitable: Awaitable[T]) -> T:
     return task.result()
 
 
+async def _blocking[T](function: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """Keep renew/health responsive, and join in-flight pure I/O on cancellation."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            await _shield(task)
+        raise
+
+
+def _extract_chunks(
+    data: bytes, media_type: str, path: str, maximum: int
+) -> tuple[ExtractedDocument, list[Chunk]]:
+    document = extract_document(data, media_type, path=path, max_file_bytes=maximum)
+    return document, list(chunk_document(document))
+
+
 @dataclass(frozen=True, slots=True)
 class ScannedFile:
     root_key: str
@@ -105,6 +123,9 @@ class KnowledgeIndex:
         include_hidden: bool = False,
         extension_id: str,
         extension_version: str,
+        workspace_revision: str | None = None,
+        workspace_id: str | None = None,
+        embedding_config: Mapping[str, Any] | None = None,
     ) -> None:
         self.store = store
         self.roots = tuple(roots)
@@ -117,7 +138,9 @@ class KnowledgeIndex:
         self.extension_version = extension_version
         self._ready = False
         self._binding_hash = binding_fingerprint(
-            self.roots, max_file_bytes=max_file_bytes, include_hidden=include_hidden
+            self.roots, max_file_bytes=max_file_bytes, include_hidden=include_hidden,
+            workspace_revision=workspace_revision, workspace_id=workspace_id,
+            embedding_config=embedding_config,
         )
 
     @property
@@ -143,11 +166,11 @@ class KnowledgeIndex:
         errors: list[ExtractionDiagnostic] = []
         scanned: list[ScannedFile] = []
         for root in self.roots:
-            result = walk_root(root, include_hidden=self.include_hidden)
+            result = await _blocking(walk_root, root, include_hidden=self.include_hidden)
             for relative, code, message in result.diagnostics:
                 errors.append(ExtractionDiagnostic(code=code, message=message, path=relative))
             for walked in result.files:
-                entry = self._scan_file(root, walked, errors)
+                entry = await _blocking(self._scan_file, root, walked, errors)
                 if entry is not None:
                     scanned.append(entry)
         scanned.sort(key=lambda item: (item.root_key, item.relative_path))
@@ -268,7 +291,9 @@ class KnowledgeIndex:
         generation = (state[1] if state is not None else 0) + 1
         return candidate, generation
 
-    async def reconcile(self, *, mode: str = "incremental") -> ReconcileReport:
+    async def reconcile(
+        self, *, mode: str = "incremental", lease_owner: str | None = None
+    ) -> ReconcileReport:
         if mode not in {"incremental", "full"}:
             raise ValueError("mode must be 'incremental' or 'full'")
         await self.ensure_ready()
@@ -277,7 +302,12 @@ class KnowledgeIndex:
             "schema": 1, "binding_hash": self._binding_hash,
             "scan_id": run_id, "state": "PENDING",
         }
-        await self.store.set_meta(INDEX_BINDING_KEY, binding)
+        if lease_owner is None:
+            await self.store.set_meta(INDEX_BINDING_KEY, binding)
+        elif not await self.store.set_meta_under_build_lease(
+            INDEX_BINDING_KEY, binding, lease_owner
+        ):
+            raise RuntimeError("INDEX_LEASE_LOST")
         # A crashed or cancelled run may have left BUILDING candidates behind;
         # clean only stale ones so concurrent live builds are never disturbed.
         await self.store.discard_orphan_building_versions(
@@ -392,9 +422,15 @@ class KnowledgeIndex:
                 for key, entry in expected.items()
             )
             if complete:
-                await self.store.compare_set_meta(
-                    INDEX_BINDING_KEY, binding, dict(binding, state="READY")
-                )
+                if lease_owner is None:
+                    await self.store.compare_set_meta(
+                        INDEX_BINDING_KEY, binding, dict(binding, state="READY")
+                    )
+                else:
+                    await self.store.compare_set_meta(
+                        INDEX_BINDING_KEY, binding, dict(binding, state="READY"),
+                        lease_owner=lease_owner,
+                    )
         status = await self.index_status()
         report.index_state = status["index_state"]
         report.index_reason = status["index_reason"]
@@ -518,7 +554,9 @@ class KnowledgeIndex:
         source_id: str | None = None
         version_id: str | None = None
         try:
-            data = root.read_bytes(entry.relative_path, max_bytes=self.max_file_bytes)
+            data = await _blocking(
+                root.read_bytes, entry.relative_path, max_bytes=self.max_file_bytes
+            )
         except (PathSafetyError, OSError) as exc:
             errors.append(
                 ExtractionDiagnostic(
@@ -528,7 +566,7 @@ class KnowledgeIndex:
                 )
             )
             return
-        content_hash = hash_bytes(data)
+        content_hash = await _blocking(hash_bytes, data)
         if content_hash != entry.content_hash:
             errors.append(
                 ExtractionDiagnostic(
@@ -543,13 +581,9 @@ class KnowledgeIndex:
             await self._skip_empty(entry, source, report, errors)
             return
         try:
-            document = extract_document(
-                data,
-                entry.media_type,
-                path=entry.relative_path,
-                max_file_bytes=self.max_file_bytes,
+            document, chunks = await _blocking(
+                _extract_chunks, data, entry.media_type, entry.relative_path, self.max_file_bytes
             )
-            chunks = chunk_document(document)
         except ExtractionError as exc:
             errors.append(
                 ExtractionDiagnostic(code=exc.code, message=str(exc), path=entry.relative_path)
@@ -957,10 +991,12 @@ class KnowledgeIndex:
         if root is None:
             return EvidenceStatus.DELETED, None
         try:
-            data = root.read_bytes(record.relative_path, max_bytes=self.max_file_bytes)
+            data = await _blocking(
+                root.read_bytes, record.relative_path, max_bytes=self.max_file_bytes
+            )
         except (PathSafetyError, OSError):
             return EvidenceStatus.DELETED, None
-        observed_hash = hash_bytes(data)
+        observed_hash = await _blocking(hash_bytes, data)
         status = (
             EvidenceStatus.CURRENT
             if observed_hash == record.source_hash

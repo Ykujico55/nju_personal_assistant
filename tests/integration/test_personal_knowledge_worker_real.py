@@ -8,6 +8,7 @@ pgvector index behind the generic host data capability.  Requires
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import shutil
@@ -194,6 +195,182 @@ class PersonalKnowledgeWorkerRealTests(unittest.IsolatedAsyncioTestCase):
                 if path.is_file():
                     archive.write(path, relative.as_posix())
         return target
+
+    async def test_shared_workspace_applies_and_indexes_without_reindex_command(self) -> None:
+        """Real Worker indexes applied roots automatically and skips READY on restart."""
+        from personal_assistant.infrastructure.extensions.workspace import (
+            WorkspaceExtensionConfigStore,
+        )
+
+        workspace = WorkspaceExtensionConfigStore(self.config_store, self.tmp / "workspace")
+        await workspace.save(
+            EXTENSION_ID,
+            {
+                "workspace_binding": "instance",
+                "embedding": {"provider": "none"},
+            },
+        )
+        config_state = await workspace.status(EXTENSION_ID)
+        await workspace.apply(EXTENSION_ID, str(config_state["saved_digest"]))
+
+        def configuration(path: Path) -> dict:
+            return {
+                "workspace_id": "instance",
+                "roots": [
+                    {
+                        "key": "notes",
+                        "label": "Synthetic notes",
+                        "path": str(path),
+                        "mode": "read_write",
+                    }
+                ],
+            }
+
+        saved_a = await workspace.save_workspace(configuration(self.notes))
+        await workspace.apply_workspace(saved_a["application"]["saved_digest"])
+        self.runtime = ProcessRuntimeSupervisor(
+            handshake_timeout_seconds=30.0,
+            health_timeout_seconds=15.0,
+            data_access=PostgresExtensionDataAccess(self.adapters.database),
+            config_store=workspace,
+        )
+        coordinator = InstallCoordinator(
+            self.stager,
+            self.installer,
+            ProcessContractVerifier(handshake_timeout_seconds=30.0),
+            self.adapters.lifecycle_store,
+        )
+        manager = LifecycleManager(
+            self.adapters.lifecycle_store,
+            self.registry,
+            self.runtime,
+            self.installer,
+            PostgresExtensionDataStore(self.adapters.database),
+            CompatibleVersionOperator(PostgresVersionCatalog(self.adapters.database)),
+        )
+        self.service = ExtensionSupervisorService(
+            coordinator=coordinator,
+            manager=manager,
+            registry=self.registry,
+            store=self.adapters.lifecycle_store,
+            operations=PostgresExtensionOperationStore(self.adapters.database),
+            runtime=self.runtime,
+        )
+
+        async def binding() -> dict | None:
+            table = await self._sql(
+                "SELECT to_regclass($1) AS relation", f"{NAMESPACE}.knowledge_meta"
+            )
+            if table[0]["relation"] is None:
+                return None
+            rows = await self._sql(
+                "SELECT value->>'state' AS state, value->>'binding_hash' AS binding_hash, "
+                f"value->>'scan_id' AS scan_id FROM \"{NAMESPACE}\".knowledge_meta "
+                "WHERE key='index.binding.v1'"
+            )
+            return rows[0] if rows else None
+
+        async def ready(previous: dict | None = None) -> dict:
+            async with asyncio.timeout(30):
+                while True:
+                    worker = self.runtime._workers[EXTENSION_ID]  # noqa: SLF001
+                    self.assertTrue(worker.client.running, "automatic indexing lost its worker")
+                    health = await worker.health(timeout_seconds=10.0)
+                    self.assertNotEqual(
+                        "FAILED", health.get("details", {}).get("index_state"), health
+                    )
+                    current = await binding()
+                    if (
+                        current
+                        and current["state"] == "READY"
+                        and (
+                            previous is None or current["binding_hash"] != previous["binding_hash"]
+                        )
+                        and health.get("details", {}).get("index_state") != "INDEXING"
+                    ):
+                        return current
+                    await asyncio.sleep(0.1)
+
+        async def search(query: str) -> dict:
+            return await self.service.invoke_tool(
+                EXTENSION_ID,
+                "knowledge.search",
+                {"query": query, "limit": 5},
+                task_id="workspace-auto-test",
+                run_id="workspace-auto-run",
+                idempotency_key="search-" + uuid.uuid4().hex,
+                deadline_seconds=30.0,
+            )
+
+        async def settled_operation(operation: object) -> object:
+            result = await self._run(operation)
+            # A durable terminal receipt can precede releasing the lifecycle lock.
+            # Join this fixture's accepted command before starting the next one.
+            tasks = tuple(self.service._tasks)  # noqa: SLF001 - test-owned runner tasks
+            if tasks:
+                done, pending = await asyncio.wait(tasks, timeout=30.0)
+                for task in done:
+                    task.result()
+                self.assertFalse(pending, "lifecycle runner did not finish cleanup")
+            self.assertNotIn(EXTENSION_ID, self.service._active)  # noqa: SLF001
+            return result
+
+        workers = []
+        try:
+            preview = await self.service.inspect(str(EXTENSION_DIR))
+            installed = await settled_operation(
+                await self.service.begin_install(
+                    preview.plan_id,
+                    self._confirmation(preview),
+                )
+            )
+            self.assertEqual("SUCCEEDED", installed.status.value, installed.diagnostic_code)
+            enabled = await settled_operation(await self.service.begin_enable(EXTENSION_ID))
+            self.assertEqual("SUCCEEDED", enabled.status.value, enabled.diagnostic_code)
+            workers.append(self.runtime._workers[EXTENSION_ID])  # noqa: SLF001
+            first = await ready()
+            first_results = (await search("halcyon deadline"))["output"]["results"]
+            self.assertEqual(1, len(first_results))
+            self.assertEqual("knowledge://notes/research.md", first_results[0]["source_uri"])
+
+            other = self.tmp / "other-notes"
+            other.mkdir()
+            (other / "replacement.md").write_text(
+                "# Zephyr\n\nZephyr replacement deadline is 2030-01-01.\n", encoding="utf-8"
+            )
+            saved_b = await workspace.save_workspace(configuration(other))
+            await self.runtime.synchronize_configurations()
+            self.assertIs(workers[0], self.runtime._workers[EXTENSION_ID])  # noqa: SLF001
+            self.assertEqual(
+                first, await binding(), "saving alone must not rebuild or switch roots"
+            )
+            self.assertEqual(1, len((await search("halcyon deadline"))["output"]["results"]))
+
+            await workspace.apply_workspace(saved_b["application"]["saved_digest"])
+            await self.runtime.synchronize_configurations()
+            workers.append(self.runtime._workers[EXTENSION_ID])  # noqa: SLF001
+            self.assertIsNot(workers[0], workers[1])
+            self.assertFalse(workers[0].client.running, "old-root worker must close on apply")
+            second = await ready(first)
+            self.assertNotEqual(first["scan_id"], second["scan_id"])
+            second_results = (await search("zephyr replacement"))["output"]["results"]
+            self.assertEqual(1, len(second_results))
+            self.assertEqual("knowledge://notes/replacement.md", second_results[0]["source_uri"])
+            self.assertEqual([], (await search("halcyon"))["output"]["results"])
+
+            await self.runtime.stop_all()
+            self.assertFalse(workers[1].client.running)
+            await self.service.recover()
+            workers.append(self.runtime._workers[EXTENSION_ID])  # noqa: SLF001
+            restored = await ready()
+            self.assertEqual(
+                second["scan_id"], restored["scan_id"], "READY restart must not rescan"
+            )
+            self.assertEqual(1, len((await search("zephyr replacement"))["output"]["results"]))
+        finally:
+            await self.service.stop_all()
+            self.assertFalse(self.runtime._workers)  # noqa: SLF001
+            self.assertTrue(all(not worker.client.running for worker in workers))
 
     async def test_zip_artifact_installs_and_serves(self) -> None:
         """The extension ships as an independent artifact (zip of its root)."""

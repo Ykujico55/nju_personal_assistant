@@ -36,7 +36,7 @@ class ExtensionBoundaryContract(unittest.TestCase):
     def test_manifest_registers_the_standard_slots(self) -> None:
         manifest = ManifestParser().parse(EXTENSION)
         self.assertEqual("personal.knowledge", manifest.id)
-        self.assertEqual("0.1.6", manifest.version)
+        self.assertEqual("0.1.8", manifest.version)
         slots = manifest.slots
         for slot, capability in REQUIRED_SLOTS.items():
             self.assertEqual(capability, slots.get(slot), f"slot {slot} drifted")

@@ -10,6 +10,29 @@ from typing import Any
 from personal_assistant.core.models import ContextField, DataClassification, ModelRequest
 from personal_assistant.domain import ValidationError
 
+_VALIDATION_REASONS = frozenset({
+    "ROUTE_FORMAT_INVALID", "ROUTE_PROVIDER_UNAVAILABLE", "ROUTE_QUERY_REQUIRED",
+    "ROUTE_CONTEXT_UNEXPECTED", "TASK_CONTEXT_TOO_LARGE", "CONVERSATION_VALIDATION_FAILED",
+})
+
+
+class ConversationValidationError(ValidationError):
+    """A host-owned classification with no model output or user content."""
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = (
+            reason_code if reason_code in _VALIDATION_REASONS else "CONVERSATION_VALIDATION_FAILED"
+        )
+        super().__init__(self.reason_code)
+
+
+def conversation_validation_reason(error: ValidationError) -> str:
+    if isinstance(error, ConversationValidationError):
+        code = error.reason_code
+        if isinstance(code, str) and code in _VALIDATION_REASONS:
+            return code
+    return "CONVERSATION_VALIDATION_FAILED"
+
 
 @dataclass(frozen=True)
 class ConversationRoute:
@@ -46,8 +69,10 @@ def routing_request(
             "and the reply will ask for clarification. RETRIEVE: answer questions using "
             "the instance "
             "workspace documents or other registered read-only context. Supply a provider-specific "
-            "query "
+            "nonempty query "
             "(<=2000 characters) and 1..8 exact provider IDs from the catalog. "
+            "Do not return an empty query for RETRIEVE. For an overview or status provider "
+            "that needs no search words, use the current user's question as the query. "
             "Questions about configured folders, file lists, workspace status or a follow-up "
             "saying a path is already configured are RETRIEVE too: select a published workspace "
             "overview provider when available, rather than treating a file-list question as "
@@ -92,13 +117,15 @@ def routing_request(
     )
 
 
-def parse_route(text: str, catalog: Sequence[Mapping[str, Any]]) -> ConversationRoute:
+def parse_route(
+    text: str, catalog: Sequence[Mapping[str, Any]], *, fallback_query: str | None = None,
+) -> ConversationRoute:
     try:
         value = json.loads(text)
     except (ValueError, TypeError):
-        raise ValidationError("invalid conversation route") from None
+        raise ConversationValidationError("ROUTE_FORMAT_INVALID") from None
     if not isinstance(value, dict) or set(value) != {"kind", "query", "providers"}:
-        raise ValidationError("invalid conversation route")
+        raise ConversationValidationError("ROUTE_FORMAT_INVALID")
     kind, query, providers = value["kind"], value["query"], value["providers"]
     if (
         kind not in ("ANSWER", "RETRIEVE", "TASK")
@@ -108,13 +135,21 @@ def parse_route(text: str, catalog: Sequence[Mapping[str, Any]]) -> Conversation
         or len(providers) > 8
         or any(not isinstance(p, str) for p in providers)
     ):
-        raise ValidationError("invalid conversation route")
+        raise ConversationValidationError("ROUTE_FORMAT_INVALID")
     available = {p for item in catalog for p in item["provider_ids"]}
     if kind == "RETRIEVE":
-        if not query.strip() or not providers or not set(providers) <= available:
-            raise ValidationError("invalid conversation context selection")
+        # Check the selected read-only capability before filling a missing query.
+        # The user's original question supplies data, never another provider or authority.
+        if not providers or not set(providers) <= available:
+            raise ConversationValidationError("ROUTE_PROVIDER_UNAVAILABLE")
+        if not query.strip():
+            if not isinstance(fallback_query, str) or not fallback_query.strip():
+                raise ConversationValidationError("ROUTE_QUERY_REQUIRED")
+            query = fallback_query.strip()
+            if len(query) > 2000:
+                raise ConversationValidationError("ROUTE_QUERY_REQUIRED")
     elif query or providers:
-        raise ValidationError("unexpected conversation context selection")
+        raise ConversationValidationError("ROUTE_CONTEXT_UNEXPECTED")
     return ConversationRoute(kind, query, tuple(dict.fromkeys(providers)))
 
 
@@ -168,5 +203,5 @@ def task_objective(message: str, history: Sequence[Mapping[str, str]]) -> str:
             list(history), ensure_ascii=False
         )
     if len(text) > 10000:
-        raise ValidationError("conversation task context exceeds limit")
+        raise ConversationValidationError("TASK_CONTEXT_TOO_LARGE")
     return text

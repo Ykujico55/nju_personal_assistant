@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit
 
-from personal_assistant_sdk import Evidence, RuntimeContext, to_jsonable
+from personal_assistant_sdk import (
+    Evidence,
+    RuntimeContext,
+    WorkspaceConfigurationError,
+    to_jsonable,
+    workspace_config,
+)
 from personal_assistant_sdk.rpc import RpcResponse, encode_frame
 
 from .binding import DEFAULT_MAX_FILE_BYTES
@@ -143,7 +149,7 @@ def read_document(runtime: RuntimeContext, resource: str) -> dict[str, Any]:
     """Return full extracted text or an explicit non-content result, never truncate."""
     try:
         root_key, relative = _parse_resource(resource)
-        config = runtime.non_secret_config
+        config = workspace_config(runtime, include_modes=False)
         specs = parse_root_specs(config.get("roots", []))
         include_hidden = config.get("include_hidden", False)
         maximum = config.get("max_file_bytes", DEFAULT_MAX_FILE_BYTES)
@@ -205,6 +211,8 @@ def read_document(runtime: RuntimeContext, resource: str) -> dict[str, Any]:
         if len(encoded) > MAX_DOCUMENT_RESPONSE_BYTES:
             return _result("DOCUMENT_TOO_LARGE", source_uri=source_uri)
         return output
+    except WorkspaceConfigurationError as error:
+        return _result(error.code)
     except _ReadFailure as error:
         return _result(error.code)
     except RootConfigurationError as error:

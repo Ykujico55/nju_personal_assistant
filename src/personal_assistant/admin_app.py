@@ -26,6 +26,7 @@ from personal_assistant.api.middleware import (
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
+from personal_assistant.api.workbench import require_local
 from personal_assistant.api.workbench import router as workbench_router
 from personal_assistant.bootstrap import Container, build_container
 from personal_assistant.core.extensions import (
@@ -36,6 +37,7 @@ from personal_assistant.core.extensions import (
 from personal_assistant.core.extensions.config import (
     ExtensionConfigApplyStore,
     ExtensionConfigError,
+    InstanceWorkspaceStore,
     validate_extension_config,
 )
 from personal_assistant.core.extensions.errors import (
@@ -74,6 +76,24 @@ class ConfigApplyRequest(BaseModel):
     model_config = {"extra": "forbid"}
     expected_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     extension_version: str = Field(min_length=1, max_length=128)
+
+
+class WorkspaceApplyRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+def _workspace_store(selected: Container) -> InstanceWorkspaceStore:
+    store = selected.extension_config_store
+    if not isinstance(store, InstanceWorkspaceStore):
+        raise ApplicationError("WORKSPACE_UNAVAILABLE", "Workspace configuration unavailable.", 503)
+    return store
+
+
+def _workspace_error(error: ExtensionConfigError) -> ApplicationError:
+    if str(error) == "CONFIG_REVISION_CONFLICT":
+        return ApplicationError("CONFIG_REVISION_CONFLICT", "Reload the saved workspace.", 409)
+    return ApplicationError("INVALID_WORKSPACE_CONFIG", "Workspace configuration is invalid.", 422)
 
 
 class MailAccountRequest(BaseModel):
@@ -323,6 +343,31 @@ def create_app(*, settings: Settings | None = None, container: Container | None 
             raise ApplicationError("EXTENSION_NOT_FOUND", "Extension was not discovered.", 404)
         return _manifest_view(manifest)
 
+    @application.get("/admin/v1/workspace", dependencies=[Depends(require_local)])
+    async def workspace(selected: Container = Depends(get_container)) -> dict[str, Any]:
+        try:
+            return dict(await _workspace_store(selected).get_workspace())
+        except ExtensionConfigError as exc:
+            raise _workspace_error(exc) from exc
+
+    @application.put("/admin/v1/workspace", dependencies=[Depends(require_local)])
+    async def save_workspace(
+        payload: ConfigUpdateRequest, selected: Container = Depends(get_container),
+    ) -> dict[str, Any]:
+        try:
+            return dict(await _workspace_store(selected).save_workspace(payload.config))
+        except ExtensionConfigError as exc:
+            raise _workspace_error(exc) from exc
+
+    @application.post("/admin/v1/workspace/apply", dependencies=[Depends(require_local)])
+    async def apply_workspace(
+        payload: WorkspaceApplyRequest, selected: Container = Depends(get_container),
+    ) -> dict[str, Any]:
+        try:
+            return dict(await _workspace_store(selected).apply_workspace(payload.expected_digest))
+        except ExtensionConfigError as exc:
+            raise _workspace_error(exc) from exc
+
     @application.get("/admin/v1/extensions/{extension_id}/config")
     async def extension_config(
         extension_id: str,
@@ -348,9 +393,11 @@ def create_app(*, settings: Settings | None = None, container: Container | None 
             validated = validate_extension_config(
                 _config_schema(manifest), payload.config, field_name="config"
             )
+            await selected.extension_config_store.save(extension_id, validated)
         except ExtensionConfigError as exc:
-            raise ApplicationError("INVALID_EXTENSION_CONFIG", str(exc), 422) from exc
-        await selected.extension_config_store.save(extension_id, validated)
+            raise ApplicationError(
+                "INVALID_EXTENSION_CONFIG", "Configuration or workspace binding is invalid.", 422,
+            ) from exc
         return {
             "extension_id": extension_id,
             "config": validated,

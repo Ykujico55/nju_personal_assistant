@@ -38,7 +38,10 @@ async def test_workspace_lists_configured_files_without_index_or_body_reads(tmp_
     assert data["configured"] is True
     assert data["roots"][0]["state"] == "AVAILABLE"
     assert {f["relative_path"] for f in data["files"]} == {"数据结构.md", "简历.pdf", "sample.bin"}
-    assert all(f["index_state"] == "UNKNOWN" for f in data["files"])
+    assert {f["relative_path"]: f["index_state"] for f in data["files"]} == {
+        "数据结构.md": "UNKNOWN", "简历.pdf": "UNKNOWN", "sample.bin": "UNSUPPORTED",
+    }
+    assert all(f["content_verification"] == "NOT_CHECKED" for f in data["files"])
     assert "private body" not in result[0].text
     assert str(tmp_path) not in result[0].text
     assert result[0].metadata["sensitivity"] == "SENSITIVE"

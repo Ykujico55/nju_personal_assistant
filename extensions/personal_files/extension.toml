@@ -1,7 +1,7 @@
 manifest_version = "1"
 id = "personal.files"
 name = "Personal Files"
-version = "0.1.0"
+version = "0.1.1"
 core_api = ">=1,<2"
 python = ">=3.12,<3.14"
 entrypoint = "personal_files.worker:create_extension"

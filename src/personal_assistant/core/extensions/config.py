@@ -81,6 +81,15 @@ class ExtensionConfigApplyStore(ExtensionConfigStore, Protocol):
     async def release_runtime(self, instance_id: str) -> None: ...
 
 
+@runtime_checkable
+class InstanceWorkspaceStore(Protocol):
+    async def get_workspace(self) -> Mapping[str, Any]: ...
+
+    async def save_workspace(self, config: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    async def apply_workspace(self, expected_digest: str) -> Mapping[str, Any]: ...
+
+
 def config_digest(config: Mapping[str, Any]) -> str:
     encoded = json.dumps(dict(config), ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), allow_nan=False).encode("utf-8")
@@ -403,6 +412,7 @@ __all__ = [
     "ExtensionConfigError",
     "ExtensionConfigStore",
     "ExtensionConfigApplyStore",
+    "InstanceWorkspaceStore",
     "config_digest",
     "validate_extension_config",
     "validate_extension_config_schema",

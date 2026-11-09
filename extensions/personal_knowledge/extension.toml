@@ -1,7 +1,7 @@
 manifest_version = "1"
 id = "personal.knowledge"
 name = "Personal Knowledge"
-version = "0.1.6"
+version = "0.1.8"
 core_api = ">=1,<2"
 python = ">=3.12,<3.14"
 entrypoint = "personal_knowledge.worker:create_extension"

@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from .paths import AuthorizedRoot
 from .store import KnowledgeStore
@@ -15,13 +16,19 @@ DEFAULT_MAX_FILE_BYTES = 16 * 1024 * 1024
 
 
 def binding_fingerprint(
-    roots: Sequence[AuthorizedRoot], *, max_file_bytes: int, include_hidden: bool
+    roots: Sequence[AuthorizedRoot], *, max_file_bytes: int, include_hidden: bool,
+    workspace_revision: str | None = None, workspace_id: str | None = None,
+    embedding_config: Mapping[str, Any] | None = None,
 ) -> str:
     material = {
         "roots": sorted((root.key, os.path.normcase(str(root.path))) for root in roots),
         "max_file_bytes": max_file_bytes,
         "include_hidden": include_hidden,
     }
+    if embedding_config is not None:
+        material["embedding"] = dict(embedding_config)
+    if workspace_revision is not None:
+        material["workspace"] = {"id": workspace_id, "revision": workspace_revision}
     return hashlib.sha256(json.dumps(material, sort_keys=True).encode("utf-8")).hexdigest()
 
 
